@@ -40,7 +40,7 @@ async def test_error_middleware_catches_generic_exception():
     """Test that generic exceptions are caught and masked as 500."""
     
     async def next_mock(request):
-        raise ValueError("Secret database failure")
+        raise Exception("Secret database failure")
 
     middleware = ErrorMiddleware(mock_app)
     
