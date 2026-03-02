@@ -18,6 +18,10 @@ from langbridge.packages.common.langbridge_common.repositories.job_repository im
 from langbridge.packages.common.langbridge_common.repositories.llm_connection_repository import (
     LLMConnectionRepository,
 )
+from langbridge.packages.common.langbridge_common.repositories.sql_repository import (
+    SqlJobRepository,
+    SqlJobResultArtifactRepository,
+)
 from langbridge.packages.common.langbridge_common.config import Settings, settings
 from langbridge.packages.common.langbridge_common.repositories.message_repository import MessageRepository
 from langbridge.packages.common.langbridge_common.repositories.semantic_model_repository import (
@@ -58,6 +62,11 @@ class WorkerContainer(containers.DeclarativeContainer):
     async_session = providers.Factory(get_session)
 
     job_repository = providers.Factory(JobRepository, session=async_session)
+    sql_job_repository = providers.Factory(SqlJobRepository, session=async_session)
+    sql_job_result_artifact_repository = providers.Factory(
+        SqlJobResultArtifactRepository,
+        session=async_session,
+    )
     agent_definition_repository = providers.Factory(AgentRepository, session=async_session)
     semantic_model_repository = providers.Factory(SemanticModelRepository, session=async_session)
     llm_repository = providers.Factory(LLMConnectionRepository, session=async_session)

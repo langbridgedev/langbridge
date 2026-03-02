@@ -148,7 +148,7 @@ class TrinoConnector(ManagedConnector):
             )
         return fks
 
-    # Synchronous wrappers
+    # Synchronous wrappers  
     def test_connection_sync(self) -> None:
         return asyncio.run(self.test_connection())
 

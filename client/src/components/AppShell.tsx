@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
   Database,
+  FileCode2,
   BrainCircuit,
   BarChart3,
   Bot,
@@ -49,6 +50,12 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Data connections',
     description: 'Manage structured connectors and retrievers powering your agents.',
     icon: Database,
+  },
+  {
+    href: '/sql',
+    label: 'SQL',
+    description: 'Write and run native SQL with policies, history, and saved artifacts.',
+    icon: FileCode2,
   },
   {
     href: '/semantic-model',
@@ -120,12 +127,14 @@ export function AppShell({ children }: { children: ReactNode }): JSX.Element {
   const [openParent, setOpenParent] = useState<string | null>(null);
   const isChatRoute = pathname.startsWith('/chat');
   const isBIRoute = pathname.startsWith('/bi');
+  const isSqlRoute = pathname.startsWith('/sql');
 
   const navItems = useMemo(() => {
     const agentsBase = selectedOrganizationId ? `/agents/${selectedOrganizationId}` : '/agents';
     const datasourcesBase = selectedOrganizationId ? `/datasources/${selectedOrganizationId}` : '/datasources';
     const semanticModelBase = selectedOrganizationId ? `/semantic-model/${selectedOrganizationId}` : '/semantic-model';
     const biBase = selectedOrganizationId ? `/bi/${selectedOrganizationId}` : '/bi';
+    const sqlBase = selectedOrganizationId ? `/sql/${selectedOrganizationId}` : '/sql';
     const chatBase = selectedOrganizationId ? `/chat/${selectedOrganizationId}` : '/chat';
 
     const remapChildren = (children: NavChild[] | undefined, base: string, prefix: string) =>
@@ -154,6 +163,9 @@ export function AppShell({ children }: { children: ReactNode }): JSX.Element {
       }
       if (item.href === '/bi') {
         return { ...item, href: biBase };
+      }
+      if (item.href === '/sql') {
+        return { ...item, href: sqlBase };
       }
       if (item.href === '/chat') {
         return { ...item, href: chatBase };
@@ -335,7 +347,7 @@ export function AppShell({ children }: { children: ReactNode }): JSX.Element {
               className={cn(
                 'w-full px-6 py-8 page-enter',
                 isChatRoute ? 'max-w-none' : 
-                isBIRoute ? 'max-w-none': 'mx-auto max-w-[1200px]',
+                isBIRoute || isSqlRoute ? 'max-w-none': 'mx-auto max-w-[1200px]',
               )}
             >
               {children}

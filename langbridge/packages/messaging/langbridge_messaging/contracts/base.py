@@ -21,6 +21,7 @@ class MessageType(str, Enum):
     COPILOT_DASHBOARD_REQUEST = "copilot_dashboard_request"
     COPILOT_DASHBOARD_RESPONSE = "copilot_dashboard_response"
     COPILOT_DASHBOARD_COMPLETION = "copilot_dashboard_completion"
+    SQL_JOB_REQUEST = "sql_job_request"
     
 
     def __str__(self) -> str:

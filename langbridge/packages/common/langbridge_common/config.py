@@ -108,6 +108,20 @@ class Settings(BaseSettings):
     STORAGE_SETTING: Literal["local", "azure"] = "local"
     DASHBOARD_SNAPSHOT_STORAGE_BACKEND: Literal["local", "azure_blob", "s3"] = "local"
     DASHBOARD_SNAPSHOT_LOCAL_DIR: str = ".cache/dashboard_snapshots"
+    SQL_FEATURE_ENABLED: bool = True
+    SQL_AI_HELPER_ENABLED: bool = True
+    SQL_FEDERATION_ENABLED: bool = True
+    SQL_DEFAULT_MAX_PREVIEW_ROWS: int = 1000
+    SQL_DEFAULT_MAX_EXPORT_ROWS: int = 25000
+    SQL_DEFAULT_MAX_RUNTIME_SECONDS: int = 30
+    SQL_DEFAULT_MAX_CONCURRENCY: int = 3
+    SQL_DEFAULT_ALLOW_DML: bool = False
+    SQL_DEFAULT_ALLOW_FEDERATION: bool = False
+    SQL_POLICY_MAX_PREVIEW_ROWS_UPPER_BOUND: int = 50000
+    SQL_POLICY_MAX_EXPORT_ROWS_UPPER_BOUND: int = 500000
+    SQL_POLICY_MAX_RUNTIME_SECONDS_UPPER_BOUND: int = 600
+    SQL_POLICY_MAX_CONCURRENCY_UPPER_BOUND: int = 20
+    SQL_ARTIFACT_LOCAL_DIR: str = ".cache/sql_artifacts"
     
     IS_LOCAL_MESSAGING: bool = True
     INBOX_INTERNAL_REQUEST_URL: str = "http://127.0.0.1:8000/api/v1/message/inbox"

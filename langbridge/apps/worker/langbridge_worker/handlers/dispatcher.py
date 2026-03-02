@@ -50,6 +50,7 @@ class WorkerMessageDispatcher:
         from .jobs.agent_job_request_handler import AgentJobRequestHandler  # noqa: F401
         from .copilot.copilot_dashboard_request_handler import CopilotDashboardRequestHandler  # noqa: F401
         from .query.semantic_query_request_handler import SemanticQueryRequestHandler  # noqa: F401
+        from .query.sql_job_request_handler import SqlJobRequestHandler  # noqa: F401
         from .test_message_handler import TestMessageHandler  # noqa: F401
         handlers: List[BaseMessageHandler] = BaseMessageHandler.__subclasses__()
         return handlers

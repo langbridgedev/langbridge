@@ -62,11 +62,11 @@ class ConnectorSchemaService:
 
     async def get_schemas(self, connector_id: UUID) -> list[str]:
         sql_connector = await self._get_sql_connector(connector_id)
-        return sql_connector.fetch_schemas_sync()
+        return await sql_connector.fetch_schemas()
 
     async def get_tables(self, connector_id: UUID, schema: str) -> list[str]:
         sql_connector = await self._get_sql_connector(connector_id)
-        return sql_connector.fetch_tables_sync(schema=schema)
+        return await sql_connector.fetch_tables(schema=schema)
 
     async def get_columns(
         self,
@@ -75,4 +75,4 @@ class ConnectorSchemaService:
         table: str,
     ) -> list[ColumnMetadata]:
         sql_connector = await self._get_sql_connector(connector_id)
-        return sql_connector.fetch_columns_sync(schema=schema, table=table)
+        return await sql_connector.fetch_columns(schema=schema, table=table)

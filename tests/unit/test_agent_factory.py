@@ -1,7 +1,14 @@
+import pathlib
+import sys
+
 import pytest
-from langbridge.orchestrator.definitions.factory import AgentDefinitionFactory
-from langbridge.orchestrator.definitions.model import (
-    MemoryStrategy, ExecutionMode, ResponseMode, OutputFormat, LogLevel
+
+project_root = pathlib.Path(__file__).resolve().parents[2]
+if str(project_root) not in sys.path:
+    sys.path.append(str(project_root))
+
+from langbridge.packages.orchestrator.langbridge_orchestrator.definitions.factory import (  # noqa: E402
+    AgentDefinitionFactory,
 )
 
 def get_base_valid_definition():
@@ -11,6 +18,12 @@ def get_base_valid_definition():
         },
         "memory": {
             "strategy": "none"
+        },
+        "features": {
+            "bi_copilot_enabled": False,
+            "deep_research_enabled": False,
+            "visualization_enabled": False,
+            "mcp_enabled": False,
         },
         "execution": {
             "mode": "single_step",
@@ -32,21 +45,26 @@ def test_valid_creation():
     definition = get_base_valid_definition()
     model = factory.create_agent_definition(definition)
     assert model.prompt.system_prompt == "You are a helpful assistant."
+    assert model.memory.strategy == "none"
 
-def test_invalid_memory_vector():
+def test_invalid_memory_ttl_seconds():
     factory = AgentDefinitionFactory()
     definition = get_base_valid_definition()
-    definition["memory"] = {"strategy": "vector"} # Missing vector_index
-    
-    with pytest.raises(ValueError, match="Memory strategy 'vector' requires 'vector_index'"):
+    definition["memory"] = {"strategy": "transient", "ttl_seconds": 0}
+
+    with pytest.raises(ValueError, match="memory.ttl_seconds must be > 0 when provided"):
         factory.create_agent_definition(definition)
 
-def test_invalid_memory_transient():
+def test_invalid_access_policy_overlap():
     factory = AgentDefinitionFactory()
     definition = get_base_valid_definition()
-    definition["memory"] = {"strategy": "transient"} # Missing ttl_seconds
-    
-    with pytest.raises(ValueError, match="Memory strategy 'transient' requires 'ttl_seconds'"):
+    duplicate_connector = "109a2755-6734-4cd7-a52b-99cbabdfe43a"
+    definition["access_policy"] = {
+        "allowed_connectors": [duplicate_connector],
+        "denied_connectors": [duplicate_connector],
+    }
+
+    with pytest.raises(ValueError, match="Connectors cannot be both allowed and denied"):
         factory.create_agent_definition(definition)
 
 def test_invalid_execution_single_step_iterations():

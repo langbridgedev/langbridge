@@ -14,6 +14,9 @@ from langbridge.apps.api.langbridge_api.services.jobs.job_service import JobServ
 from langbridge.apps.api.langbridge_api.services.jobs.semantic_query_job_request_service import (
     SemanticQueryJobRequestService,
 )
+from langbridge.apps.api.langbridge_api.services.jobs.sql_job_request_service import (
+    SqlJobRequestService,
+)
 from langbridge.packages.common.langbridge_common.config import Settings, settings
 from langbridge.packages.common.langbridge_common.db import (
     create_async_engine_for_url,
@@ -35,6 +38,12 @@ from langbridge.packages.common.langbridge_common.repositories.edge_task_reposit
 )
 from langbridge.packages.common.langbridge_common.repositories.environment_repository import OrganizationEnvironmentSettingRepository
 from langbridge.packages.common.langbridge_common.repositories.job_repository import JobRepository
+from langbridge.packages.common.langbridge_common.repositories.sql_repository import (
+    SqlJobRepository,
+    SqlJobResultArtifactRepository,
+    SqlSavedQueryRepository,
+    SqlWorkspacePolicyRepository,
+)
 from langbridge.packages.common.langbridge_common.repositories.llm_connection_repository import LLMConnectionRepository
 from langbridge.packages.common.langbridge_common.repositories.organization_repository import (
     OrganizationInviteRepository,
@@ -88,6 +97,7 @@ from langbridge.apps.api.langbridge_api.services.task_dispatch_service import (
     TaskDispatchService,
 )
 from langbridge.apps.api.langbridge_api.services.thread_service import ThreadService
+from langbridge.apps.api.langbridge_api.services.sql_service import SqlService
 from langbridge.apps.api.langbridge_api.services.storage import create_dashboard_snapshot_storage
 from langbridge.packages.messaging.langbridge_messaging.broker.redis import RedisBroker
 from langbridge.packages.messaging.langbridge_messaging.flusher.flusher import MessageFlusher
@@ -161,6 +171,16 @@ class Container(containers.DeclarativeContainer):
     semantic_vector_store_repository = providers.Factory(SemanticVectorStoreEntryRepository, session=async_session)
     message_repository = providers.Factory(MessageRepository, session=async_session)
     job_repository = providers.Factory(JobRepository, session=async_session)
+    sql_job_repository = providers.Factory(SqlJobRepository, session=async_session)
+    sql_job_result_artifact_repository = providers.Factory(
+        SqlJobResultArtifactRepository,
+        session=async_session,
+    )
+    sql_saved_query_repository = providers.Factory(SqlSavedQueryRepository, session=async_session)
+    sql_workspace_policy_repository = providers.Factory(
+        SqlWorkspacePolicyRepository,
+        session=async_session,
+    )
     user_pat_repository = providers.Factory(UserPATRepository, session=async_session)
     runtime_repository = providers.Factory(RuntimeInstanceRepository, session=async_session)
     runtime_registration_token_repository = providers.Factory(
@@ -319,9 +339,25 @@ class Container(containers.DeclarativeContainer):
         semantic_model_repository=semantic_model_repository,
         task_dispatch_service=task_dispatch_service,
     )
+    sql_job_request_service = providers.Factory(
+        SqlJobRequestService,
+        task_dispatch_service=task_dispatch_service,
+    )
     job_service = providers.Factory(
         JobService,
         job_repository=job_repository,
+    )
+    sql_service = providers.Factory(
+        SqlService,
+        sql_job_repository=sql_job_repository,
+        sql_job_result_artifact_repository=sql_job_result_artifact_repository,
+        sql_saved_query_repository=sql_saved_query_repository,
+        sql_workspace_policy_repository=sql_workspace_policy_repository,
+        connector_repository=connector_repository,
+        organization_repository=organization_repository,
+        user_repository=user_repository,
+        sql_job_request_service=sql_job_request_service,
+        request_context_provider=request_context_provider,
     )
 
     thread_service = providers.Factory(

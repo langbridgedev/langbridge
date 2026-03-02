@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
+import sqlglot
 from pydantic import ValidationError
 
 from langbridge.apps.worker.langbridge_worker.handlers.jobs.job_event_emitter import (
@@ -33,6 +34,10 @@ from langbridge.packages.common.langbridge_common.repositories.connector_reposit
 from langbridge.packages.common.langbridge_common.repositories.job_repository import JobRepository
 from langbridge.packages.common.langbridge_common.repositories.semantic_model_repository import (
     SemanticModelRepository,
+)
+from langbridge.packages.common.langbridge_common.utils.sql import (
+    normalize_sql_dialect,
+    transpile_sql,
 )
 from langbridge.packages.connectors.langbridge_connectors.api import (
     ConnectorRuntimeTypeSqlDialectMap,
@@ -232,14 +237,21 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
                 dialect=sql_connector.DIALECT.value.lower(),
                 rewrite_expression=rewrite_expression,
             )
+            target_dialect = normalize_sql_dialect(sql_connector.DIALECT.value.lower(), default="tsql")
+            source_dialect = self._extract_source_dialect(request.query, fallback=target_dialect)
+            execution_sql = self._transpile_sql_if_needed(
+                plan.sql,
+                source_dialect=source_dialect,
+                target_dialect=target_dialect,
+            )
             await self._emit_runtime_event(
                 job_id=payload.job_id,
                 event_type="SemanticQueryExecuting",
                 message="Executing semantic query SQL.",
-                details={"sql": plan.sql},
+                details={"sql": execution_sql},
             )
 
-            query_result = await sql_connector.execute(plan.sql)
+            query_result = await sql_connector.execute(execution_sql)
             data = self._engine.format_rows(query_result.columns, query_result.rows)
             row_count = len(data)
             response = SemanticQueryResponse(
@@ -423,6 +435,14 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         except Exception as exc:
             raise BusinessValidationError(f"Semantic query translation failed: {exc}") from exc
 
+        target_dialect = normalize_sql_dialect(sql_connector.DIALECT.value.lower(), default="tsql")
+        source_dialect = self._extract_source_dialect(request.query, fallback=target_dialect)
+        execution_sql = self._transpile_sql_if_needed(
+            plan.sql,
+            source_dialect=source_dialect,
+            target_dialect=target_dialect,
+        )
+
         job_record.progress = 70
         job_record.status_message = "Executing SQL."
         await event_emitter.emit(
@@ -430,10 +450,10 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
             message="Executing semantic query SQL.",
             visibility=AgentEventVisibility.public,
             source="worker",
-            details={"sql": plan.sql, "query_scope": request.query_scope},
+            details={"sql": execution_sql, "query_scope": request.query_scope},
         )
 
-        query_result = await sql_connector.execute(plan.sql)
+        query_result = await sql_connector.execute(execution_sql)
         data = self._engine.format_rows(query_result.columns, query_result.rows)
         return SemanticQueryResponse(
             id=uuid.uuid4(),
@@ -740,3 +760,46 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
                 "semantic_model_ids must include at least one model id."
             )
         return ordered_unique
+
+    @staticmethod
+    def _extract_source_dialect(
+        query_payload: Mapping[str, Any] | dict[str, Any],
+        *,
+        fallback: str,
+    ) -> str:
+        for key in ("queryDialect", "query_dialect", "dialect"):
+            raw = query_payload.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return normalize_sql_dialect(raw, default=fallback)
+        return normalize_sql_dialect(fallback, default="tsql")
+
+    def _transpile_sql_if_needed(
+        self,
+        sql: str,
+        *,
+        source_dialect: str,
+        target_dialect: str,
+    ) -> str:
+        normalized_source = normalize_sql_dialect(source_dialect, default=target_dialect)
+        normalized_target = normalize_sql_dialect(target_dialect, default="tsql")
+        if normalized_source == normalized_target:
+            return sql
+        try:
+            return transpile_sql(
+                sql,
+                source_dialect=normalized_source,
+                target_dialect=normalized_target,
+            )
+        except ValueError:
+            self._logger.warning(
+                "Semantic SQL transpile fallback (source=%s target=%s).",
+                normalized_source,
+                normalized_target,
+            )
+            try:
+                expression = sqlglot.parse_one(sql, read=normalized_target)
+                return expression.sql(dialect=normalized_target)
+            except sqlglot.ParseError as exc:
+                raise BusinessValidationError(
+                    f"Semantic query transpilation failed: {exc}"
+                ) from exc
