@@ -159,10 +159,7 @@ const CONNECTOR_DIALECT_MAP: Record<string, SqlDialect> = {
 };
 const QUERY_SYNC_DELAY_MS = 120;
 const MAX_COMPLETION_SUGGESTIONS = 150;
-const DEFAULT_QUERY = `SELECT TOP 100
-    *
-FROM dbo.users
-ORDER BY id DESC;`;
+const DEFAULT_QUERY = ``;
 
 function parseParameterKeys(sql: string): string[] {
   const keys = new Set<string>();

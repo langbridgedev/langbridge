@@ -219,3 +219,65 @@ def test_native_auth_org_project_thread_e2e(running_api: str) -> None:
 
         get_deleted_response = client.get(f"/api/v1/thread/{organization_id}/{thread_id}")
         assert get_deleted_response.status_code == 404, get_deleted_response.text
+
+
+def test_org_settings_catalog_and_crud_e2e(running_api: str) -> None:
+    suffix = uuid.uuid4().hex[:8]
+    email = f"e2e_settings_{suffix}@example.com"
+    username = f"e2e_settings_user_{suffix}"
+    password = "Passw0rd!"
+
+    with httpx.Client(base_url=running_api, timeout=20.0) as client:
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={"email": email, "password": password, "username": username},
+        )
+        assert register_response.status_code == 200, register_response.text
+
+        create_org_response = client.post(
+            "/api/v1/organizations",
+            json={"name": f"E2E Settings Org {suffix}"},
+        )
+        assert create_org_response.status_code == 201, create_org_response.text
+        organization_id = create_org_response.json()["id"]
+
+        catalog_response = client.get("/api/v1/organizations/environment/catalog")
+        assert catalog_response.status_code == 200, catalog_response.text
+        catalog = catalog_response.json()
+        assert isinstance(catalog, list)
+        assert any(item.get("settingKey") == "support_email" for item in catalog)
+
+        set_response = client.post(
+            f"/api/v1/organizations/{organization_id}/environment/support_email",
+            json={
+                "settingKey": "support_email",
+                "settingValue": f"settings-{suffix}@example.com",
+            },
+        )
+        assert set_response.status_code == 201, set_response.text
+        payload = set_response.json()
+        assert payload["settingKey"] == "support_email"
+        assert payload["settingValue"] == f"settings-{suffix}@example.com"
+        assert payload.get("category") == "General"
+
+        list_response = client.get(f"/api/v1/organizations/{organization_id}/environment")
+        assert list_response.status_code == 200, list_response.text
+        settings = list_response.json()
+        support_email_setting = next(
+            (setting for setting in settings if setting["settingKey"] == "support_email"),
+            None,
+        )
+        assert support_email_setting is not None
+        assert support_email_setting["settingValue"] == f"settings-{suffix}@example.com"
+
+        delete_response = client.delete(
+            f"/api/v1/organizations/{organization_id}/environment/support_email"
+        )
+        assert delete_response.status_code == 204, delete_response.text
+
+        list_after_delete = client.get(f"/api/v1/organizations/{organization_id}/environment")
+        assert list_after_delete.status_code == 200, list_after_delete.text
+        assert all(
+            setting["settingKey"] != "support_email"
+            for setting in list_after_delete.json()
+        )

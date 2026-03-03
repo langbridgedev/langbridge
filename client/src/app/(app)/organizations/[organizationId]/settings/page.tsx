@@ -1,71 +1,53 @@
 'use client';
 
-import Link from 'next/link';
-import { JSX, useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { dump as toYaml } from 'js-yaml';
+import { JSX, useCallback, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft } from 'lucide-react';
+import { Database, Gauge, Rocket, Sparkles } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Select } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Textarea } from '@/components/ui/textarea';
 import { ApiError } from '@/orchestration/http';
 import {
-  createRuntimeRegistrationToken,
   createProject,
+  createRuntimeRegistrationToken,
   deleteOrganizationEnvironmentSetting,
-  fetchOrganizationEnvironmentKeys,
+  fetchOrganizationEnvironmentCatalog,
   fetchOrganizationEnvironmentSettings,
   fetchRuntimeInstances,
   inviteToOrganization,
   inviteToProject,
   setOrganizationEnvironmentSetting,
-  type OrganizationEnvironmentSetting,
   type RuntimeInstance,
 } from '@/orchestration/organizations';
 import { useWorkspaceScope } from '@/context/workspaceScope';
+
+import { AddSettingModal } from './_components/AddSettingModal';
+import { CategorySidebar } from './_components/CategorySidebar';
+import { EditSettingDrawer } from './_components/EditSettingDrawer';
+import { SettingsLayout } from './_components/SettingsLayout';
+import { SettingsTable } from './_components/SettingsTable';
+import {
+  ALL_CATEGORIES,
+  SETTINGS_CATEGORIES,
+  buildSettingsViewModel,
+  filterSettings,
+  type SettingViewModel,
+  type SettingsCategory,
+} from './_lib/settings-utils';
 
 type OrganizationSettingsPageProps = {
   params: { organizationId: string };
 };
 
-const environmentKeysQueryKey = ['organization-env-keys'] as const;
 const environmentSettingsQueryKey = (organizationId: string | null | undefined) =>
   ['organization-env-settings', organizationId] as const;
+const environmentCatalogQueryKey = ['organization-env-catalog'] as const;
 const runtimeInstancesQueryKey = (organizationId: string | null | undefined) =>
   ['organization-runtime-instances', organizationId] as const;
-
-const ENVIRONMENT_SETTING_META: Record<
-  string,
-  {
-    label: string;
-    description: string;
-    placeholder?: string;
-    inputType?: 'text' | 'email';
-    multiline?: boolean;
-    options?: string[];
-  }
-> = {
-  staging_db_connection: {
-    label: 'Staging DB connection',
-    description: 'Connection string used by staging data workflows.',
-    placeholder: 'postgres://user:password@host:5432/dbname',
-    multiline: true,
-  },
-  support_email: {
-    label: 'Support email',
-    description: 'Default reply-to address for customer support.',
-    placeholder: 'support@company.com',
-    inputType: 'email',
-  },
-  feature_flag_new_dashboard: {
-    label: 'New dashboard flag',
-    description: 'Toggle the new dashboard experience for this organization.',
-    options: ['true', 'false'],
-  },
-};
 
 function resolveErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
@@ -75,13 +57,6 @@ function resolveErrorMessage(error: unknown): string {
     return error.message;
   }
   return 'Something went wrong. Please try again.';
-}
-
-function formatSettingLabel(settingKey: string): string {
-  return settingKey
-    .split('_')
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(' ');
 }
 
 function formatTimestamp(value: string | null | undefined): string {
@@ -105,9 +80,22 @@ function runtimeStatusVariant(status: string): 'success' | 'warning' | 'secondar
   return 'secondary';
 }
 
+function downloadAsFile(filename: string, content: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 export default function OrganizationSettingsPage({ params }: OrganizationSettingsPageProps): JSX.Element {
-  const { organizations, loading, refreshOrganizations: reloadOrganizations } = useWorkspaceScope();
+  const router = useRouter();
   const queryClient = useQueryClient();
+  const { organizations, loading, refreshOrganizations: reloadOrganizations } = useWorkspaceScope();
 
   const organization = useMemo(
     () => organizations.find((item) => item.id === params.organizationId) ?? null,
@@ -116,11 +104,23 @@ export default function OrganizationSettingsPage({ params }: OrganizationSetting
 
   const projects = useMemo(() => organization?.projects ?? [], [organization]);
 
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [feedbackTone, setFeedbackTone] = useState<'positive' | 'negative'>('positive');
+  const [searchValue, setSearchValue] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<SettingsCategory | typeof ALL_CATEGORIES>(ALL_CATEGORIES);
+  const [editingSetting, setEditingSetting] = useState<SettingViewModel | null>(null);
+  const [addSettingOpen, setAddSettingOpen] = useState(false);
+  const [addSettingInitialSelection, setAddSettingInitialSelection] = useState<{
+    settingKey: string;
+    value?: string;
+  } | null>(null);
   const [newProjectName, setNewProjectName] = useState('');
   const [organizationInvite, setOrganizationInvite] = useState('');
   const [projectInvites, setProjectInvites] = useState<Record<string, string>>({});
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const [feedbackTone, setFeedbackTone] = useState<'positive' | 'negative'>('positive');
+  const [latestRuntimeToken, setLatestRuntimeToken] = useState<{
+    token: string;
+    expiresAt: string;
+  } | null>(null);
 
   const showFeedback = useCallback((message: string, tone: 'positive' | 'negative' = 'positive') => {
     setFeedback(message);
@@ -129,13 +129,13 @@ export default function OrganizationSettingsPage({ params }: OrganizationSetting
     return () => window.clearTimeout(timeout);
   }, []);
 
-  const environmentKeysQuery = useQuery<string[]>({
-    queryKey: environmentKeysQueryKey,
-    queryFn: () => fetchOrganizationEnvironmentKeys(),
+  const environmentCatalogQuery = useQuery({
+    queryKey: environmentCatalogQueryKey,
+    queryFn: () => fetchOrganizationEnvironmentCatalog(),
     refetchOnWindowFocus: false,
   });
 
-  const environmentSettingsQuery = useQuery<OrganizationEnvironmentSetting[]>({
+  const environmentSettingsQuery = useQuery({
     queryKey: environmentSettingsQueryKey(params.organizationId),
     queryFn: () => fetchOrganizationEnvironmentSettings(params.organizationId),
     enabled: Boolean(params.organizationId),
@@ -149,83 +149,7 @@ export default function OrganizationSettingsPage({ params }: OrganizationSetting
     refetchOnWindowFocus: false,
   });
 
-  const [environmentDraft, setEnvironmentDraft] = useState<Record<string, string>>({});
-  const [environmentDraftOrgId, setEnvironmentDraftOrgId] = useState<string>('');
-  const [latestRuntimeToken, setLatestRuntimeToken] = useState<{
-    token: string;
-    expiresAt: string;
-  } | null>(null);
-  const [pendingEnvironmentActions, setPendingEnvironmentActions] = useState<
-    Record<string, 'save' | 'clear'>
-  >({});
-
-  const availableEnvironmentKeys = useMemo(
-    () => environmentKeysQuery.data ?? [],
-    [environmentKeysQuery.data],
-  );
-
-  const environmentSettingsByKey = useMemo(() => {
-    return new Map(
-      (environmentSettingsQuery.data ?? []).map((setting) => [setting.settingKey, setting.settingValue]),
-    );
-  }, [environmentSettingsQuery.data]);
-
-  const hasEnvironmentDraft = useMemo(
-    () => Object.keys(environmentDraft).length > 0,
-    [environmentDraft],
-  );
-
-  const hydrateEnvironmentDraft = useCallback(
-    (keys: string[], settings: OrganizationEnvironmentSetting[]) => {
-      const next: Record<string, string> = {};
-      const existing = new Map(settings.map((setting) => [setting.settingKey, setting.settingValue]));
-      keys.forEach((key) => {
-        next[key] = existing.get(key) ?? '';
-      });
-      return next;
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!params.organizationId) {
-      setEnvironmentDraft({});
-      setEnvironmentDraftOrgId('');
-      return;
-    }
-
-    const keysReady = environmentKeysQuery.isFetched;
-    const settingsReady = environmentSettingsQuery.isFetched;
-    if (!keysReady || !settingsReady) {
-      return;
-    }
-
-    if (environmentDraftOrgId === params.organizationId && hasEnvironmentDraft) {
-      return;
-    }
-
-    const nextDraft = hydrateEnvironmentDraft(
-      availableEnvironmentKeys,
-      environmentSettingsQuery.data ?? [],
-    );
-    setEnvironmentDraft(nextDraft);
-    setEnvironmentDraftOrgId(params.organizationId);
-  }, [
-    params.organizationId,
-    environmentKeysQuery.isFetched,
-    environmentSettingsQuery.isFetched,
-    environmentSettingsQuery.data,
-    environmentDraftOrgId,
-    hasEnvironmentDraft,
-    availableEnvironmentKeys,
-    hydrateEnvironmentDraft,
-  ]);
-
-  useEffect(() => {
-    setLatestRuntimeToken(null);
-  }, [params.organizationId]);
-
-  const saveEnvironmentSettingMutation = useMutation({
+  const saveSettingMutation = useMutation({
     mutationFn: async ({
       organizationId,
       settingKey,
@@ -237,7 +161,7 @@ export default function OrganizationSettingsPage({ params }: OrganizationSetting
     }) => setOrganizationEnvironmentSetting(organizationId, settingKey, settingValue),
   });
 
-  const clearEnvironmentSettingMutation = useMutation({
+  const clearSettingMutation = useMutation({
     mutationFn: async ({
       organizationId,
       settingKey,
@@ -252,182 +176,127 @@ export default function OrganizationSettingsPage({ params }: OrganizationSetting
       createRuntimeRegistrationToken(organizationId),
   });
 
-  const setEnvironmentAction = useCallback((settingKey: string, action?: 'save' | 'clear') => {
-    setPendingEnvironmentActions((current) => {
-      if (!action) {
-        const next = { ...current };
-        delete next[settingKey];
-        return next;
-      }
-      return { ...current, [settingKey]: action };
-    });
-  }, []);
-
-  const updateEnvironmentSettingCache = useCallback(
-    (settingKey: string, settingValue: string) => {
-      queryClient.setQueryData<OrganizationEnvironmentSetting[]>(
-        environmentSettingsQueryKey(params.organizationId),
-        (current) => {
-          const next = current ? [...current] : [];
-          const index = next.findIndex((setting) => setting.settingKey === settingKey);
-          if (index >= 0) {
-            next[index] = { settingKey, settingValue };
-          } else {
-            next.push({ settingKey, settingValue });
-          }
-          return next;
-        },
-      );
-    },
-    [queryClient, params.organizationId],
-  );
-
-  const removeEnvironmentSettingCache = useCallback(
-    (settingKey: string) => {
-      queryClient.setQueryData<OrganizationEnvironmentSetting[]>(
-        environmentSettingsQueryKey(params.organizationId),
-        (current) => {
-          if (!current) {
-            return [];
-          }
-          return current.filter((setting) => setting.settingKey !== settingKey);
-        },
-      );
-    },
-    [queryClient, params.organizationId],
-  );
-
-  const handleEnvironmentValueChange = useCallback((settingKey: string, value: string) => {
-    setEnvironmentDraft((current) => ({ ...current, [settingKey]: value }));
-  }, []);
-
-  const handleRefreshEnvironmentSettings = useCallback(async () => {
-    const keyResult = await environmentKeysQuery.refetch();
-    const settingsResult = await environmentSettingsQuery.refetch();
-    const nextDraft = hydrateEnvironmentDraft(
-      keyResult.data ?? [],
-      settingsResult.data ?? [],
+  const settingsRecords = useMemo(() => {
+    return buildSettingsViewModel(
+      environmentCatalogQuery.data ?? [],
+      environmentSettingsQuery.data ?? [],
     );
-    setEnvironmentDraft(nextDraft);
-    setEnvironmentDraftOrgId(params.organizationId);
-  }, [
-    environmentKeysQuery,
-    environmentSettingsQuery,
-    hydrateEnvironmentDraft,
-    params.organizationId,
-  ]);
+  }, [environmentCatalogQuery.data, environmentSettingsQuery.data]);
 
-  const handleSaveEnvironmentSetting = useCallback(
-    async (settingKey: string) => {
-      setEnvironmentAction(settingKey, 'save');
-      try {
-        const response = await saveEnvironmentSettingMutation.mutateAsync({
+  const filteredSettings = useMemo(() => {
+    return filterSettings(settingsRecords, searchValue, selectedCategory);
+  }, [settingsRecords, searchValue, selectedCategory]);
+
+  const categoryCounts = useMemo(() => {
+    return SETTINGS_CATEGORIES.map((category) => ({
+      category,
+      count: settingsRecords.filter((record) => record.category === category).length,
+    }));
+  }, [settingsRecords]);
+
+  const upsertSetting = useCallback(
+    async (setting: SettingViewModel, value: string) => {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        await clearSettingMutation.mutateAsync({
           organizationId: params.organizationId,
-          settingKey,
-          settingValue: environmentDraft[settingKey] ?? '',
+          settingKey: setting.settingKey,
         });
-        updateEnvironmentSettingCache(settingKey, response.settingValue);
-        setEnvironmentDraft((current) => ({ ...current, [settingKey]: response.settingValue }));
-        const label = ENVIRONMENT_SETTING_META[settingKey]?.label ?? formatSettingLabel(settingKey);
-        showFeedback(`${label} saved.`, 'positive');
-      } catch (error) {
-        showFeedback(resolveErrorMessage(error), 'negative');
-      } finally {
-        setEnvironmentAction(settingKey);
+        showFeedback(`${setting.displayName} cleared.`, 'positive');
+      } else {
+        await saveSettingMutation.mutateAsync({
+          organizationId: params.organizationId,
+          settingKey: setting.settingKey,
+          settingValue: trimmed,
+        });
+        showFeedback(`${setting.displayName} saved.`, 'positive');
       }
+      await queryClient.invalidateQueries({ queryKey: environmentSettingsQueryKey(params.organizationId) });
     },
-    [
-      environmentDraft,
-      params.organizationId,
-      saveEnvironmentSettingMutation,
-      setEnvironmentAction,
-      updateEnvironmentSettingCache,
-      showFeedback,
-    ],
+    [clearSettingMutation, params.organizationId, queryClient, saveSettingMutation, showFeedback],
   );
 
-  const handleClearEnvironmentSetting = useCallback(
-    async (settingKey: string) => {
-      setEnvironmentAction(settingKey, 'clear');
-      try {
-        await clearEnvironmentSettingMutation.mutateAsync({
-          organizationId: params.organizationId,
-          settingKey,
-        });
-        removeEnvironmentSettingCache(settingKey);
-        setEnvironmentDraft((current) => ({ ...current, [settingKey]: '' }));
-        const label = ENVIRONMENT_SETTING_META[settingKey]?.label ?? formatSettingLabel(settingKey);
-        showFeedback(`${label} cleared.`, 'positive');
-      } catch (error) {
-        showFeedback(resolveErrorMessage(error), 'negative');
-      } finally {
-        setEnvironmentAction(settingKey);
-      }
+  const handleDuplicateFromDrawer = useCallback((setting: SettingViewModel, value: string) => {
+    setAddSettingInitialSelection({
+      settingKey: setting.settingKey,
+      value,
+    });
+    setAddSettingOpen(true);
+  }, []);
+
+  const handleCreateFromModal = useCallback(
+    async (setting: SettingViewModel, value: string) => {
+      await upsertSetting(setting, value);
     },
-    [
-      params.organizationId,
-      clearEnvironmentSettingMutation,
-      removeEnvironmentSettingCache,
-      setEnvironmentAction,
-      showFeedback,
-    ],
+    [upsertSetting],
   );
 
-  const environmentErrorMessage = useMemo(() => {
-    if (environmentKeysQuery.error) {
-      return resolveErrorMessage(environmentKeysQuery.error);
-    }
-    if (environmentSettingsQuery.error) {
-      return resolveErrorMessage(environmentSettingsQuery.error);
-    }
-    return null;
-  }, [environmentKeysQuery.error, environmentSettingsQuery.error]);
-
-  const environmentLoading =
-    environmentKeysQuery.isLoading || environmentSettingsQuery.isLoading;
-  const environmentRefreshing =
-    environmentKeysQuery.isFetching || environmentSettingsQuery.isFetching;
-
-  const runtimeInstancesErrorMessage = useMemo(() => {
-    if (runtimeInstancesQuery.error) {
-      return resolveErrorMessage(runtimeInstancesQuery.error);
-    }
-    return null;
-  }, [runtimeInstancesQuery.error]);
-
-  const runtimeInstancesLoading = runtimeInstancesQuery.isLoading;
-  const runtimeInstancesRefreshing = runtimeInstancesQuery.isFetching;
-
-  const handleRefreshRuntimeInstances = useCallback(async () => {
-    await runtimeInstancesQuery.refetch();
-  }, [runtimeInstancesQuery]);
-
-  const handleCreateRuntimeRegistrationToken = useCallback(async () => {
-    try {
-      const token = await createRuntimeTokenMutation.mutateAsync({
-        organizationId: params.organizationId,
-      });
-      setLatestRuntimeToken({
-        token: token.registrationToken,
-        expiresAt: token.expiresAt,
-      });
-      showFeedback('Runtime registration token created.', 'positive');
-    } catch (error) {
-      showFeedback(resolveErrorMessage(error), 'negative');
-    }
-  }, [createRuntimeTokenMutation, params.organizationId, showFeedback]);
-
-  const handleCopyRuntimeToken = useCallback(async () => {
-    if (!latestRuntimeToken?.token) {
+  const handleExportJson = useCallback(() => {
+    if (!organization) {
       return;
     }
-    try {
-      await navigator.clipboard.writeText(latestRuntimeToken.token);
-      showFeedback('Runtime registration token copied to clipboard.', 'positive');
-    } catch {
-      showFeedback('Unable to copy token. Copy it manually.', 'negative');
+    const payload = {
+      organizationId: organization.id,
+      organizationName: organization.name,
+      exportedAt: new Date().toISOString(),
+      settings: settingsRecords.map((record) => ({
+        settingKey: record.settingKey,
+        settingValue: record.settingValue,
+        category: record.category,
+        scope: record.scope,
+        isConfigured: record.isConfigured,
+        isInherited: record.isInherited,
+      })),
+    };
+    downloadAsFile(
+      `${organization.name.replace(/\s+/g, '-').toLowerCase()}-settings.json`,
+      JSON.stringify(payload, null, 2),
+      'application/json',
+    );
+    showFeedback('Settings exported as JSON.', 'positive');
+  }, [organization, settingsRecords, showFeedback]);
+
+  const handleExportYaml = useCallback(() => {
+    if (!organization) {
+      return;
     }
-  }, [latestRuntimeToken, showFeedback]);
+    const payload = {
+      organizationId: organization.id,
+      organizationName: organization.name,
+      exportedAt: new Date().toISOString(),
+      settings: settingsRecords.map((record) => ({
+        settingKey: record.settingKey,
+        settingValue: record.settingValue,
+        category: record.category,
+        scope: record.scope,
+        isConfigured: record.isConfigured,
+        isInherited: record.isInherited,
+      })),
+    };
+    downloadAsFile(
+      `${organization.name.replace(/\s+/g, '-').toLowerCase()}-settings.yaml`,
+      toYaml(payload),
+      'text/yaml',
+    );
+    showFeedback('Settings exported as YAML.', 'positive');
+  }, [organization, settingsRecords, showFeedback]);
+
+  const handleViewAudit = useCallback(() => {
+    setSelectedCategory('Audit & Compliance');
+    setSearchValue('');
+  }, []);
+
+  const handleOpenQuickActionSetting = useCallback(
+    (settingKey: string) => {
+      const target = settingsRecords.find((item) => item.settingKey === settingKey);
+      if (!target) {
+        showFeedback('Setting type is not available in this environment.', 'negative');
+        return;
+      }
+      setEditingSetting(target);
+    },
+    [settingsRecords, showFeedback],
+  );
 
   const handleCreateProject = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -469,12 +338,11 @@ export default function OrganizationSettingsPage({ params }: OrganizationSetting
         await inviteToOrganization(organization.id, { username });
         setOrganizationInvite('');
         showFeedback(`Invited ${username} to ${organization.name}.`, 'positive');
-        await reloadOrganizations();
       } catch (error) {
         showFeedback(resolveErrorMessage(error), 'negative');
       }
     },
-    [organization, organizationInvite, reloadOrganizations, showFeedback],
+    [organization, organizationInvite, showFeedback],
   );
 
   const handleInviteToProject = useCallback(
@@ -491,10 +359,7 @@ export default function OrganizationSettingsPage({ params }: OrganizationSetting
       }
       try {
         await inviteToProject(organization.id, projectId, { username });
-        setProjectInvites((current) => ({
-          ...current,
-          [projectId]: '',
-        }));
+        setProjectInvites((current) => ({ ...current, [projectId]: '' }));
         showFeedback(`Invited ${username} to ${projectName}.`, 'positive');
       } catch (error) {
         showFeedback(resolveErrorMessage(error), 'negative');
@@ -503,468 +368,394 @@ export default function OrganizationSettingsPage({ params }: OrganizationSetting
     [organization, projectInvites, showFeedback],
   );
 
+  const handleCreateRuntimeRegistrationToken = useCallback(async () => {
+    try {
+      const token = await createRuntimeTokenMutation.mutateAsync({
+        organizationId: params.organizationId,
+      });
+      setLatestRuntimeToken({
+        token: token.registrationToken,
+        expiresAt: token.expiresAt,
+      });
+      showFeedback('Runtime registration token created.', 'positive');
+    } catch (error) {
+      showFeedback(resolveErrorMessage(error), 'negative');
+    }
+  }, [createRuntimeTokenMutation, params.organizationId, showFeedback]);
+
+  const handleCopyRuntimeToken = useCallback(async () => {
+    if (!latestRuntimeToken?.token) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(latestRuntimeToken.token);
+      showFeedback('Runtime registration token copied to clipboard.', 'positive');
+    } catch {
+      showFeedback('Unable to copy token. Copy it manually.', 'negative');
+    }
+  }, [latestRuntimeToken, showFeedback]);
+
   const organizationLoading = loading && organizations.length === 0;
+  const settingsLoading = environmentCatalogQuery.isLoading || environmentSettingsQuery.isLoading;
+  const settingsError = environmentCatalogQuery.error || environmentSettingsQuery.error;
+
+  const showExecutionPanels =
+    selectedCategory === ALL_CATEGORIES || selectedCategory === 'Execution & Runtime';
+  const showSecurityPanels =
+    selectedCategory === ALL_CATEGORIES || selectedCategory === 'Security & Access';
+  const showAuditPanel =
+    selectedCategory === ALL_CATEGORIES || selectedCategory === 'Audit & Compliance';
 
   return (
-    <div className="space-y-6 text-[color:var(--text-secondary)]">
-      {feedback ? (
-        <div
-          role="status"
-          className={`rounded-lg border px-4 py-3 text-sm shadow-soft ${
-            feedbackTone === 'positive'
-              ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-800'
-              : 'border-rose-400/60 bg-rose-500/10 text-rose-800'
-          }`}
-        >
-          {feedback}
-        </div>
-      ) : null}
-
-      <header className="surface-panel rounded-3xl p-6 shadow-soft">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="space-y-3">
-            <Link
-              href={`/organizations/${params.organizationId}`}
-              className="text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]"
-            >
-              Organization
-            </Link>
-            <div className="space-y-2">
+    <>
+      <SettingsLayout
+        organizationId={params.organizationId}
+        organizationName={organization?.name ?? 'Organization'}
+        environmentLabel={process.env.NEXT_PUBLIC_ENVIRONMENT || null}
+        searchValue={searchValue}
+        onSearchChange={setSearchValue}
+        onAddSetting={() => {
+          setAddSettingInitialSelection(null);
+          setAddSettingOpen(true);
+        }}
+        onExportJson={handleExportJson}
+        onExportYaml={handleExportYaml}
+        onViewAudit={handleViewAudit}
+        quickActions={
+          <section className="surface-panel rounded-3xl p-4 shadow-soft">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+                  Quick actions
+                </p>
+                <p className="mt-1 text-sm">Jump to common configuration tasks.</p>
+              </div>
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-2xl font-semibold text-[color:var(--text-primary)] md:text-3xl">
-                  {organization?.name ?? 'Organization settings'}
-                </h1>
-                {organization ? <Badge variant="secondary">Settings</Badge> : null}
+                <Button size="sm" variant="outline" onClick={() => router.push(`/datasources/${params.organizationId}/create`)}>
+                  <Database className="h-4 w-4" />
+                  Add connection
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => handleOpenQuickActionSetting('execution_mode_default')}>
+                  <Rocket className="h-4 w-4" />
+                  Set default runtime
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => handleOpenQuickActionSetting('llm_enabled')}>
+                  <Sparkles className="h-4 w-4" />
+                  Enable LLM
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setSelectedCategory('Limits & Quotas')}>
+                  <Gauge className="h-4 w-4" />
+                  Configure limits
+                </Button>
               </div>
-              <p className="text-sm md:text-base">
-                Adjust organization-level environment values, projects, and invitations.
-              </p>
             </div>
+          </section>
+        }
+      >
+        {feedback ? (
+          <div
+            role="status"
+            className={`rounded-lg border px-4 py-3 text-sm shadow-soft ${
+              feedbackTone === 'positive'
+                ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-800'
+                : 'border-rose-400/60 bg-rose-500/10 text-rose-800'
+            }`}
+          >
+            {feedback}
           </div>
-          <Button asChild variant="outline" size="sm" className="gap-2">
-            <Link href={`/organizations/${params.organizationId}`}>
-              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-              Back to overview
-            </Link>
-          </Button>
-        </div>
-      </header>
+        ) : null}
 
-      {organizationLoading ? (
-        <section className="surface-panel rounded-3xl p-6 shadow-soft">
-          <div className="space-y-3">
-            {Array.from({ length: 3 }).map((_, index) => (
-              <div
-                key={index}
-                className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] p-4"
-              >
-                <Skeleton className="h-4 w-40" />
-                <Skeleton className="mt-3 h-10 w-full" />
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : !organization ? (
-        <section className="surface-panel flex flex-col items-center justify-center gap-3 rounded-3xl p-6 text-center text-[color:var(--text-muted)] shadow-soft">
-          <p className="text-sm">We couldn&apos;t find that organization.</p>
-          <Button asChild variant="outline" size="sm">
-            <Link href="/organizations">Return to organizations</Link>
-          </Button>
-        </section>
-      ) : (
-        <>
+        {organizationLoading ? (
           <section className="surface-panel rounded-3xl p-6 shadow-soft">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="space-y-2">
-                <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">
-                  Environment settings
-                </h2>
-                <p className="text-sm">
-                  Update organization-scoped connection strings, support defaults, and feature flags.
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRefreshEnvironmentSettings}
-                disabled={environmentRefreshing || environmentLoading}
-              >
-                Refresh
-              </Button>
-            </div>
-
-            <div className="mt-6">
-              {environmentLoading ? (
-                <div className="space-y-3">
-                  {Array.from({ length: 3 }).map((_, index) => (
-                    <div
-                      key={index}
-                      className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4"
-                    >
-                      <Skeleton className="h-4 w-40" />
-                      <Skeleton className="mt-3 h-10 w-full" />
-                    </div>
-                  ))}
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <div key={index} className="rounded-2xl border border-[color:var(--panel-border)] p-4">
+                  <Skeleton className="h-4 w-40" />
+                  <Skeleton className="mt-3 h-10 w-full" />
                 </div>
-              ) : environmentErrorMessage ? (
-                <div className="flex flex-col items-center justify-center gap-4 rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-6 text-center text-[color:var(--text-muted)]">
-                  <p className="text-sm">{environmentErrorMessage}</p>
-                  <Button onClick={handleRefreshEnvironmentSettings} variant="outline" size="sm">
-                    Try again
-                  </Button>
-                </div>
-              ) : availableEnvironmentKeys.length === 0 ? (
-                <div className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-[color:var(--panel-border)] p-6 text-center text-[color:var(--text-muted)]">
-                  <p className="text-sm">No environment setting keys are configured yet.</p>
-                  <p className="text-xs">Ask an administrator to define organization settings.</p>
-                </div>
-              ) : (
-                <ul className="space-y-4">
-                  {availableEnvironmentKeys.map((settingKey) => {
-                    const meta = ENVIRONMENT_SETTING_META[settingKey];
-                    const label = meta?.label ?? formatSettingLabel(settingKey);
-                    const description = meta?.description ?? 'Organization environment setting.';
-                    const draftValue = environmentDraft[settingKey] ?? '';
-                    const currentValue = environmentSettingsByKey.get(settingKey) ?? '';
-                    const isDirty = draftValue !== currentValue;
-                    const actionState = pendingEnvironmentActions[settingKey];
-                    const isSaving = actionState === 'save';
-                    const isClearing = actionState === 'clear';
-                    const isPending = Boolean(actionState);
-                    const isConfigured = Boolean(currentValue);
-
-                    return (
-                      <li
-                        key={settingKey}
-                        className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <p className="text-sm font-semibold text-[color:var(--text-primary)]">{label}</p>
-                              {!isConfigured ? <Badge variant="secondary">Not set</Badge> : null}
-                              {isDirty ? <Badge variant="warning">Unsaved</Badge> : null}
-                            </div>
-                            <p className="text-xs text-[color:var(--text-muted)]">{description}</p>
-                            <p className="text-[10px] font-mono text-[color:var(--text-muted)]">{settingKey}</p>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              isLoading={isSaving}
-                              disabled={!isDirty || isPending}
-                              onClick={() => handleSaveEnvironmentSetting(settingKey)}
-                            >
-                              Save
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              isLoading={isClearing}
-                              disabled={!isConfigured || isPending}
-                              onClick={() => handleClearEnvironmentSetting(settingKey)}
-                            >
-                              Clear
-                            </Button>
-                          </div>
-                        </div>
-                        <div className="mt-3">
-                          {meta?.options ? (
-                            <Select
-                              value={draftValue}
-                              onChange={(event) => handleEnvironmentValueChange(settingKey, event.target.value)}
-                              disabled={isPending}
-                            >
-                              <option value="">Not set</option>
-                              {meta.options.map((option) => (
-                                <option key={option} value={option}>
-                                  {option}
-                                </option>
-                              ))}
-                            </Select>
-                          ) : meta?.multiline ? (
-                            <Textarea
-                              value={draftValue}
-                              onChange={(event) => handleEnvironmentValueChange(settingKey, event.target.value)}
-                              placeholder={meta.placeholder}
-                              disabled={isPending}
-                              className="min-h-[96px]"
-                            />
-                          ) : (
-                            <Input
-                              type={meta?.inputType ?? 'text'}
-                              value={draftValue}
-                              onChange={(event) => handleEnvironmentValueChange(settingKey, event.target.value)}
-                              placeholder={meta?.placeholder}
-                              disabled={isPending}
-                            />
-                          )}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+              ))}
             </div>
           </section>
-
-          <section className="surface-panel rounded-3xl p-6 shadow-soft">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="space-y-2">
-                <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">
-                  Runtime registration token
-                </h2>
-                <p className="text-sm">
-                  Create a one-time token for customer-runtime worker registration.
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleCreateRuntimeRegistrationToken}
-                isLoading={createRuntimeTokenMutation.isPending}
-              >
-                Generate token
-              </Button>
-            </div>
-
-            {latestRuntimeToken ? (
-              <div className="mt-5 space-y-3 rounded-2xl border border-amber-400/40 bg-amber-500/10 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-[color:var(--text-primary)]">One-time token</p>
-                  <Badge variant="warning">Expires {formatTimestamp(latestRuntimeToken.expiresAt)}</Badge>
-                </div>
-                <Textarea
-                  readOnly
-                  value={latestRuntimeToken.token}
-                  className="min-h-[88px] font-mono text-xs"
-                />
-                <div className="flex justify-end">
-                  <Button variant="secondary" size="sm" onClick={handleCopyRuntimeToken}>
-                    Copy token
-                  </Button>
-                </div>
-                <p className="text-xs text-[color:var(--text-muted)]">
-                  This token is shown once and can only be used for a single runtime registration.
-                </p>
-              </div>
-            ) : (
-              <div className="mt-5 rounded-2xl border border-dashed border-[color:var(--panel-border)] p-4 text-sm text-[color:var(--text-muted)]">
-                Generate a token when you are ready to bootstrap a customer-runtime worker.
-              </div>
-            )}
+        ) : !organization ? (
+          <section className="surface-panel rounded-3xl p-6 text-center shadow-soft">
+            <p className="text-sm text-[color:var(--text-muted)]">We couldn&apos;t find that organization.</p>
           </section>
-
-          <section className="surface-panel rounded-3xl p-6 shadow-soft">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="space-y-2">
-                <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">
-                  Runtime instances
-                </h2>
-                <p className="text-sm">
-                  View registered execution-plane instances for this organization.
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRefreshRuntimeInstances}
-                disabled={runtimeInstancesLoading || runtimeInstancesRefreshing}
-              >
-                Refresh
-              </Button>
-            </div>
-
-            <div className="mt-5">
-              {runtimeInstancesLoading ? (
-                <div className="space-y-3">
-                  {Array.from({ length: 2 }).map((_, index) => (
-                    <div
-                      key={index}
-                      className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4"
-                    >
-                      <Skeleton className="h-4 w-56" />
-                      <Skeleton className="mt-3 h-4 w-full" />
-                      <Skeleton className="mt-2 h-4 w-4/5" />
-                    </div>
-                  ))}
-                </div>
-              ) : runtimeInstancesErrorMessage ? (
-                <div className="flex flex-col items-center justify-center gap-4 rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-6 text-center text-[color:var(--text-muted)]">
-                  <p className="text-sm">{runtimeInstancesErrorMessage}</p>
-                  <Button onClick={handleRefreshRuntimeInstances} variant="outline" size="sm">
-                    Try again
-                  </Button>
-                </div>
-              ) : (runtimeInstancesQuery.data ?? []).length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-[color:var(--panel-border)] p-6 text-center text-sm text-[color:var(--text-muted)]">
-                  No runtime instances have registered yet.
-                </div>
-              ) : (
-                <ul className="space-y-3">
-                  {(runtimeInstancesQuery.data ?? []).map((runtime) => {
-                    const rawMessageTypes = runtime.capabilities?.['message_types'];
-                    const messageTypes = Array.isArray(rawMessageTypes)
-                      ? (rawMessageTypes as unknown[]).filter(
-                          (value): value is string => typeof value === 'string',
-                        )
-                      : [];
-                    return (
-                      <li
-                        key={runtime.epId}
-                        className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <p className="text-sm font-semibold text-[color:var(--text-primary)]">
-                                {runtime.displayName || `Runtime ${runtime.epId.slice(0, 8)}`}
-                              </p>
-                              <Badge variant={runtimeStatusVariant(runtime.status)}>{runtime.status}</Badge>
-                            </div>
-                            <p className="text-[11px] font-mono text-[color:var(--text-muted)]">{runtime.epId}</p>
-                          </div>
-                          <div className="text-right text-xs text-[color:var(--text-muted)]">
-                            <p>Last seen: {formatTimestamp(runtime.lastSeenAt)}</p>
-                            <p>Registered: {formatTimestamp(runtime.registeredAt)}</p>
-                          </div>
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {(runtime.tags ?? []).length > 0 ? (
-                            runtime.tags.map((tag) => (
-                              <Badge key={tag} variant="secondary">
-                                {tag}
-                              </Badge>
-                            ))
-                          ) : (
-                            <span className="text-xs text-[color:var(--text-muted)]">No tags</span>
-                          )}
-                        </div>
-                        <div className="mt-3">
-                          {messageTypes.length > 0 ? (
-                            <p className="text-xs text-[color:var(--text-muted)]">
-                              Message types: {messageTypes.join(', ')}
-                            </p>
-                          ) : (
-                            <p className="text-xs text-[color:var(--text-muted)]">
-                              Message types: not declared
-                            </p>
-                          )}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          </section>
-
-          <section className="surface-panel rounded-3xl p-6 shadow-soft">
-            <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">Organization access</h2>
-            <p className="mt-1 text-sm">
-              Invite teammates and create new projects inside {organization.name}.
-            </p>
-
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <form
-                onSubmit={handleInviteToOrganization}
-                className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4"
-              >
-                <h3 className="text-sm font-medium text-[color:var(--text-primary)]">Invite to organization</h3>
-                <p className="mt-1 text-xs">
-                  Add an existing LangBridge user by their username.
-                </p>
-                <label className="sr-only" htmlFor="invite-org-username">
-                  Username to invite
-                </label>
-                <div className="mt-3 flex gap-2">
-                  <Input
-                    id="invite-org-username"
-                    value={organizationInvite}
-                    onChange={(event) => setOrganizationInvite(event.target.value)}
-                    placeholder="username"
-                  />
-                  <Button type="submit" size="sm">
-                    Invite
-                  </Button>
-                </div>
-              </form>
-
-              <form
-                onSubmit={handleCreateProject}
-                className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4"
-              >
-                <h3 className="text-sm font-medium text-[color:var(--text-primary)]">New project</h3>
-                <p className="mt-1 text-xs">
-                  Projects keep data sources and agents scoped within the organization.
-                </p>
-                <label className="sr-only" htmlFor="new-project-name">
-                  Project name
-                </label>
-                <div className="mt-3 flex gap-2">
-                  <Input
-                    id="new-project-name"
-                    value={newProjectName}
-                    onChange={(event) => setNewProjectName(event.target.value)}
-                    placeholder="Project name"
-                  />
-                  <Button type="submit" size="sm">
-                    Create
-                  </Button>
-                </div>
-              </form>
-            </div>
-
-            <div className="mt-6">
-              <h3 className="text-sm font-semibold text-[color:var(--text-primary)]">Projects</h3>
-              {projects.length === 0 ? (
-                <p className="mt-2 text-sm">
-                  No projects yet. Create one to start organizing connectors and agents.
-                </p>
-              ) : (
-                <ul className="mt-3 space-y-3">
-                  {projects.map((project) => (
-                    <li
-                      key={project.id}
-                      className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h4 className="text-sm font-medium text-[color:var(--text-primary)]">{project.name}</h4>
-                          <p className="text-xs">Project ID: {project.id}</p>
-                        </div>
+        ) : (
+          <>
+            <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+              <CategorySidebar
+                categories={categoryCounts}
+                selectedCategory={selectedCategory}
+                onSelectCategory={setSelectedCategory}
+              />
+              <section className="surface-panel rounded-3xl p-4 shadow-soft">
+                {settingsLoading ? (
+                  <div className="space-y-3">
+                    {Array.from({ length: 6 }).map((_, index) => (
+                      <div key={index} className="rounded-2xl border border-[color:var(--panel-border)] p-4">
+                        <Skeleton className="h-4 w-44" />
+                        <Skeleton className="mt-3 h-8 w-full" />
                       </div>
-                      <form
-                        onSubmit={(event) => handleInviteToProject(event, project.id, project.name)}
-                        className="mt-3 flex gap-2"
-                      >
-                        <label className="sr-only" htmlFor={`invite-${project.id}`}>
-                          Username to invite to {project.name}
-                        </label>
-                        <Input
-                          id={`invite-${project.id}`}
-                          value={projectInvites[project.id] ?? ''}
-                          onChange={(event) =>
-                            setProjectInvites((current) => ({
-                              ...current,
-                              [project.id]: event.target.value,
-                            }))
-                          }
-                          placeholder="username"
-                        />
-                        <Button type="submit" size="sm" variant="outline">
-                          Invite
-                        </Button>
-                      </form>
-                    </li>
-                  ))}
-                </ul>
-              )}
+                    ))}
+                  </div>
+                ) : settingsError ? (
+                  <div className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-6 text-center">
+                    <p className="text-sm text-[color:var(--text-muted)]">{resolveErrorMessage(settingsError)}</p>
+                  </div>
+                ) : (
+                  <SettingsTable records={filteredSettings} onEditSetting={setEditingSetting} />
+                )}
+              </section>
             </div>
-          </section>
-        </>
-      )}
-    </div>
+
+            {showExecutionPanels ? (
+              <>
+                <section className="surface-panel rounded-3xl p-6 shadow-soft">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">Runtime registration token</h2>
+                      <p className="mt-1 text-sm">
+                        Generate a one-time token for customer-runtime worker registration.
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCreateRuntimeRegistrationToken}
+                      isLoading={createRuntimeTokenMutation.isPending}
+                    >
+                      Generate token
+                    </Button>
+                  </div>
+
+                  {latestRuntimeToken ? (
+                    <div className="mt-5 space-y-3 rounded-2xl border border-amber-400/40 bg-amber-500/10 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-[color:var(--text-primary)]">One-time token</p>
+                        <Badge variant="warning">Expires {formatTimestamp(latestRuntimeToken.expiresAt)}</Badge>
+                      </div>
+                      <Input readOnly value={latestRuntimeToken.token} className="font-mono text-xs" />
+                      <div className="flex justify-end">
+                        <Button variant="secondary" size="sm" onClick={handleCopyRuntimeToken}>
+                          Copy token
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-5 rounded-2xl border border-dashed border-[color:var(--panel-border)] p-4 text-sm text-[color:var(--text-muted)]">
+                      Generate a token when you are ready to bootstrap a customer-runtime worker.
+                    </div>
+                  )}
+                </section>
+
+                <section className="surface-panel rounded-3xl p-6 shadow-soft">
+                  <div className="mb-4 flex items-center justify-between">
+                    <div>
+                      <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">Runtime instances</h2>
+                      <p className="mt-1 text-sm">Registered execution-plane instances for this organization.</p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => runtimeInstancesQuery.refetch()}
+                      disabled={runtimeInstancesQuery.isFetching}
+                    >
+                      Refresh
+                    </Button>
+                  </div>
+
+                  {runtimeInstancesQuery.isLoading ? (
+                    <div className="space-y-3">
+                      {Array.from({ length: 2 }).map((_, index) => (
+                        <div key={index} className="rounded-2xl border border-[color:var(--panel-border)] p-4">
+                          <Skeleton className="h-4 w-48" />
+                          <Skeleton className="mt-3 h-4 w-full" />
+                        </div>
+                      ))}
+                    </div>
+                  ) : runtimeInstancesQuery.error ? (
+                    <p className="text-sm text-[color:var(--text-muted)]">
+                      {resolveErrorMessage(runtimeInstancesQuery.error)}
+                    </p>
+                  ) : (runtimeInstancesQuery.data ?? []).length === 0 ? (
+                    <p className="text-sm text-[color:var(--text-muted)]">No runtime instances have registered yet.</p>
+                  ) : (
+                    <ul className="space-y-3">
+                      {(runtimeInstancesQuery.data ?? []).map((runtime) => (
+                        <li
+                          key={runtime.epId}
+                          className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-semibold text-[color:var(--text-primary)]">
+                                  {runtime.displayName || `Runtime ${runtime.epId.slice(0, 8)}`}
+                                </p>
+                                <Badge variant={runtimeStatusVariant(runtime.status)}>{runtime.status}</Badge>
+                              </div>
+                              <p className="mt-1 text-[10px] font-mono text-[color:var(--text-muted)]">{runtime.epId}</p>
+                            </div>
+                            <div className="text-right text-xs text-[color:var(--text-muted)]">
+                              <p>Last seen: {formatTimestamp(runtime.lastSeenAt)}</p>
+                              <p>Registered: {formatTimestamp(runtime.registeredAt)}</p>
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              </>
+            ) : null}
+
+            {showSecurityPanels ? (
+              <section className="surface-panel rounded-3xl p-6 shadow-soft">
+                <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">Security & access</h2>
+                <p className="mt-1 text-sm">Invite teammates and manage workspace-level project access.</p>
+
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <form
+                    onSubmit={handleInviteToOrganization}
+                    className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4"
+                  >
+                    <h3 className="text-sm font-medium text-[color:var(--text-primary)]">Invite to organization</h3>
+                    <p className="mt-1 text-xs text-[color:var(--text-muted)]">
+                      Add an existing LangBridge user by username.
+                    </p>
+                    <div className="mt-3 flex gap-2">
+                      <Input
+                        value={organizationInvite}
+                        onChange={(event) => setOrganizationInvite(event.target.value)}
+                        placeholder="username"
+                      />
+                      <Button type="submit" size="sm">
+                        Invite
+                      </Button>
+                    </div>
+                  </form>
+
+                  <form
+                    onSubmit={handleCreateProject}
+                    className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4"
+                  >
+                    <h3 className="text-sm font-medium text-[color:var(--text-primary)]">Create project</h3>
+                    <p className="mt-1 text-xs text-[color:var(--text-muted)]">
+                      Projects scope connectors, agents, and semantic models.
+                    </p>
+                    <div className="mt-3 flex gap-2">
+                      <Input
+                        value={newProjectName}
+                        onChange={(event) => setNewProjectName(event.target.value)}
+                        placeholder="Project name"
+                      />
+                      <Button type="submit" size="sm">
+                        Create
+                      </Button>
+                    </div>
+                  </form>
+                </div>
+
+                <div className="mt-5">
+                  <h3 className="text-sm font-semibold text-[color:var(--text-primary)]">Projects</h3>
+                  {projects.length === 0 ? (
+                    <p className="mt-2 text-sm text-[color:var(--text-muted)]">
+                      No projects yet. Create one to start organizing work.
+                    </p>
+                  ) : (
+                    <ul className="mt-3 space-y-3">
+                      {projects.map((project) => (
+                        <li
+                          key={project.id}
+                          className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4"
+                        >
+                          <h4 className="text-sm font-medium text-[color:var(--text-primary)]">{project.name}</h4>
+                          <p className="text-xs text-[color:var(--text-muted)]">Project ID: {project.id}</p>
+                          <form
+                            onSubmit={(event) => handleInviteToProject(event, project.id, project.name)}
+                            className="mt-3 flex gap-2"
+                          >
+                            <Input
+                              value={projectInvites[project.id] ?? ''}
+                              onChange={(event) =>
+                                setProjectInvites((current) => ({
+                                  ...current,
+                                  [project.id]: event.target.value,
+                                }))
+                              }
+                              placeholder="username"
+                            />
+                            <Button type="submit" size="sm" variant="outline">
+                              Invite
+                            </Button>
+                          </form>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </section>
+            ) : null}
+
+            {showAuditPanel ? (
+              <section className="surface-panel rounded-3xl p-6 shadow-soft">
+                <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">Audit & compliance</h2>
+                <p className="mt-1 text-sm">
+                  Audit-lite shows latest known editor metadata captured when settings are updated.
+                </p>
+                <div className="mt-4 rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4">
+                  <ul className="space-y-2 text-sm">
+                    {settingsRecords
+                      .filter((record) => record.lastUpdatedAt)
+                      .sort((left, right) => (left.lastUpdatedAt && right.lastUpdatedAt
+                        ? new Date(right.lastUpdatedAt).getTime() - new Date(left.lastUpdatedAt).getTime()
+                        : 0))
+                      .slice(0, 8)
+                      .map((record) => (
+                        <li key={record.settingKey} className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[color:var(--text-primary)]">{record.displayName}</span>
+                          <span className="text-xs text-[color:var(--text-muted)]">
+                            {formatTimestamp(record.lastUpdatedAt)} {record.lastUpdatedBy ? `by ${record.lastUpdatedBy}` : ''}
+                          </span>
+                        </li>
+                      ))}
+                  </ul>
+                  {settingsRecords.filter((record) => record.lastUpdatedAt).length === 0 ? (
+                    <p className="text-sm text-[color:var(--text-muted)]">
+                      No audit metadata recorded yet for settings updates.
+                    </p>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
+          </>
+        )}
+      </SettingsLayout>
+
+      <EditSettingDrawer
+        open={Boolean(editingSetting)}
+        setting={editingSetting}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditingSetting(null);
+          }
+        }}
+        onSave={upsertSetting}
+        onDuplicate={handleDuplicateFromDrawer}
+      />
+
+      <AddSettingModal
+        open={addSettingOpen}
+        onOpenChange={(open) => {
+          setAddSettingOpen(open);
+          if (!open) {
+            setAddSettingInitialSelection(null);
+          }
+        }}
+        settingsCatalog={settingsRecords}
+        onCreate={handleCreateFromModal}
+        initialSelection={addSettingInitialSelection}
+      />
+    </>
   );
 }

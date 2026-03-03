@@ -15,7 +15,8 @@ from langbridge.packages.common.langbridge_common.contracts.organizations import
     ProjectCreateRequest,
     ProjectInviteResponse,
     ProjectResponse,
-    OrganizationEnvironmentSetting
+    OrganizationEnvironmentSetting,
+    OrganizationEnvironmentSettingCatalogEntry,
 )
 from langbridge.apps.api.langbridge_api.services.organization_service import OrganizationService
 
@@ -147,6 +148,21 @@ async def get_environment_setting_keys(
     keys = organization_service.get_available_keys()
     return keys
 
+
+@router.get(
+    "/environment/catalog",
+    response_model=List[OrganizationEnvironmentSettingCatalogEntry],
+    status_code=status.HTTP_200_OK,
+)
+@inject
+async def get_environment_settings_catalog(
+    organization_service: OrganizationService = Depends(
+        Provide[Container.organization_service]
+    ),
+) -> List[OrganizationEnvironmentSettingCatalogEntry]:
+    return organization_service.get_environment_settings_catalog()
+
+
 @router.get(
     "/{organization_id}/environment",
     response_model=List[OrganizationEnvironmentSetting],
@@ -184,6 +200,7 @@ async def set_organization_environment_setting(
         organization_id,
         setting_key,
         payload.setting_value,
+        updated_by=current_user.username,
     )
     return setting
 

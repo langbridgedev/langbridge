@@ -4,6 +4,7 @@ import type {
   Project,
   ProjectInvite,
   OrganizationEnvironmentSetting,
+  OrganizationEnvironmentSettingCatalogEntry,
   RuntimeInstance,
   RuntimeRegistrationToken,
 } from './types';
@@ -58,6 +59,10 @@ export async function fetchOrganizationEnvironmentKeys(): Promise<string[]> {
   return apiFetch<string[]>(`${BASE_PATH}/environment/keys`);
 }
 
+export async function fetchOrganizationEnvironmentCatalog(): Promise<OrganizationEnvironmentSettingCatalogEntry[]> {
+  return apiFetch<OrganizationEnvironmentSettingCatalogEntry[]>(`${BASE_PATH}/environment/catalog`);
+}
+
 export async function fetchOrganizationEnvironmentSettings(
   organizationId: string,
 ): Promise<OrganizationEnvironmentSetting[]> {
@@ -107,6 +112,7 @@ export type {
   Organization,
   OrganizationInvite,
   OrganizationEnvironmentSetting,
+  OrganizationEnvironmentSettingCatalogEntry,
   Project,
   ProjectInvite,
   RuntimeInstance,

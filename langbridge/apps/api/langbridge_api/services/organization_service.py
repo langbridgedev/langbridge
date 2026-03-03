@@ -24,7 +24,8 @@ from langbridge.packages.common.langbridge_common.contracts.organizations import
     OrganizationResponse,
     ProjectInviteResponse,
     ProjectResponse,
-    OrganizationEnvironmentSetting
+    OrganizationEnvironmentSetting,
+    OrganizationEnvironmentSettingCatalogEntry,
 )
 from langbridge.packages.common.langbridge_common.repositories.organization_repository import (
     OrganizationInviteRepository,
@@ -291,19 +292,41 @@ class OrganizationService:
     def get_available_keys(self) -> list[str]:
         """Return a list of all available setting keys."""
         return self._environment_service.get_available_keys()
+
+    def get_environment_settings_catalog(self) -> list[OrganizationEnvironmentSettingCatalogEntry]:
+        catalog = self._environment_service.get_catalog()
+        return [OrganizationEnvironmentSettingCatalogEntry(**entry) for entry in catalog]
     
     async def get_organization_environment_settings(
         self,
         organization_id: uuid.UUID,
     ) -> List[OrganizationEnvironmentSetting]:
-        settings_dict = await self._environment_service.list_settings(organization_id)
-        settings = [
-            OrganizationEnvironmentSetting(
-                setting_key=key,
-                setting_value=value
+        settings_dict = await self._environment_service.list_settings_with_metadata(organization_id)
+        settings: list[OrganizationEnvironmentSetting] = []
+        for key, payload in settings_dict.items():
+            catalog_entry = self._environment_service.get_catalog_entry(key) or {}
+            settings.append(
+                OrganizationEnvironmentSetting(
+                    setting_key=key,
+                    setting_value=payload.get("setting_value", ""),
+                    category=catalog_entry.get("category"),
+                    display_name=catalog_entry.get("display_name"),
+                    description=catalog_entry.get("description"),
+                    scope=catalog_entry.get("scope", "organization"),
+                    is_locked=bool(catalog_entry.get("is_locked", False)),
+                    is_inherited=bool(catalog_entry.get("is_inherited", False)),
+                    last_updated_by=payload.get("last_updated_by"),
+                    last_updated_at=payload.get("last_updated_at"),
+                    data_type=catalog_entry.get("data_type"),
+                    options=catalog_entry.get("options"),
+                    placeholder=catalog_entry.get("placeholder"),
+                    multiline=catalog_entry.get("multiline"),
+                    default_value=catalog_entry.get("default_value"),
+                    helper_text=catalog_entry.get("helper_text"),
+                    is_advanced=bool(catalog_entry.get("is_advanced", False)),
+                )
             )
-            for key, value in settings_dict.items()
-        ]
+        settings.sort(key=lambda item: item.setting_key)
         return settings
     
     async def set_organization_environment_setting(
@@ -311,15 +334,35 @@ class OrganizationService:
         organization_id: uuid.UUID,
         setting_key: str,
         setting_value: Any,
+        *,
+        updated_by: str | None = None,
     ) -> OrganizationEnvironmentSetting:
         await self._environment_service.set_setting(
             organization_id,
             setting_key,
             setting_value,
+            updated_by=updated_by,
         )
+        catalog_entry = self._environment_service.get_catalog_entry(setting_key) or {}
+        now_iso = datetime.now(timezone.utc).isoformat()
         return OrganizationEnvironmentSetting(
             setting_key=setting_key,
-            setting_value=setting_value,
+            setting_value=str(setting_value),
+            category=catalog_entry.get("category"),
+            display_name=catalog_entry.get("display_name"),
+            description=catalog_entry.get("description"),
+            scope=catalog_entry.get("scope", "organization"),
+            is_locked=bool(catalog_entry.get("is_locked", False)),
+            is_inherited=bool(catalog_entry.get("is_inherited", False)),
+            last_updated_by=updated_by,
+            last_updated_at=now_iso,
+            data_type=catalog_entry.get("data_type"),
+            options=catalog_entry.get("options"),
+            placeholder=catalog_entry.get("placeholder"),
+            multiline=catalog_entry.get("multiline"),
+            default_value=catalog_entry.get("default_value"),
+            helper_text=catalog_entry.get("helper_text"),
+            is_advanced=bool(catalog_entry.get("is_advanced", False)),
         )
         
     async def delete_organization_environment_setting(

@@ -72,7 +72,7 @@ class SqlJobRequestHandler(BaseMessageHandler):
 
     async def handle(self, payload: SqlJobRequestMessage) -> None:
         request = self._parse_request(payload)
-        job = await self._sql_job_repository.get_by_id_for_workspace(
+        job: SqlJobRecord = await self._sql_job_repository.get_by_id_for_workspace(
             sql_job_id=request.sql_job_id,
             workspace_id=request.workspace_id,
         )
