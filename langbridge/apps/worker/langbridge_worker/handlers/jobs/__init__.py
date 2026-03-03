@@ -1,3 +1,4 @@
+from .agentic_semantic_model_job_request_handler import AgenticSemanticModelJobRequestHandler
 from .agent_job_request_handler import AgentJobRequestHandler
 
-__all__ = ["AgentJobRequestHandler"]
+__all__ = ["AgenticSemanticModelJobRequestHandler", "AgentJobRequestHandler"]

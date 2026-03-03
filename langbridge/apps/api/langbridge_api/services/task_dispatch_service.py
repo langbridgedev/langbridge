@@ -47,7 +47,11 @@ class TaskDispatchService:
         required_tags: list[str] | None = None,
     ) -> ExecutionMode:
         mode = await self._execution_routing_service.get_mode_for_tenant(tenant_id)
-        edge_eligible_types = {"semantic_query_request", "sql_job_request"}
+        edge_eligible_types = {
+            "semantic_query_request",
+            "sql_job_request",
+            "agentic_semantic_model_job_request",
+        }
         if (
             mode == ExecutionMode.hosted
             or payload.message_type.value not in edge_eligible_types

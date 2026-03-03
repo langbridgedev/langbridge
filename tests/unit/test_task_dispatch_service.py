@@ -12,6 +12,9 @@ from langbridge.packages.messaging.langbridge_messaging.contracts.base import Te
 from langbridge.packages.messaging.langbridge_messaging.contracts.jobs.semantic_query import (
     SemanticQueryRequestMessage,
 )
+from langbridge.packages.messaging.langbridge_messaging.contracts.jobs.agentic_semantic_model_job import (
+    AgenticSemanticModelJobRequestMessage,
+)
 from langbridge.packages.messaging.langbridge_messaging.contracts.jobs.sql_job import (
     SqlJobRequestMessage,
 )
@@ -155,3 +158,43 @@ async def test_dispatch_service_routes_sql_jobs_to_edge_queue_for_customer_runti
     assert queued_tenant == tenant_id
     assert queued_runtime == runtime_id
     assert envelope.headers.correlation_id == "corr-sql"
+
+
+@pytest.mark.anyio
+async def test_dispatch_service_routes_agentic_semantic_jobs_to_edge_queue_for_customer_runtime() -> None:
+    tenant_id = uuid.uuid4()
+    runtime_id = uuid.uuid4()
+    message_service = _FakeMessageService()
+    edge_gateway = _FakeEdgeTaskGatewayService()
+    service = TaskDispatchService(
+        execution_routing_service=_FakeExecutionRoutingService(ExecutionMode.customer_runtime),
+        message_service=message_service,
+        runtime_registry_service=_FakeRuntimeRegistryService(runtime_id),
+        edge_task_gateway_service=edge_gateway,
+        request_context_provider=_FakeRequestContextProvider(correlation_id="corr-agentic"),
+    )
+
+    mode = await service.dispatch_job_message(
+        tenant_id=tenant_id,
+        payload=AgenticSemanticModelJobRequestMessage(
+            job_id=uuid.uuid4(),
+            job_type=JobType.AGENTIC_SEMANTIC_MODEL,
+            job_request={
+                "organisation_id": str(tenant_id),
+                "user_id": str(uuid.uuid4()),
+                "semantic_model_id": str(uuid.uuid4()),
+                "connector_id": str(uuid.uuid4()),
+                "selected_tables": ["sales.orders"],
+                "selected_columns": {"sales.orders": ["order_id", "amount"]},
+                "question_prompts": ["revenue by region", "top customers", "monthly trend"],
+            },
+        ),
+    )
+
+    assert mode == ExecutionMode.customer_runtime
+    assert message_service.outbox_payloads == []
+    assert len(edge_gateway.enqueued) == 1
+    queued_tenant, queued_runtime, envelope = edge_gateway.enqueued[0]
+    assert queued_tenant == tenant_id
+    assert queued_runtime == runtime_id
+    assert envelope.headers.correlation_id == "corr-agentic"

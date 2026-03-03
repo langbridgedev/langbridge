@@ -87,4 +87,61 @@ export interface UpdateSemanticModelPayload {
   modelYaml?: string;
 }
 
+export interface SemanticModelCatalogColumn {
+  name: string;
+  type: string;
+  nullable?: boolean | null;
+  primaryKey?: boolean;
+}
+
+export interface SemanticModelCatalogTable {
+  schema: string;
+  name: string;
+  fullyQualifiedName: string;
+  columns: SemanticModelCatalogColumn[];
+}
+
+export interface SemanticModelCatalogSchema {
+  name: string;
+  tables: SemanticModelCatalogTable[];
+}
+
+export interface SemanticModelCatalogResponse {
+  connectorId: string;
+  schemas: SemanticModelCatalogSchema[];
+  tableCount: number;
+  columnCount: number;
+}
+
+export interface SemanticModelSelectionGeneratePayload {
+  connectorId: string;
+  selectedTables: string[];
+  selectedColumns: Record<string, string[]>;
+  includeSampleValues?: boolean;
+  description?: string;
+}
+
+export interface SemanticModelSelectionGenerateResponse {
+  yamlText: string;
+  warnings: string[];
+}
+
+export interface SemanticModelAgenticJobCreatePayload {
+  connectorId: string;
+  projectId?: string | null;
+  name: string;
+  description?: string;
+  filename?: string;
+  selectedTables: string[];
+  selectedColumns: Record<string, string[]>;
+  questionPrompts: string[];
+  includeSampleValues?: boolean;
+}
+
+export interface SemanticModelAgenticJobCreateResponse {
+  jobId: string;
+  jobStatus: string;
+  semanticModelId: string;
+}
+
 export type SemanticModelKind = 'all' | 'standard' | 'unified';

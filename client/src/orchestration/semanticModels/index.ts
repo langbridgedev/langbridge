@@ -2,9 +2,14 @@ import { apiFetch } from '@/orchestration/http';
 
 import type {
   CreateSemanticModelPayload,
+  SemanticModelAgenticJobCreatePayload,
+  SemanticModelAgenticJobCreateResponse,
+  SemanticModelCatalogResponse,
   SemanticModelKind,
   SemanticModel,
   SemanticModelRecord,
+  SemanticModelSelectionGeneratePayload,
+  SemanticModelSelectionGenerateResponse,
   UpdateSemanticModelPayload,
 } from './types';
 
@@ -136,4 +141,39 @@ export async function generateSemanticModelYaml(
   }
   const params = new URLSearchParams({ connector_id: connectorId });
   return apiFetch<string>(`${basePath(organizationId)}/generate/yaml?${params.toString()}`);
+}
+
+export async function fetchSemanticModelCatalog(
+  organizationId: string,
+  connectorId: string,
+): Promise<SemanticModelCatalogResponse> {
+  if (!connectorId) {
+    throw new Error('Connector id is required to load semantic model catalog.');
+  }
+  const params = new URLSearchParams({ connector_id: connectorId });
+  return apiFetch<SemanticModelCatalogResponse>(`${basePath(organizationId)}/catalog?${params.toString()}`);
+}
+
+export async function generateSemanticModelYamlFromSelection(
+  organizationId: string,
+  payload: SemanticModelSelectionGeneratePayload,
+): Promise<SemanticModelSelectionGenerateResponse> {
+  return apiFetch<SemanticModelSelectionGenerateResponse>(`${basePath(organizationId)}/generate/yaml`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function startAgenticSemanticModelJob(
+  organizationId: string,
+  payload: SemanticModelAgenticJobCreatePayload,
+): Promise<SemanticModelAgenticJobCreateResponse> {
+  const body: SemanticModelAgenticJobCreatePayload = { ...payload };
+  if (body.projectId?.length === 0) {
+    body.projectId = undefined;
+  }
+  return apiFetch<SemanticModelAgenticJobCreateResponse>(`${basePath(organizationId)}/agentic/jobs`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 }

@@ -12,6 +12,9 @@ from langbridge.packages.common.langbridge_common.contracts.jobs.agent_job impor
     JobEventVisibility,
     JobFinalResponse,
 )
+from langbridge.packages.common.langbridge_common.contracts.jobs.agentic_semantic_model_job import (
+    CreateAgenticSemanticModelJobRequest,
+)
 from langbridge.packages.common.langbridge_common.contracts.jobs.copilot_dashboard_job import (
     CreateCopilotDashboardJobRequest,
 )
@@ -84,6 +87,11 @@ class JobService:
                 user_id = request.user_id
             elif str(job.job_type) == JobType.SEMANTIC_QUERY.value:
                 request = CreateSemanticQueryJobRequest.model_validate(payload)
+                user_id = request.user_id
+                if request.organisation_id != organization_id:
+                    raise PermissionDeniedBusinessValidationError("You do not have access to this job.")
+            elif str(job.job_type) == JobType.AGENTIC_SEMANTIC_MODEL.value:
+                request = CreateAgenticSemanticModelJobRequest.model_validate(payload)
                 user_id = request.user_id
                 if request.organisation_id != organization_id:
                     raise PermissionDeniedBusinessValidationError("You do not have access to this job.")

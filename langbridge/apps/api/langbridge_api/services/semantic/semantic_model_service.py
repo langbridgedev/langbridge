@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple, Type
@@ -25,8 +26,13 @@ from langbridge.packages.common.langbridge_common.repositories.organization_repo
 )
 from langbridge.packages.common.langbridge_common.repositories.semantic_model_repository import SemanticModelRepository
 from langbridge.packages.common.langbridge_common.contracts.semantic import (
+    SemanticModelCatalogColumnResponse,
+    SemanticModelCatalogResponse,
+    SemanticModelCatalogSchemaResponse,
+    SemanticModelCatalogTableResponse,
     SemanticModelRecordResponse,
     SemanticModelCreateRequest,
+    SemanticModelSelectionGenerateResponse,
     SemanticModelUpdateRequest,
 )
 from langbridge.packages.semantic.langbridge_semantic.loader import SemanticModelError, load_semantic_model
@@ -37,6 +43,9 @@ from langbridge.apps.api.langbridge_api.services.connector_service import Connec
 from langbridge.packages.common.langbridge_common.utils.embedding_provider import EmbeddingProvider, EmbeddingProviderError
 
 VALUE_MAX_LENGTH = 256
+TYPE_NUMERIC = {"number", "decimal", "numeric", "int", "integer", "float", "double", "real"}
+TYPE_BOOLEAN = {"boolean", "bool"}
+TYPE_DATE = {"date", "datetime", "timestamp", "time"}
 
 
 class SemanticModelService:
@@ -64,6 +73,83 @@ class SemanticModelService:
 
     async def generate_model_yaml(self, connector_id: UUID) -> str:
         return await self._builder.build_yaml_for_scope(connector_id)
+
+    async def get_connector_catalog(self, connector_id: UUID) -> SemanticModelCatalogResponse:
+        connector, sql_connector = await self._load_sql_connector(connector_id)
+        schemas = await sql_connector.fetch_schemas()
+
+        schema_responses: List[SemanticModelCatalogSchemaResponse] = []
+        table_count = 0
+        column_count = 0
+        for schema_name in sorted(schemas):
+            table_names = await sql_connector.fetch_tables(schema_name)
+            table_responses: List[SemanticModelCatalogTableResponse] = []
+            for table_name in sorted(table_names):
+                raw_columns = await sql_connector.fetch_columns(schema_name, table_name)
+                columns = [
+                    SemanticModelCatalogColumnResponse(
+                        name=column.name,
+                        type=column.data_type,
+                        nullable=getattr(column, "is_nullable", None),
+                        primary_key=bool(getattr(column, "is_primary_key", False)),
+                    )
+                    for column in raw_columns
+                ]
+                table_reference = self._table_reference(schema_name, table_name)
+                table_responses.append(
+                    SemanticModelCatalogTableResponse(
+                        schema=schema_name,
+                        name=table_name,
+                        fully_qualified_name=table_reference,
+                        columns=columns,
+                    )
+                )
+                table_count += 1
+                column_count += len(columns)
+            schema_responses.append(
+                SemanticModelCatalogSchemaResponse(
+                    name=schema_name,
+                    tables=table_responses,
+                )
+            )
+
+        return SemanticModelCatalogResponse(
+            connector_id=connector_id,
+            schemas=schema_responses,
+            table_count=table_count,
+            column_count=column_count,
+        )
+
+    async def generate_model_yaml_from_selection(
+        self,
+        *,
+        connector_id: UUID,
+        selected_tables: List[str],
+        selected_columns: Dict[str, List[str]],
+        include_sample_values: bool = False,
+        description: str | None = None,
+    ) -> SemanticModelSelectionGenerateResponse:
+        connector, sql_connector = await self._load_sql_connector(connector_id)
+        catalog = await self.get_connector_catalog(connector_id)
+        table_blueprints = await self._build_selected_table_blueprints(
+            sql_connector=sql_connector,
+            catalog=catalog,
+            selected_tables=selected_tables,
+            selected_columns=selected_columns,
+        )
+        payload, warnings = self._build_payload_from_table_blueprints(
+            connector_name=connector.name,
+            table_blueprints=table_blueprints,
+            description=description,
+        )
+        if include_sample_values:
+            warnings.append("include_sample_values is not currently supported for semantic model generation.")
+        self._validate_generated_payload(payload=payload, table_blueprints=table_blueprints)
+
+        return SemanticModelSelectionGenerateResponse(
+            yaml_text=yaml.safe_dump(payload, sort_keys=False),
+            warnings=warnings,
+        )
 
     async def list_models(
         self,
@@ -275,6 +361,270 @@ class SemanticModelService:
         model.updated_at = datetime.now(timezone.utc)
 
         return SemanticModelRecordResponse.model_validate(model)
+
+    async def _load_sql_connector(self, connector_id: UUID):
+        connector = await self._connector_service.get_connector(connector_id)
+        if not connector.connector_type:
+            raise BusinessValidationError("Connector type is required to build semantic models.")
+        runtime_type = ConnectorRuntimeType(connector.connector_type.upper())
+        sql_connector = await self._connector_service.async_create_sql_connector(
+            runtime_type,
+            connector.config or {},
+        )
+        return connector, sql_connector
+
+    async def _build_selected_table_blueprints(
+        self,
+        *,
+        sql_connector,
+        catalog: SemanticModelCatalogResponse,
+        selected_tables: List[str],
+        selected_columns: Dict[str, List[str]],
+    ) -> List[Dict[str, Any]]:
+        if not selected_tables:
+            raise BusinessValidationError("At least one table must be selected.")
+
+        table_lookup: Dict[str, SemanticModelCatalogTableResponse] = {}
+        table_name_lookup: Dict[str, List[SemanticModelCatalogTableResponse]] = {}
+        for schema_entry in catalog.schemas:
+            for table in schema_entry.tables:
+                normalized_ref = table.fully_qualified_name.strip().lower()
+                table_lookup[normalized_ref] = table
+                bare_name = table.name.strip().lower()
+                table_name_lookup.setdefault(bare_name, []).append(table)
+
+        normalized_selected_columns: Dict[str, List[str]] = {}
+        for table_key, columns in selected_columns.items():
+            normalized_key = str(table_key).strip().lower()
+            if not normalized_key:
+                continue
+            normalized_selected_columns[normalized_key] = [str(column).strip() for column in columns if str(column).strip()]
+
+        entity_name_registry: set[str] = set()
+        table_blueprints: List[Dict[str, Any]] = []
+        for selected_table in selected_tables:
+            table_reference = str(selected_table).strip()
+            if not table_reference:
+                continue
+            normalized_reference = table_reference.lower()
+            table = table_lookup.get(normalized_reference)
+            if table is None:
+                bare_name = normalized_reference.split(".")[-1]
+                candidates = table_name_lookup.get(bare_name, [])
+                if len(candidates) == 1:
+                    table = candidates[0]
+                else:
+                    raise BusinessValidationError(
+                        f"Selected table '{selected_table}' is unknown or ambiguous for this connector."
+                    )
+
+            column_lookup = {column.name.lower(): column for column in table.columns}
+            selected_column_names = (
+                normalized_selected_columns.get(normalized_reference)
+                or normalized_selected_columns.get(table.fully_qualified_name.lower())
+                or normalized_selected_columns.get(table.name.lower())
+            )
+            if not selected_column_names:
+                selected_column_names = [column.name for column in table.columns]
+
+            resolved_columns: List[SemanticModelCatalogColumnResponse] = []
+            for column_name in selected_column_names:
+                column = column_lookup.get(column_name.lower())
+                if column is None:
+                    raise BusinessValidationError(
+                        f"Column '{column_name}' is not available on table '{table.fully_qualified_name}'."
+                    )
+                resolved_columns.append(column)
+
+            foreign_keys = await sql_connector.fetch_foreign_keys(table.schema, table.name)
+            entity_name = self._build_entity_name(
+                schema=table.schema,
+                table_name=table.name,
+                registry=entity_name_registry,
+            )
+            table_blueprints.append(
+                {
+                    "entity_name": entity_name,
+                    "schema": table.schema,
+                    "table_name": table.name,
+                    "table_reference": table.fully_qualified_name,
+                    "selected_columns": resolved_columns,
+                    "foreign_keys": foreign_keys,
+                }
+            )
+
+        if not table_blueprints:
+            raise BusinessValidationError("No valid table selections were provided.")
+        return table_blueprints
+
+    def _build_payload_from_table_blueprints(
+        self,
+        *,
+        connector_name: str,
+        table_blueprints: List[Dict[str, Any]],
+        description: str | None = None,
+    ) -> Tuple[Dict[str, Any], List[str]]:
+        warnings: List[str] = []
+        tables_payload: Dict[str, Any] = {}
+        entity_lookup = {
+            self._table_reference(blueprint["schema"], blueprint["table_name"]).lower(): blueprint["entity_name"]
+            for blueprint in table_blueprints
+        }
+        relationship_payload: List[Dict[str, Any]] = []
+        relationship_names: set[str] = set()
+
+        for blueprint in table_blueprints:
+            dimensions: List[Dict[str, Any]] = []
+            measures: List[Dict[str, Any]] = []
+            for column in blueprint["selected_columns"]:
+                mapped_type = self._map_column_type(column.type)
+                is_identifier = column.name.lower() == "id" or column.name.lower().endswith("_id")
+                if mapped_type in {"integer", "decimal", "float"} and not is_identifier and not column.primary_key:
+                    measures.append(
+                        {
+                            "name": column.name,
+                            "expression": column.name,
+                            "type": mapped_type,
+                            "aggregation": "sum",
+                            "description": f"Aggregate {column.name} from {blueprint['table_name']}",
+                        }
+                    )
+                else:
+                    dimensions.append(
+                        {
+                            "name": column.name,
+                            "expression": column.name,
+                            "type": mapped_type,
+                            "primary_key": bool(column.primary_key),
+                            "description": f"Column {column.name} from {blueprint['table_name']}",
+                        }
+                    )
+
+            if not dimensions and measures:
+                first_measure = measures.pop(0)
+                dimensions.append(
+                    {
+                        "name": first_measure["name"],
+                        "expression": first_measure["expression"],
+                        "type": first_measure["type"],
+                        "primary_key": False,
+                        "description": first_measure["description"],
+                    }
+                )
+                warnings.append(
+                    f"Table '{blueprint['table_reference']}' had only numeric columns; converted one column to a dimension."
+                )
+
+            tables_payload[blueprint["entity_name"]] = {
+                "schema": blueprint["schema"],
+                "name": blueprint["table_name"],
+                "description": f"Table {blueprint['table_name']} from connector {connector_name}",
+                "dimensions": dimensions or None,
+                "measures": measures or None,
+            }
+
+        for blueprint in table_blueprints:
+            source_entity = blueprint["entity_name"]
+            for foreign_key in blueprint["foreign_keys"]:
+                target_reference = self._table_reference(foreign_key.schema, foreign_key.table).lower()
+                target_entity = entity_lookup.get(target_reference)
+                if not target_entity:
+                    continue
+                relationship_name = f"{source_entity}_to_{target_entity}"
+                if relationship_name in relationship_names:
+                    continue
+                relationship_names.add(relationship_name)
+                relationship_payload.append(
+                    {
+                        "name": relationship_name,
+                        "from_": source_entity,
+                        "to": target_entity,
+                        "type": "many_to_one",
+                        "join_on": f"{source_entity}.{foreign_key.column} = {target_entity}.{foreign_key.foreign_key}",
+                    }
+                )
+
+        if not relationship_payload:
+            warnings.append("No relationships were inferred from selected tables.")
+
+        payload = {
+            "version": "1.0",
+            "connector": connector_name,
+            "description": description or f"Semantic Model generated from {connector_name}",
+            "tables": tables_payload,
+            "relationships": relationship_payload or None,
+        }
+        return payload, warnings
+
+    def _validate_generated_payload(
+        self,
+        *,
+        payload: Dict[str, Any],
+        table_blueprints: List[Dict[str, Any]],
+    ) -> None:
+        try:
+            model = load_semantic_model(payload)
+        except SemanticModelError as exc:
+            raise BusinessValidationError(f"Generated semantic model is invalid: {exc}") from exc
+
+        relationship_names = [relationship.name for relationship in model.relationships or []]
+        if len(relationship_names) != len(set(relationship_names)):
+            raise BusinessValidationError("Generated semantic model contains duplicate relationship names.")
+
+        for blueprint in table_blueprints:
+            entity_name = blueprint["entity_name"]
+            table = model.tables.get(entity_name)
+            if table is None:
+                raise BusinessValidationError(
+                    f"Generated semantic model is missing selected table '{entity_name}'."
+                )
+            selected_column_names = {column.name for column in blueprint["selected_columns"]}
+            generated_column_names = {
+                dimension.name for dimension in table.dimensions or []
+            } | {
+                measure.name for measure in table.measures or []
+            }
+            if selected_column_names != generated_column_names:
+                raise BusinessValidationError(
+                    f"Generated semantic model columns do not match selection for table '{blueprint['table_reference']}'."
+                )
+
+    @staticmethod
+    def _table_reference(schema: str, table_name: str) -> str:
+        schema_value = (schema or "").strip()
+        table_value = (table_name or "").strip()
+        if schema_value:
+            return f"{schema_value}.{table_value}"
+        return table_value
+
+    @staticmethod
+    def _build_entity_name(*, schema: str, table_name: str, registry: set[str]) -> str:
+        base_name = re.sub(r"[^a-zA-Z0-9_]+", "_", f"{schema}_{table_name}".strip("_")).lower()
+        root_name = base_name or "table"
+        candidate = root_name
+        suffix = 2
+        while candidate in registry:
+            candidate = f"{root_name}_{suffix}"
+            suffix += 1
+        registry.add(candidate)
+        return candidate
+
+    @staticmethod
+    def _map_column_type(data_type: str) -> str:
+        normalized = (data_type or "").lower()
+        if any(token in normalized for token in TYPE_NUMERIC):
+            if "int" in normalized and "point" not in normalized:
+                return "integer"
+            if any(token in normalized for token in ("double", "float")):
+                return "float"
+            return "decimal"
+        if any(token == normalized or token in normalized for token in TYPE_BOOLEAN):
+            return "boolean"
+        if any(token == normalized or token in normalized for token in TYPE_DATE) or any(
+            token in normalized for token in ("date", "time")
+        ):
+            return "date"
+        return "string"
 
     async def _get_model_entity(self, model_id: UUID, organization_id: UUID) -> SemanticModelEntry:
         model = await self._repository.get_for_scope(

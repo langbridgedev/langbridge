@@ -7,6 +7,9 @@ from dependency_injector import containers, providers
 from langbridge.apps.api.langbridge_api.auth.register import create_oauth_client
 from langbridge.apps.api.langbridge_api.repositories.token_repository import UserPATRepository
 from langbridge.apps.api.langbridge_api.services.jobs.agent_job_request_service import AgentJobRequestService
+from langbridge.apps.api.langbridge_api.services.jobs.agentic_semantic_model_job_request_service import (
+    AgenticSemanticModelJobRequestService,
+)
 from langbridge.apps.api.langbridge_api.services.jobs.copilot_dashboard_job_request_service import (
     CopilotDashboardJobRequestService,
 )
@@ -331,6 +334,11 @@ class Container(containers.DeclarativeContainer):
         task_dispatch_service=task_dispatch_service,
         semantic_model_repository=semantic_model_repository,
         connector_repository=connector_repository,
+    )
+    agentic_semantic_model_job_request_service = providers.Factory(
+        AgenticSemanticModelJobRequestService,
+        job_repository=job_repository,
+        task_dispatch_service=task_dispatch_service,
     )
     copilot_dashboard_job_request_service = providers.Factory(
         CopilotDashboardJobRequestService,

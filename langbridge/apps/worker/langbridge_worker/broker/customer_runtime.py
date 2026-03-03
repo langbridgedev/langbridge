@@ -240,6 +240,7 @@ class CustomerRuntimeBroker(MessageBroker):
                 "message_types": [
                     "agent_job_request",
                     "semantic_query_request",
+                    "agentic_semantic_model_job_request",
                     "copilot_dashboard_request",
                 ]
             }

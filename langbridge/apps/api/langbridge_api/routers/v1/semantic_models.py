@@ -8,8 +8,19 @@ from fastapi.responses import PlainTextResponse
 from langbridge.apps.api.langbridge_api.auth.dependencies import get_current_user, get_organization, get_project
 from langbridge.packages.common.langbridge_common.errors.application_errors import BusinessValidationError
 from langbridge.apps.api.langbridge_api.ioc import Container
+from langbridge.apps.api.langbridge_api.services.jobs.agentic_semantic_model_job_request_service import (
+    AgenticSemanticModelJobRequestService,
+)
 from langbridge.packages.common.langbridge_common.contracts.auth import UserResponse
+from langbridge.packages.common.langbridge_common.contracts.jobs.agentic_semantic_model_job import (
+    CreateAgenticSemanticModelJobRequest,
+)
 from langbridge.packages.common.langbridge_common.contracts.semantic import (
+    SemanticModelAgenticJobCreateRequest,
+    SemanticModelAgenticJobCreateResponse,
+    SemanticModelCatalogResponse,
+    SemanticModelSelectionGenerateRequest,
+    SemanticModelSelectionGenerateResponse,
     SemanticModelRecordResponse,
     SemanticModelCreateRequest,
     SemanticModelUpdateRequest,
@@ -36,6 +47,123 @@ async def preview_semantic_model_yaml(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
+
+
+@router.post(
+    "/generate/yaml",
+    response_model=SemanticModelSelectionGenerateResponse,
+    status_code=status.HTTP_200_OK,
+)
+@inject
+async def generate_semantic_model_yaml_from_selection(
+    request: SemanticModelSelectionGenerateRequest,
+    organization_id: UUID,
+    current_user: UserResponse = Depends(get_current_user),
+    _org=Depends(get_organization),
+    service: SemanticModelService = Depends(Provide[Container.semantic_model_service]),
+) -> SemanticModelSelectionGenerateResponse:
+    try:
+        return await service.generate_model_yaml_from_selection(
+            connector_id=request.connector_id,
+            selected_tables=request.selected_tables,
+            selected_columns=request.selected_columns,
+            include_sample_values=request.include_sample_values,
+            description=request.description,
+        )
+    except BusinessValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get(
+    "/catalog",
+    response_model=SemanticModelCatalogResponse,
+    status_code=status.HTTP_200_OK,
+)
+@inject
+async def get_semantic_model_catalog(
+    organization_id: UUID,
+    connector_id: UUID,
+    current_user: UserResponse = Depends(get_current_user),
+    _org=Depends(get_organization),
+    service: SemanticModelService = Depends(Provide[Container.semantic_model_service]),
+) -> SemanticModelCatalogResponse:
+    try:
+        return await service.get_connector_catalog(connector_id=connector_id)
+    except BusinessValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post(
+    "/agentic/jobs",
+    response_model=SemanticModelAgenticJobCreateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+@inject
+async def create_agentic_semantic_model_job(
+    request: SemanticModelAgenticJobCreateRequest,
+    organization_id: UUID,
+    current_user: UserResponse = Depends(get_current_user),
+    _org=Depends(get_organization),
+    _proj=Depends(get_project),
+    service: SemanticModelService = Depends(Provide[Container.semantic_model_service]),
+    job_service: AgenticSemanticModelJobRequestService = Depends(
+        Provide[Container.agentic_semantic_model_job_request_service]
+    ),
+) -> SemanticModelAgenticJobCreateResponse:
+    if request.project_id and current_user.available_projects is not None:
+        allowed_projects = {str(project_id) for project_id in current_user.available_projects}
+        if str(request.project_id) not in allowed_projects:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    try:
+        generated = await service.generate_model_yaml_from_selection(
+            connector_id=request.connector_id,
+            selected_tables=request.selected_tables,
+            selected_columns=request.selected_columns,
+            include_sample_values=request.include_sample_values,
+            description=request.description,
+        )
+        draft_model = await service.create_model(
+            SemanticModelCreateRequest(
+                connector_id=request.connector_id,
+                organization_id=organization_id,
+                project_id=request.project_id,
+                name=request.name,
+                description=request.description,
+                model_yaml=generated.yaml_text,
+                auto_generate=False,
+            )
+        )
+        job = await job_service.create_agentic_semantic_model_job_request(
+            CreateAgenticSemanticModelJobRequest(
+                organisation_id=organization_id,
+                project_id=request.project_id,
+                user_id=current_user.id,
+                semantic_model_id=draft_model.id,
+                connector_id=request.connector_id,
+                selected_tables=request.selected_tables,
+                selected_columns=request.selected_columns,
+                question_prompts=request.question_prompts,
+                include_sample_values=request.include_sample_values,
+            )
+        )
+    except BusinessValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return SemanticModelAgenticJobCreateResponse(
+        job_id=job.id,
+        job_status=(job.status.value if job.status is not None else "queued"),
+        semantic_model_id=draft_model.id,
+    )
 
 
 @router.post(

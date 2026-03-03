@@ -6,33 +6,49 @@ import yaml from 'js-yaml';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useWorkspaceScope } from '@/context/workspaceScope';
+import { fetchLLMConnections } from '@/orchestration/agents';
+import { fetchConnectors } from '@/orchestration/connectors';
+import type { ConnectorResponse } from '@/orchestration/connectors/types';
 import {
   createSemanticModel,
   fetchSemanticModel,
+  fetchSemanticModelCatalog,
   generateSemanticModelYaml,
+  generateSemanticModelYamlFromSelection,
+  startAgenticSemanticModelJob,
   updateSemanticModel,
 } from '@/orchestration/semanticModels';
+import { fetchAgentJobState } from '@/orchestration/jobs';
 import type {
   SemanticDimension,
   SemanticMeasure,
   SemanticMetric,
+  SemanticModelCatalogColumn,
+  SemanticModelCatalogResponse,
   SemanticModelRecord,
   SemanticRelationship,
   SemanticTable,
 } from '@/orchestration/semanticModels/types';
-import { fetchConnectors } from '@/orchestration/connectors';
-import type { ConnectorResponse } from '@/orchestration/connectors/types';
 import { ApiError } from '@/orchestration/http';
 import { cn } from '@/lib/utils';
 
 interface FormState {
   name: string;
   description: string;
+  filename: string;
 }
 
 interface BuilderDimension extends SemanticDimension {
@@ -70,6 +86,17 @@ interface BuilderModel {
   metrics: BuilderMetric[];
 }
 
+type CreationMode = 'manual' | 'auto' | 'agentic';
+type BuilderStage = 'modal' | 'wizard' | 'builder';
+type SelectionTab = 'all' | 'selected';
+
+interface CatalogTableNode {
+  schemaName: string;
+  tableName: string;
+  tableRef: string;
+  columns: SemanticModelCatalogColumn[];
+}
+
 const RELATIONSHIP_TYPES: RelationshipType[] = ['one_to_many', 'many_to_one', 'one_to_one', 'many_to_many'];
 const COLUMN_TYPE_OPTIONS = [
   'string',
@@ -84,6 +111,19 @@ const COLUMN_TYPE_OPTIONS = [
   'time',
 ] as const;
 const DEFAULT_MODEL_VERSION = '1.0';
+const SUGGESTED_QUESTION_PROMPTS = [
+  'revenue by region',
+  'top customers',
+  'monthly trend',
+  'gross margin by segment',
+  'churn by cohort',
+];
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
 
 type SemanticModelPageProps = {
   params: { organizationId: string };
@@ -101,6 +141,7 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
   const organizationId = params.organizationId;
   const editingModelId = searchParams.get('modelId') ?? '';
   const isEditMode = Boolean(editingModelId);
+  const normalizedProjectId = selectedProjectId && selectedProjectId.length > 0 ? selectedProjectId : null;
 
   useEffect(() => {
     if (organizationId && organizationId !== selectedOrganizationId) {
@@ -108,23 +149,59 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
     }
   }, [organizationId, selectedOrganizationId, setSelectedOrganizationId]);
 
-  const [formState, setFormState] = useState<FormState>({ name: '', description: '' });
+  const [formState, setFormState] = useState<FormState>({
+    name: '',
+    description: '',
+    filename: 'semantic_model.yml',
+  });
+  const [stage, setStage] = useState<BuilderStage>(isEditMode ? 'builder' : 'modal');
+  const [creationMode, setCreationMode] = useState<CreationMode>('manual');
+  const [wizardStepIndex, setWizardStepIndex] = useState(0);
   const [connectors, setConnectors] = useState<ConnectorResponse[]>([]);
   const [connectorsLoading, setConnectorsLoading] = useState(false);
   const [selectedConnectorId, setSelectedConnectorId] = useState('');
+  const [llmConnectionAvailable, setLlmConnectionAvailable] = useState(false);
+  const [checkingLlmConnections, setCheckingLlmConnections] = useState(false);
+  const [catalog, setCatalog] = useState<SemanticModelCatalogResponse | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogConnectorId, setCatalogConnectorId] = useState<string | null>(null);
+  const [tableTab, setTableTab] = useState<SelectionTab>('all');
+  const [columnTab, setColumnTab] = useState<SelectionTab>('all');
+  const [columnSearch, setColumnSearch] = useState('');
+  const [selectedTables, setSelectedTables] = useState<string[]>([]);
+  const [selectedColumns, setSelectedColumns] = useState<Record<string, string[]>>({});
+  const [includeSampleValues, setIncludeSampleValues] = useState(false);
+  const [questionPrompts, setQuestionPrompts] = useState<string[]>([]);
+  const [promptInput, setPromptInput] = useState('');
   const [builder, setBuilder] = useState<BuilderModel>(() => createEmptyBuilderModel());
+  const [yamlDraft, setYamlDraft] = useState('');
+  const [yamlDirty, setYamlDirty] = useState(false);
+  const [yamlError, setYamlError] = useState<string | null>(null);
   const [editingModel, setEditingModel] = useState<SemanticModelRecord | null>(null);
+  const [workingModelId, setWorkingModelId] = useState<string | null>(null);
   const [loadingModel, setLoadingModel] = useState(false);
   const [autoGenerating, setAutoGenerating] = useState(false);
+  const [wizardSubmitting, setWizardSubmitting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const handleCreationModalOpenChange = useCallback(() => undefined, []);
 
   const organizationAvailable = Boolean(organizationId);
-  const headerTitle = isEditMode ? 'Edit semantic model' : 'Semantic model builder';
-  const headerDescription = isEditMode
+  const activeModelId = editingModelId || workingModelId || '';
+  const isUpdateMode = Boolean(activeModelId);
+  const headerTitle = isUpdateMode ? 'Edit semantic model' : 'Semantic model builder';
+  const headerDescription = isUpdateMode
     ? 'Update the semantic layer for a connector and save changes to the existing model.'
     : 'Describe the semantic layer for a connector and LangBridge will persist the YAML definition for your agents.';
-  const submitLabel = isEditMode ? 'Update semantic model' : 'Save semantic model';
+  const submitLabel = isUpdateMode ? 'Update semantic model' : 'Save semantic model';
+  const wizardSteps = useMemo(
+    () =>
+      creationMode === 'agentic'
+        ? ['Getting started', 'Select tables', 'Select columns', 'Questions', 'Review']
+        : ['Getting started', 'Select tables', 'Select columns', 'Review'],
+    [creationMode],
+  );
 
   const currentOrganizationName = useMemo(() => {
     if (!organizationId) {
@@ -137,20 +214,59 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
     () => connectors.find((connector) => connector.id === selectedConnectorId),
     [connectors, selectedConnectorId],
   );
-
-  const builderYamlPreview = useMemo(() => {
-    try {
-      return {
-        yaml: serializeBuilderModel(builder, selectedConnector?.name),
-        error: null,
-      };
-    } catch (err) {
-      return {
-        yaml: '',
-        error: err instanceof Error ? err.message : 'Unable to build YAML preview.',
-      };
+  const selectedTableSet = useMemo(() => new Set(selectedTables), [selectedTables]);
+  const catalogTables = useMemo<CatalogTableNode[]>(() => {
+    if (!catalog) {
+      return [];
     }
-  }, [builder, selectedConnector?.name]);
+    const tables: CatalogTableNode[] = [];
+    catalog.schemas.forEach((schemaEntry) => {
+      schemaEntry.tables.forEach((table) => {
+        tables.push({
+          schemaName: schemaEntry.name,
+          tableName: table.name,
+          tableRef: table.fullyQualifiedName,
+          columns: table.columns,
+        });
+      });
+    });
+    return tables;
+  }, [catalog]);
+  const selectedColumnCount = useMemo(
+    () => Object.values(selectedColumns).reduce((total, columns) => total + columns.length, 0),
+    [selectedColumns],
+  );
+  const filteredColumnTables = useMemo(() => {
+    const search = columnSearch.trim().toLowerCase();
+    return catalogTables
+      .filter((table) => selectedTableSet.has(table.tableRef))
+      .map((table) => {
+        const selectedColumnSet = new Set(selectedColumns[table.tableRef] ?? []);
+        const availableColumns =
+          columnTab === 'selected'
+            ? table.columns.filter((column) => selectedColumnSet.has(column.name))
+            : table.columns;
+        const visibleColumns =
+          search.length === 0
+            ? availableColumns
+            : availableColumns.filter((column) => column.name.toLowerCase().includes(search));
+        return { ...table, visibleColumns, selectedColumnSet };
+      });
+  }, [catalogTables, columnSearch, columnTab, selectedColumns, selectedTableSet]);
+  const outline = useMemo(() => {
+    const tables = builder.tables.filter(tableHasContent);
+    const dimensions = tables.flatMap((table) => table.dimensions ?? []);
+    const measures = tables.flatMap((table) => table.measures ?? []);
+    const relationships = builder.relationships.filter(
+      (relationship) => relationship.from && relationship.to && relationship.joinOn,
+    );
+    return {
+      tables,
+      dimensions,
+      measures,
+      relationships,
+    };
+  }, [builder]);
 
   const loadConnectors = useCallback(async () => {
     if (!organizationId) {
@@ -174,15 +290,92 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
     }
   }, [organizationId]);
 
+  const loadLlmConnections = useCallback(async () => {
+    if (!organizationId) {
+      setLlmConnectionAvailable(false);
+      return;
+    }
+    setCheckingLlmConnections(true);
+    try {
+      const connections = await fetchLLMConnections(organizationId);
+      setLlmConnectionAvailable(connections.some((connection) => connection.isActive));
+    } catch {
+      setLlmConnectionAvailable(false);
+    } finally {
+      setCheckingLlmConnections(false);
+    }
+  }, [organizationId]);
+
+  const applyBuilderFromYaml = useCallback(
+    (yamlText: string) => {
+      const nextBuilder = parseYamlToBuilderModel(yamlText);
+      validateBuilderModel(nextBuilder);
+      setBuilder(nextBuilder);
+      setYamlDraft(yamlText);
+      setYamlDirty(false);
+      setYamlError(null);
+    },
+    [],
+  );
+
+  const initializeCatalogSelection = useCallback((nextCatalog: SemanticModelCatalogResponse) => {
+    const nextTables: string[] = [];
+    const nextColumns: Record<string, string[]> = {};
+    nextCatalog.schemas.forEach((schemaEntry) => {
+      schemaEntry.tables.forEach((table) => {
+        nextTables.push(table.fullyQualifiedName);
+        nextColumns[table.fullyQualifiedName] = table.columns.map((column) => column.name);
+      });
+    });
+    setSelectedTables(nextTables);
+    setSelectedColumns(nextColumns);
+  }, []);
+
+  const loadCatalog = useCallback(async () => {
+    if (!organizationId) {
+      throw new Error('Select an organization before loading table metadata.');
+    }
+    if (!selectedConnectorId) {
+      throw new Error('Select a connector before loading table metadata.');
+    }
+    setCatalogLoading(true);
+    try {
+      const response = await fetchSemanticModelCatalog(organizationId, selectedConnectorId);
+      setCatalog(response);
+      setCatalogConnectorId(selectedConnectorId);
+      initializeCatalogSelection(response);
+      return response;
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, [initializeCatalogSelection, organizationId, selectedConnectorId]);
+
+  const ensureCatalogLoaded = useCallback(async () => {
+    if (catalog && catalogConnectorId === selectedConnectorId) {
+      return catalog;
+    }
+    return await loadCatalog();
+  }, [catalog, catalogConnectorId, loadCatalog, selectedConnectorId]);
+
   useEffect(() => {
     if (!organizationId) {
       setConnectors([]);
       setSelectedConnectorId('');
+      setLlmConnectionAvailable(false);
       return;
     }
     setSelectedConnectorId('');
     void loadConnectors();
-  }, [organizationId, loadConnectors]);
+    void loadLlmConnections();
+  }, [organizationId, loadConnectors, loadLlmConnections]);
+
+  useEffect(() => {
+    if (isEditMode) {
+      setStage('builder');
+      return;
+    }
+    setStage('modal');
+  }, [isEditMode]);
 
   useEffect(() => {
     if (!isEditMode) {
@@ -206,9 +399,13 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
         setFormState({
           name: model.name ?? '',
           description: model.description ?? '',
+          filename: `${(model.name ?? 'semantic_model').replace(/\s+/g, '_').toLowerCase()}.yml`,
         });
         setSelectedConnectorId(model.connectorId ?? '');
         setBuilder(parsedBuilder);
+        setYamlDraft(model.contentYaml);
+        setYamlDirty(false);
+        setYamlError(null);
       } catch (err) {
         if (!cancelled) {
           setError(resolveError(err));
@@ -228,12 +425,31 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
   useEffect(() => {
     if (!selectedConnectorId) {
       setBuilder(createEmptyBuilderModel());
+      setYamlDraft('');
+      setYamlDirty(false);
+      setYamlError(null);
       return;
     }
     if (!isEditMode) {
       setBuilder(createEmptyBuilderModel());
+      setYamlDraft('');
+      setYamlDirty(false);
+      setYamlError(null);
     }
   }, [isEditMode, selectedConnectorId]);
+
+  useEffect(() => {
+    if (yamlDirty) {
+      return;
+    }
+    try {
+      const nextYaml = serializeBuilderModel(builder, selectedConnector?.name);
+      setYamlDraft(nextYaml);
+      setYamlError(null);
+    } catch (err) {
+      setYamlError(resolveError(err));
+    }
+  }, [builder, selectedConnector?.name, yamlDirty]);
 
   async function handleSave(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -250,14 +466,16 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
       return;
     }
 
+    let parsedBuilder: BuilderModel;
     try {
-      validateBuilderModel(builder);
+      parsedBuilder = parseYamlToBuilderModel(yamlDraft);
+      validateBuilderModel(parsedBuilder);
+      setBuilder(parsedBuilder);
+      setYamlError(null);
+      setYamlDirty(false);
     } catch (validationError) {
-      setError(
-        validationError instanceof Error
-          ? validationError.message
-          : 'Semantic builder is incomplete. Add at least one table.',
-      );
+      setYamlError(resolveError(validationError));
+      setError('Semantic YAML is invalid. Fix errors in YAML editor and apply before saving.');
       return;
     }
 
@@ -267,41 +485,36 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
     setSubmitting(true);
     setError(null);
     try {
-      const yamlPayload = serializeBuilderModel(builder, selectedConnector?.name);
-      if (isEditMode) {
-        if (!editingModelId) {
+      const yamlPayload = yamlDraft;
+      if (isUpdateMode) {
+        if (!activeModelId) {
           setError('Choose a semantic model to update.');
           return;
         }
-        await updateSemanticModel(editingModelId, organizationId, {
-          projectId: selectedProjectId ?? null,
+        const updated = await updateSemanticModel(activeModelId, organizationId, {
+          projectId: normalizedProjectId,
           connectorId: selectedConnectorId,
           name: trimmedName,
           description: trimmedDescription,
           modelYaml: yamlPayload,
           autoGenerate: false,
         });
-        setEditingModel((current) =>
-          current
-            ? {
-                ...current,
-                name: trimmedName,
-                description: trimmedDescription || null,
-                connectorId: selectedConnectorId,
-                updatedAt: new Date().toISOString(),
-              }
-            : current,
-        );
+        setEditingModel(updated);
+        setWorkingModelId(updated.id);
+        setNotice('Semantic model updated.');
       } else {
-        await createSemanticModel(organizationId, {
+        const created = await createSemanticModel(organizationId, {
           organizationId,
-          projectId: selectedProjectId ?? null,
+          projectId: normalizedProjectId,
           connectorId: selectedConnectorId,
           name: trimmedName,
           description: trimmedDescription || undefined,
           modelYaml: yamlPayload,
           autoGenerate: false,
         });
+        setEditingModel(created);
+        setWorkingModelId(created.id);
+        setNotice('Semantic model saved.');
       }
     } catch (err) {
       setError(resolveError(err));
@@ -325,6 +538,9 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
       const yamlText = await generateSemanticModelYaml(organizationId, selectedConnectorId);
       const generatedModel = parseYamlToBuilderModel(yamlText);
       setBuilder(generatedModel);
+      setYamlDraft(yamlText);
+      setYamlDirty(false);
+      setYamlError(null);
     } catch (err) {
       setError(resolveError(err));
     } finally {
@@ -332,17 +548,371 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
     }
   }, [organizationId, selectedConnectorId]);
 
+  const handleApplyYaml = useCallback(() => {
+    try {
+      applyBuilderFromYaml(yamlDraft);
+      setNotice('YAML applied to the visual builder.');
+      setError(null);
+    } catch (err) {
+      setYamlError(resolveError(err));
+      setError('YAML parsing failed. Fix errors and apply again.');
+    }
+  }, [applyBuilderFromYaml, yamlDraft]);
+
+  const handleResetYamlFromBuilder = useCallback(() => {
+    try {
+      const nextYaml = serializeBuilderModel(builder, selectedConnector?.name);
+      setYamlDraft(nextYaml);
+      setYamlDirty(false);
+      setYamlError(null);
+      setNotice('YAML reset from visual builder.');
+    } catch (err) {
+      setYamlError(resolveError(err));
+    }
+  }, [builder, selectedConnector?.name]);
+
+  const handleModalContinue = useCallback(async () => {
+    if (!selectedConnectorId) {
+      setError('Select a connector before continuing.');
+      return;
+    }
+    if (!formState.name.trim()) {
+      setError('Model name is required.');
+      return;
+    }
+    setError(null);
+    setNotice(null);
+    if (creationMode === 'manual') {
+      setStage('builder');
+      return;
+    }
+    try {
+      await ensureCatalogLoaded();
+      setWizardStepIndex(0);
+      setStage('wizard');
+    } catch (err) {
+      setError(resolveError(err));
+    }
+  }, [creationMode, ensureCatalogLoaded, formState.name, selectedConnectorId]);
+
+  const handleSelectAllTables = useCallback(
+    (checked: boolean) => {
+      if (!checked) {
+        setSelectedTables([]);
+        setSelectedColumns({});
+        return;
+      }
+      const allTables = catalogTables.map((table) => table.tableRef);
+      const allColumns: Record<string, string[]> = {};
+      catalogTables.forEach((table) => {
+        allColumns[table.tableRef] = table.columns.map((column) => column.name);
+      });
+      setSelectedTables(allTables);
+      setSelectedColumns(allColumns);
+    },
+    [catalogTables],
+  );
+
+  const handleToggleTable = useCallback(
+    (tableRef: string, checked: boolean) => {
+      setSelectedTables((current) => {
+        const set = new Set(current);
+        if (checked) {
+          set.add(tableRef);
+        } else {
+          set.delete(tableRef);
+        }
+        return Array.from(set);
+      });
+      if (!checked) {
+        setSelectedColumns((current) => {
+          const next = { ...current };
+          delete next[tableRef];
+          return next;
+        });
+        return;
+      }
+      const table = catalogTables.find((entry) => entry.tableRef === tableRef);
+      if (!table) {
+        return;
+      }
+      setSelectedColumns((current) => ({
+        ...current,
+        [tableRef]: current[tableRef] ?? table.columns.map((column) => column.name),
+      }));
+    },
+    [catalogTables],
+  );
+
+  const handleToggleColumn = useCallback(
+    (tableRef: string, columnName: string, checked: boolean) => {
+      if (!selectedTableSet.has(tableRef)) {
+        return;
+      }
+      setSelectedColumns((current) => {
+        const columnSet = new Set(current[tableRef] ?? []);
+        if (checked) {
+          columnSet.add(columnName);
+        } else {
+          columnSet.delete(columnName);
+        }
+        return {
+          ...current,
+          [tableRef]: Array.from(columnSet),
+        };
+      });
+    },
+    [selectedTableSet],
+  );
+
+  const handleSelectAllColumns = useCallback(
+    (checked: boolean) => {
+      if (!checked) {
+        setSelectedColumns(() => {
+          const next: Record<string, string[]> = {};
+          selectedTables.forEach((tableRef) => {
+            next[tableRef] = [];
+          });
+          return next;
+        });
+        return;
+      }
+      const next: Record<string, string[]> = {};
+      selectedTables.forEach((tableRef) => {
+        const table = catalogTables.find((entry) => entry.tableRef === tableRef);
+        next[tableRef] = table ? table.columns.map((column) => column.name) : [];
+      });
+      setSelectedColumns(next);
+    },
+    [catalogTables, selectedTables],
+  );
+
+  const handleSelectAllColumnsForTable = useCallback(
+    (tableRef: string, checked: boolean) => {
+      const table = catalogTables.find((entry) => entry.tableRef === tableRef);
+      if (!table) {
+        return;
+      }
+      setSelectedColumns((current) => ({
+        ...current,
+        [tableRef]: checked ? table.columns.map((column) => column.name) : [],
+      }));
+    },
+    [catalogTables],
+  );
+
+  const handlePromptAdd = useCallback((value: string) => {
+    const prompt = value.trim();
+    if (!prompt) {
+      return;
+    }
+    setQuestionPrompts((current) => {
+      if (current.includes(prompt) || current.length >= 10) {
+        return current;
+      }
+      return [...current, prompt];
+    });
+  }, []);
+
+  const handlePromptParseInput = useCallback(() => {
+    const prompts = promptInput
+      .split('\n')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    if (prompts.length === 0) {
+      return;
+    }
+    setQuestionPrompts((current) => {
+      const next = [...current];
+      prompts.forEach((entry) => {
+        if (!next.includes(entry) && next.length < 10) {
+          next.push(entry);
+        }
+      });
+      return next;
+    });
+    setPromptInput('');
+  }, [promptInput]);
+
+  const runWizardGeneration = useCallback(async () => {
+    if (!organizationId) {
+      throw new Error('Select an organization before generating a semantic model.');
+    }
+    if (!selectedConnectorId) {
+      throw new Error('Select a connector before generating a semantic model.');
+    }
+    const selectedColumnsPayload: Record<string, string[]> = {};
+    selectedTables.forEach((tableRef) => {
+      selectedColumnsPayload[tableRef] = selectedColumns[tableRef] ?? [];
+    });
+    if (creationMode === 'auto') {
+      const response = await generateSemanticModelYamlFromSelection(organizationId, {
+        connectorId: selectedConnectorId,
+        selectedTables,
+        selectedColumns: selectedColumnsPayload,
+        includeSampleValues,
+        description: formState.description.trim() || undefined,
+      });
+      applyBuilderFromYaml(response.yamlText);
+      setStage('builder');
+      setNotice(
+        response.warnings.length > 0
+          ? `Auto-generation completed with ${response.warnings.length} warning(s).`
+          : 'Auto-generated YAML loaded into the editor.',
+      );
+      return;
+    }
+
+    const job = await startAgenticSemanticModelJob(organizationId, {
+      connectorId: selectedConnectorId,
+      projectId: normalizedProjectId,
+      name: formState.name.trim(),
+      description: formState.description.trim() || undefined,
+      filename: formState.filename.trim() || undefined,
+      selectedTables,
+      selectedColumns: selectedColumnsPayload,
+      questionPrompts,
+      includeSampleValues,
+    });
+    setWorkingModelId(job.semanticModelId);
+
+    let terminalState: Awaited<ReturnType<typeof fetchAgentJobState>> | null = null;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const state = await fetchAgentJobState(organizationId, job.jobId);
+      if (state.status === 'succeeded' || state.status === 'failed' || state.status === 'cancelled') {
+        terminalState = state;
+        break;
+      }
+      await sleep(2500);
+    }
+    if (!terminalState) {
+      throw new Error('Agentic generation timed out.');
+    }
+    if (terminalState.status !== 'succeeded') {
+      throw new Error('Agentic generation did not complete successfully.');
+    }
+
+    const terminalResult =
+      terminalState.finalResponse && typeof terminalState.finalResponse.result === 'object'
+        ? (terminalState.finalResponse.result as Record<string, unknown>)
+        : null;
+    const yamlFromJob =
+      typeof terminalResult?.yaml_text === 'string'
+        ? terminalResult.yaml_text
+        : typeof terminalResult?.yamlText === 'string'
+          ? terminalResult.yamlText
+          : null;
+
+    const model = await fetchSemanticModel(job.semanticModelId, organizationId);
+    setEditingModel(model);
+    applyBuilderFromYaml(yamlFromJob ?? model.contentYaml);
+    setStage('builder');
+    setNotice('Agentic draft generated and loaded as a draft model.');
+  }, [
+    applyBuilderFromYaml,
+    creationMode,
+    formState.description,
+    formState.filename,
+    formState.name,
+    includeSampleValues,
+    organizationId,
+    questionPrompts,
+    selectedColumns,
+    selectedConnectorId,
+    normalizedProjectId,
+    selectedTables,
+  ]);
+
+  const handleWizardNext = useCallback(async () => {
+    const currentStep = wizardSteps[wizardStepIndex];
+    if (currentStep === 'Getting started') {
+      if (!selectedConnectorId) {
+        setError('Select a connector before continuing.');
+        return;
+      }
+      if (!formState.name.trim()) {
+        setError('Model name is required.');
+        return;
+      }
+      try {
+        await ensureCatalogLoaded();
+      } catch (err) {
+        setError(resolveError(err));
+        return;
+      }
+      setError(null);
+      setWizardStepIndex((current) => current + 1);
+      return;
+    }
+    if (currentStep === 'Select tables') {
+      if (selectedTables.length === 0) {
+        setError('Select at least one table.');
+        return;
+      }
+      setError(null);
+      setWizardStepIndex((current) => current + 1);
+      return;
+    }
+    if (currentStep === 'Select columns') {
+      const invalidTable = selectedTables.find((tableRef) => (selectedColumns[tableRef] ?? []).length === 0);
+      if (invalidTable) {
+        setError(`Select at least one column for ${invalidTable}.`);
+        return;
+      }
+      setError(null);
+      setWizardStepIndex((current) => current + 1);
+      return;
+    }
+    if (currentStep === 'Questions') {
+      if (questionPrompts.length < 3 || questionPrompts.length > 10) {
+        setError('Provide 3 to 10 question prompts for agentic generation.');
+        return;
+      }
+      setError(null);
+      setWizardStepIndex((current) => current + 1);
+      return;
+    }
+
+    setWizardSubmitting(true);
+    setError(null);
+    try {
+      await runWizardGeneration();
+    } catch (err) {
+      setError(resolveError(err));
+    } finally {
+      setWizardSubmitting(false);
+    }
+  }, [
+    ensureCatalogLoaded,
+    formState.name,
+    questionPrompts.length,
+    runWizardGeneration,
+    selectedColumns,
+    selectedConnectorId,
+    selectedTables,
+    wizardStepIndex,
+    wizardSteps,
+  ]);
+
+  const handleWizardBack = useCallback(() => {
+    if (wizardStepIndex === 0) {
+      setStage('modal');
+      return;
+    }
+    setWizardStepIndex((current) => Math.max(0, current - 1));
+  }, [wizardStepIndex]);
+
   return (
     <div className="space-y-6 text-[color:var(--text-secondary)]">
       <header className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold text-[color:var(--text-primary)]">{headerTitle}</h1>
         <p className="max-w-3xl text-sm">
           {headerDescription}
-          {isEditMode
+          {isUpdateMode
             ? ' Review the YAML output before saving.'
             : ' Choose a connector, tune dimensions and measures, then review the YAML output before saving.'}
         </p>
-        {isEditMode && editingModel ? (
+        {isUpdateMode && editingModel ? (
           <div className="text-xs text-[color:var(--text-muted)]">
             Editing:{' '}
             <span className="font-medium text-[color:var(--text-primary)]">
@@ -359,18 +929,545 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
       {error ? (
         <div className="rounded-lg border border-rose-300 bg-rose-100/40 px-4 py-3 text-sm text-rose-700">{error}</div>
       ) : null}
+      {notice ? (
+        <div className="rounded-lg border border-emerald-300 bg-emerald-100/40 px-4 py-3 text-sm text-emerald-800">
+          {notice}
+        </div>
+      ) : null}
       {isEditMode && loadingModel ? (
         <div className="rounded-lg border border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] px-4 py-3 text-sm">
           Loading semantic model details...
         </div>
       ) : null}
 
+      <Dialog open={stage === 'modal'} onOpenChange={handleCreationModalOpenChange}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Create Semantic Model</DialogTitle>
+            <DialogDescription>
+              Choose a build mode, then provide connector, name, and description before continuing.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-5">
+            <div className="grid gap-3 md:grid-cols-3">
+              {(
+                [
+                  {
+                    mode: 'manual' as CreationMode,
+                    title: 'Manual',
+                    description: 'Start directly in the builder and define semantic entities manually.',
+                    disabled: false,
+                    disabledReason: '',
+                  },
+                  {
+                    mode: 'auto' as CreationMode,
+                    title: 'Auto-generate',
+                    description: 'Select tables and columns, then auto-generate YAML.',
+                    disabled: false,
+                    disabledReason: '',
+                  },
+                  {
+                    mode: 'agentic' as CreationMode,
+                    title: 'Agentic',
+                    description: 'Generate a draft from selected data and question themes.',
+                    disabled: !llmConnectionAvailable,
+                    disabledReason: checkingLlmConnections
+                      ? 'Checking LLM availability...'
+                      : 'Enable an active LLM connection to use agentic generation.',
+                  },
+                ]
+              ).map((option) => {
+                const selected = creationMode === option.mode;
+                return (
+                  <button
+                    key={option.mode}
+                    type="button"
+                    className={cn(
+                      'rounded-2xl border p-4 text-left transition',
+                      selected
+                        ? 'border-[color:var(--accent)] bg-[color:var(--panel-alt)]'
+                        : 'border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] hover:border-[color:var(--border-strong)]',
+                      option.disabled ? 'cursor-not-allowed opacity-60' : '',
+                    )}
+                    onClick={() => {
+                      if (!option.disabled) {
+                        setCreationMode(option.mode);
+                      }
+                    }}
+                    disabled={option.disabled}
+                    title={option.disabled ? option.disabledReason : undefined}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-[color:var(--text-primary)]">{option.title}</p>
+                      {selected ? <Badge variant="secondary">Selected</Badge> : null}
+                    </div>
+                    <p className="mt-2 text-xs text-[color:var(--text-muted)]">{option.description}</p>
+                    {option.disabled && option.disabledReason ? (
+                      <p className="mt-2 text-xs text-amber-700">{option.disabledReason}</p>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1">
+                <Label htmlFor="create-modal-connector">Connection</Label>
+                <Select
+                  id="create-modal-connector"
+                  value={selectedConnectorId}
+                  onChange={(event) => setSelectedConnectorId(event.target.value)}
+                  disabled={connectorsLoading}
+                >
+                  <option value="">Select connection</option>
+                  {connectors.map((connector) => (
+                    <option key={connector.id ?? connector.name} value={connector.id}>
+                      {connector.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="create-modal-name">Model name</Label>
+                <Input
+                  id="create-modal-name"
+                  value={formState.name}
+                  onChange={(event) =>
+                    setFormState((current) => ({ ...current, name: event.target.value }))
+                  }
+                  placeholder="e.g. Revenue semantic layer"
+                />
+              </div>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1">
+                <Label htmlFor="create-modal-description">Description</Label>
+                <Input
+                  id="create-modal-description"
+                  value={formState.description}
+                  onChange={(event) =>
+                    setFormState((current) => ({ ...current, description: event.target.value }))
+                  }
+                  placeholder="Optional description"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="create-modal-filename">Filename</Label>
+                <Input
+                  id="create-modal-filename"
+                  value={formState.filename}
+                  onChange={(event) =>
+                    setFormState((current) => ({ ...current, filename: event.target.value }))
+                  }
+                  placeholder="semantic_model.yml"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" onClick={() => void handleModalContinue()}>
+              Continue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {stage === 'wizard' ? (
+        <section className="grid gap-5 rounded-3xl border border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] p-6 shadow-soft lg:grid-cols-[250px_1fr]">
+          <aside className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4">
+            <p className="mb-4 text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+              Create model
+            </p>
+            <ol className="space-y-3">
+              {wizardSteps.map((step, index) => {
+                const active = index === wizardStepIndex;
+                const complete = index < wizardStepIndex;
+                return (
+                  <li key={step} className="flex items-center gap-3">
+                    <span
+                      className={cn(
+                        'inline-flex h-7 w-7 items-center justify-center rounded-full border text-xs font-semibold',
+                        active
+                          ? 'border-[color:var(--accent)] bg-[color:var(--chip-bg)] text-[color:var(--text-primary)]'
+                          : complete
+                            ? 'border-emerald-600 bg-emerald-100 text-emerald-700'
+                            : 'border-[color:var(--panel-border)] text-[color:var(--text-muted)]',
+                      )}
+                    >
+                      {index + 1}
+                    </span>
+                    <span className={cn('text-sm', active ? 'font-semibold text-[color:var(--text-primary)]' : 'text-[color:var(--text-muted)]')}>
+                      {step}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+          </aside>
+
+          <div className="space-y-5">
+            <div>
+              <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">{wizardSteps[wizardStepIndex]}</h2>
+              <p className="text-sm text-[color:var(--text-muted)]">
+                {wizardSteps[wizardStepIndex] === 'Getting started'
+                  ? 'Confirm location, connection, and model metadata.'
+                  : wizardSteps[wizardStepIndex] === 'Select tables'
+                    ? 'Choose the tables to include.'
+                    : wizardSteps[wizardStepIndex] === 'Select columns'
+                      ? 'Choose the columns to include from selected tables.'
+                      : wizardSteps[wizardStepIndex] === 'Questions'
+                        ? 'Provide question themes for the agentic generator.'
+                        : 'Review your selection and generate the semantic YAML.'}
+              </p>
+            </div>
+
+            {wizardSteps[wizardStepIndex] === 'Getting started' ? (
+              <div className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="wizard-connector">Connection</Label>
+                    <Select
+                      id="wizard-connector"
+                      value={selectedConnectorId}
+                      onChange={(event) => setSelectedConnectorId(event.target.value)}
+                    >
+                      <option value="">Select connection</option>
+                      {connectors.map((connector) => (
+                        <option key={connector.id ?? connector.name} value={connector.id}>
+                          {connector.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="wizard-file">Filename</Label>
+                    <Input
+                      id="wizard-file"
+                      value={formState.filename}
+                      onChange={(event) =>
+                        setFormState((current) => ({ ...current, filename: event.target.value }))
+                      }
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="wizard-name">Model name</Label>
+                    <Input
+                      id="wizard-name"
+                      value={formState.name}
+                      onChange={(event) =>
+                        setFormState((current) => ({ ...current, name: event.target.value }))
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="wizard-description">Description</Label>
+                    <Input
+                      id="wizard-description"
+                      value={formState.description}
+                      onChange={(event) =>
+                        setFormState((current) => ({ ...current, description: event.target.value }))
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {wizardSteps[wizardStepIndex] === 'Select tables' ? (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-[color:var(--text-muted)]">
+                  <span>{selectedTables.length} tables selected</span>
+                  <div className="flex gap-2">
+                    <Button type="button" size="sm" variant="outline" onClick={() => handleSelectAllTables(true)}>
+                      Select all
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => handleSelectAllTables(false)}>
+                      Clear
+                    </Button>
+                  </div>
+                </div>
+                <div className="inline-flex rounded-full border border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] p-1">
+                  <button
+                    type="button"
+                    className={cn(
+                      'rounded-full px-3 py-1 text-sm',
+                      tableTab === 'all'
+                        ? 'bg-[color:var(--panel-alt)] text-[color:var(--text-primary)]'
+                        : 'text-[color:var(--text-muted)]',
+                    )}
+                    onClick={() => setTableTab('all')}
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      'rounded-full px-3 py-1 text-sm',
+                      tableTab === 'selected'
+                        ? 'bg-[color:var(--panel-alt)] text-[color:var(--text-primary)]'
+                        : 'text-[color:var(--text-muted)]',
+                    )}
+                    onClick={() => setTableTab('selected')}
+                  >
+                    Selected
+                  </button>
+                </div>
+                <div className="max-h-[420px] space-y-3 overflow-y-auto rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4">
+                  {catalogLoading ? (
+                    <p className="text-sm">Loading table metadata...</p>
+                  ) : (
+                    catalogTables
+                      .filter((table) => (tableTab === 'selected' ? selectedTableSet.has(table.tableRef) : true))
+                      .map((table) => {
+                        const checked = selectedTableSet.has(table.tableRef);
+                        return (
+                          <label
+                            key={table.tableRef}
+                            className={cn(
+                              'flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2',
+                              checked
+                                ? 'border-[color:var(--accent)] bg-[color:var(--panel-bg)]'
+                                : 'border-[color:var(--panel-border)] bg-[color:var(--panel-bg)]',
+                            )}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(event) => handleToggleTable(table.tableRef, event.target.checked)}
+                              className="mt-1 h-4 w-4"
+                            />
+                            <div>
+                              <p className="text-sm font-medium text-[color:var(--text-primary)]">{table.tableName}</p>
+                              <p className="text-xs text-[color:var(--text-muted)]">{table.tableRef}</p>
+                            </div>
+                          </label>
+                        );
+                      })
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            {wizardSteps[wizardStepIndex] === 'Select columns' ? (
+              <div className="space-y-4">
+                <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+                  <Input
+                    value={columnSearch}
+                    onChange={(event) => setColumnSearch(event.target.value)}
+                    placeholder="Search columns"
+                  />
+                  <div className="flex gap-2">
+                    <Button type="button" size="sm" variant="outline" onClick={() => handleSelectAllColumns(true)}>
+                      Select all columns
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => handleSelectAllColumns(false)}>
+                      Clear
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-sm text-[color:var(--text-muted)]">
+                  <span>{selectedColumnCount} columns selected</span>
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={includeSampleValues}
+                      onChange={(event) => setIncludeSampleValues(event.target.checked)}
+                      className="h-4 w-4"
+                    />
+                    Include example data
+                  </label>
+                </div>
+                <div className="inline-flex rounded-full border border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] p-1">
+                  <button
+                    type="button"
+                    className={cn(
+                      'rounded-full px-3 py-1 text-sm',
+                      columnTab === 'all'
+                        ? 'bg-[color:var(--panel-alt)] text-[color:var(--text-primary)]'
+                        : 'text-[color:var(--text-muted)]',
+                    )}
+                    onClick={() => setColumnTab('all')}
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      'rounded-full px-3 py-1 text-sm',
+                      columnTab === 'selected'
+                        ? 'bg-[color:var(--panel-alt)] text-[color:var(--text-primary)]'
+                        : 'text-[color:var(--text-muted)]',
+                    )}
+                    onClick={() => setColumnTab('selected')}
+                  >
+                    Selected
+                  </button>
+                </div>
+                <div className="max-h-[420px] space-y-3 overflow-y-auto rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4">
+                  {filteredColumnTables.map((table) => {
+                    const tableSelectedColumns = new Set(selectedColumns[table.tableRef] ?? []);
+                    const allChecked =
+                      table.columns.length > 0 &&
+                      table.columns.every((column) => tableSelectedColumns.has(column.name));
+                    return (
+                      <div key={table.tableRef} className="space-y-2 rounded-lg border border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-[color:var(--text-primary)]">{table.tableName}</p>
+                            <p className="text-xs text-[color:var(--text-muted)]">{table.tableRef}</p>
+                          </div>
+                          <label className="inline-flex items-center gap-2 text-xs">
+                            <input
+                              type="checkbox"
+                              checked={allChecked}
+                              onChange={(event) =>
+                                handleSelectAllColumnsForTable(table.tableRef, event.target.checked)
+                              }
+                              className="h-4 w-4"
+                            />
+                            Select all for table
+                          </label>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                          {table.visibleColumns.map((column) => {
+                            const checked = tableSelectedColumns.has(column.name);
+                            return (
+                              <label
+                                key={`${table.tableRef}.${column.name}`}
+                                className={cn(
+                                  'flex cursor-pointer items-center gap-2 rounded-md border px-2 py-1 text-xs',
+                                  checked
+                                    ? 'border-[color:var(--accent)] bg-[color:var(--chip-bg)]'
+                                    : 'border-[color:var(--panel-border)]',
+                                )}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(event) =>
+                                    handleToggleColumn(table.tableRef, column.name, event.target.checked)
+                                  }
+                                  className="h-3.5 w-3.5"
+                                />
+                                <span className="truncate">{column.name}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
+            {wizardSteps[wizardStepIndex] === 'Questions' ? (
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <Label htmlFor="wizard-prompts">Questions this model should answer</Label>
+                  <Textarea
+                    id="wizard-prompts"
+                    rows={4}
+                    value={promptInput}
+                    onChange={(event) => setPromptInput(event.target.value)}
+                    placeholder={'One prompt per line, for example:\nrevenue by region\ntop customers'}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button type="button" size="sm" variant="outline" onClick={handlePromptParseInput}>
+                    Add prompts
+                  </Button>
+                  <span className="text-xs text-[color:var(--text-muted)]">{questionPrompts.length} / 10</span>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[color:var(--text-muted)]">Suggestions</p>
+                  <div className="flex flex-wrap gap-2">
+                    {SUGGESTED_QUESTION_PROMPTS.map((prompt) => (
+                      <button
+                        key={prompt}
+                        type="button"
+                        className="rounded-full border border-[color:var(--panel-border)] px-3 py-1 text-xs"
+                        onClick={() => handlePromptAdd(prompt)}
+                      >
+                        {prompt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {questionPrompts.map((prompt) => (
+                    <div key={prompt} className="flex items-center justify-between rounded-lg border border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] px-3 py-2 text-sm">
+                      <span>{prompt}</span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setQuestionPrompts((current) => current.filter((entry) => entry !== prompt))
+                        }
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {wizardSteps[wizardStepIndex] === 'Review' ? (
+              <div className="space-y-3">
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-lg border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-3">
+                    <p className="text-xs uppercase tracking-wide text-[color:var(--text-muted)]">Tables</p>
+                    <p className="mt-1 text-xl font-semibold text-[color:var(--text-primary)]">{selectedTables.length}</p>
+                  </div>
+                  <div className="rounded-lg border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-3">
+                    <p className="text-xs uppercase tracking-wide text-[color:var(--text-muted)]">Columns</p>
+                    <p className="mt-1 text-xl font-semibold text-[color:var(--text-primary)]">{selectedColumnCount}</p>
+                  </div>
+                  <div className="rounded-lg border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-3">
+                    <p className="text-xs uppercase tracking-wide text-[color:var(--text-muted)]">Mode</p>
+                    <p className="mt-1 text-xl font-semibold text-[color:var(--text-primary)]">
+                      {creationMode === 'auto' ? 'Auto' : 'Agentic'}
+                    </p>
+                  </div>
+                </div>
+                {creationMode === 'agentic' ? (
+                  <div className="rounded-lg border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-3">
+                    <p className="text-xs uppercase tracking-wide text-[color:var(--text-muted)]">Prompts</p>
+                    <ul className="mt-2 space-y-1 text-sm">
+                      {questionPrompts.map((prompt) => (
+                        <li key={prompt}>{prompt}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="flex items-center justify-between">
+              <Button type="button" variant="outline" onClick={() => handleWizardBack()} disabled={wizardSubmitting}>
+                {wizardStepIndex === 0 ? 'Back to modal' : 'Back'}
+              </Button>
+              <Button type="button" onClick={() => void handleWizardNext()} isLoading={wizardSubmitting}>
+                {wizardStepIndex >= wizardSteps.length - 1
+                  ? creationMode === 'agentic'
+                    ? 'Generate with agent'
+                    : 'Generate draft'
+                  : 'Next'}
+              </Button>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       {!organizationAvailable && !scopeLoading ? (
         <div className="rounded-xl border border-dashed border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] p-6 text-center text-sm">
           Choose an organization from the scope selector to begin modeling.
         </div>
-      ) : (
-        <div className="grid">
+      ) : stage === 'builder' ? (
+        <div className="grid gap-6 xl:grid-cols-[1.6fr_1fr]">
           <section className="space-y-6 rounded-3xl border border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] p-6 shadow-soft">
             <form className="space-y-6" onSubmit={(event) => void handleSave(event)}>
               <div className="space-y-3">
@@ -1078,7 +2175,7 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
                                 </p>
                                 <p className="text-xs text-[color:var(--text-muted)]">
                                   {relationship.from && relationship.to
-                                    ? `${relationship.from} → ${relationship.to}`
+                                    ? `${relationship.from} ? ${relationship.to}`
                                     : 'Define the source and target entities'}
                                 </p>
                               </div>
@@ -1291,13 +2388,30 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
 
                   <div className="space-y-3 rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4">
                     <div className="flex items-center justify-between">
-                      <h3 className="text-base font-semibold text-[color:var(--text-primary)]">6. YAML preview</h3>
-                      <span className="text-xs text-[color:var(--text-muted)]">Read-only export used for the API</span>
+                      <h3 className="text-base font-semibold text-[color:var(--text-primary)]">6. YAML editor</h3>
+                      <span className="text-xs text-[color:var(--text-muted)]">YAML is source of truth for save</span>
                     </div>
-                    {builderYamlPreview.error ? (
-                      <p className="text-xs text-rose-600">{builderYamlPreview.error}</p>
+                    <div className="flex items-center gap-2">
+                      {yamlDirty ? <Badge variant="secondary">Unsynced changes</Badge> : null}
+                      <Button type="button" variant="outline" size="sm" onClick={() => handleApplyYaml()}>
+                        Apply YAML
+                      </Button>
+                      <Button type="button" variant="outline" size="sm" onClick={() => handleResetYamlFromBuilder()}>
+                        Reset
+                      </Button>
+                    </div>
+                    {yamlError ? (
+                      <p className="text-xs text-rose-600">{yamlError}</p>
                     ) : null}
-                    <Textarea rows={12} readOnly value={builderYamlPreview.yaml} className="font-mono text-xs" />
+                    <Textarea
+                      rows={12}
+                      value={yamlDraft}
+                      onChange={(event) => {
+                        setYamlDraft(event.target.value);
+                        setYamlDirty(true);
+                      }}
+                      className="font-mono text-xs"
+                    />
                     <Button
                       type="submit"
                       className="w-full"
@@ -1311,54 +2425,71 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
               )}
             </form>
           </section>
-          {/* <aside className="space-y-4 rounded-3xl border border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] p-6 shadow-soft">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">Saved models</h2>
-              <Badge variant="secondary">{storedModels.length}</Badge>
+          <aside className="space-y-4 rounded-3xl border border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] p-6 shadow-soft">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">Outline</h2>
+                <Badge variant="secondary">{outline.tables.length} tables</Badge>
+              </div>
+              <p className="text-xs text-[color:var(--text-muted)]">
+                Logical tables, dimensions, facts, and relationships in the current model.
+              </p>
             </div>
-            {storedLoading ? (
-              <p className="text-sm">Loading saved models...</p>
-            ) : storedModels.length === 0 ? (
-              <p className="text-sm text-[color:var(--text-muted)]">No saved models yet.</p>
+            <div className="grid gap-2 rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4 text-sm">
+              <div className="flex items-center justify-between">
+                <span>Dimensions</span>
+                <Badge variant="secondary">{outline.dimensions.length}</Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Facts</span>
+                <Badge variant="secondary">{outline.measures.length}</Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Relationships</span>
+                <Badge variant="secondary">{outline.relationships.length}</Badge>
+              </div>
+            </div>
+            {outline.tables.length === 0 ? (
+              <p className="text-sm text-[color:var(--text-muted)]">No logical tables defined yet.</p>
             ) : (
-              <ul className="space-y-3 text-sm">
-                {storedModels.map((model) => (
+              <ul className="space-y-2">
+                {outline.tables.map((table) => (
                   <li
-                    key={model.id}
-                    className="rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4"
+                    key={table.id}
+                    className="rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] px-3 py-2 text-sm"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-semibold text-[color:var(--text-primary)]">{model.name}</p>
-                        <p className="text-xs text-[color:var(--text-muted)]">
-                          {isClient ? `Saved ${formatRelativeDate(model.updatedAt)}` : ''}
-                          {connectorLookup[model.connectorId] ? ` - ${connectorLookup[model.connectorId]}` : ''}
-                        </p>
-                        {model.description ? (
-                          <p className="mt-2 text-xs text-[color:var(--text-secondary)]">{model.description}</p>
-                        ) : null}
-                      </div>
-                      <div className="flex gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => void handleDownloadYaml(model.id, model.name)}
-                        >
-                          Download YAML
-                        </Button>
-                        <Button type="button" variant="ghost" size="sm" onClick={() => void handleDelete(model.id)}>
-                          Remove
-                        </Button>
-                      </div>
-                    </div>
+                    <p className="font-medium text-[color:var(--text-primary)]">{table.entityName || table.name}</p>
+                    <p className="text-xs text-[color:var(--text-muted)]">
+                      {table.schema ? `${table.schema}.` : ''}
+                      {table.name || 'missing table name'}
+                    </p>
+                    <p className="text-xs text-[color:var(--text-muted)]">
+                      {table.dimensions.length} dims / {table.measures.length} facts
+                    </p>
                   </li>
                 ))}
               </ul>
             )}
-          </aside> */}
+            {outline.relationships.length > 0 ? (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[color:var(--text-muted)]">
+                  Relationships
+                </p>
+                <ul className="space-y-1 text-xs text-[color:var(--text-secondary)]">
+                  {outline.relationships.map((relationship) => (
+                    <li
+                      key={relationship.id}
+                      className="rounded-lg border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] px-2 py-1.5"
+                    >
+                      {relationship.name || `${relationship.from} -> ${relationship.to}`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </aside>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
