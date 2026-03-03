@@ -28,6 +28,7 @@ from langbridge.packages.semantic.langbridge_semantic.loader import load_semanti
 _DIALECT_MAP: dict[SqlDialetcs, str] = {
     SqlDialetcs.POSTGRES: "postgres",
     SqlDialetcs.MYSQL: "mysql",
+    SqlDialetcs.MARIADB: "mysql",
     SqlDialetcs.SNOWFLAKE: "snowflake",
     SqlDialetcs.REDSHIFT: "redshift",
     SqlDialetcs.BIGQUERY: "bigquery",

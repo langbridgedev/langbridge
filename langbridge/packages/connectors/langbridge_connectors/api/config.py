@@ -7,6 +7,7 @@ from langbridge.packages.common.langbridge_common.contracts.base import _Base
 class ConnectorRuntimeType(Enum):
     POSTGRES = "POSTGRES"
     MYSQL = "MYSQL"
+    MARIADB = "MARIADB"
     MONGODB = "MONGODB"
     SNOWFLAKE = "SNOWFLAKE"
     REDSHIFT = "REDSHIFT"

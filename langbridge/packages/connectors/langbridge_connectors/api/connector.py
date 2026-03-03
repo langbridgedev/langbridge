@@ -23,6 +23,7 @@ class ConnectorType(Enum):
 class SqlDialetcs(Enum):
     POSTGRES = "POSTGRES"
     MYSQL = "MYSQL"
+    MARIADB = "MARIADB"
     MONGODB = "MONGODB"
     SNOWFLAKE = "SNOWFLAKE"
     REDSHIFT = "REDSHIFT"
@@ -50,6 +51,7 @@ class VectorType(Enum):
 ConnectorRuntimeTypeSqlDialectMap: Dict[ConnectorRuntimeType, SqlDialetcs] = {
     ConnectorRuntimeType.POSTGRES: SqlDialetcs.POSTGRES,
     ConnectorRuntimeType.MYSQL: SqlDialetcs.MYSQL,
+    ConnectorRuntimeType.MARIADB: SqlDialetcs.MARIADB,
     ConnectorRuntimeType.MONGODB: SqlDialetcs.MONGODB,
     ConnectorRuntimeType.SNOWFLAKE: SqlDialetcs.SNOWFLAKE,
     ConnectorRuntimeType.REDSHIFT: SqlDialetcs.REDSHIFT,

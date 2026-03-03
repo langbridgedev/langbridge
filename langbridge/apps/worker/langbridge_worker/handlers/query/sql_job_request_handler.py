@@ -347,6 +347,7 @@ class SqlJobRequestHandler(BaseMessageHandler):
         connector_map = {
             ConnectorRuntimeType.POSTGRES: "postgres",
             ConnectorRuntimeType.MYSQL: "mysql",
+            ConnectorRuntimeType.MARIADB: "mysql",
             ConnectorRuntimeType.SNOWFLAKE: "snowflake",
             ConnectorRuntimeType.REDSHIFT: "redshift",
             ConnectorRuntimeType.BIGQUERY: "bigquery",

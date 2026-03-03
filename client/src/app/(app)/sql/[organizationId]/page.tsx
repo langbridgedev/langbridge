@@ -149,6 +149,7 @@ const CONNECTOR_DIALECT_MAP: Record<string, SqlDialect> = {
   SQLSERVER: 'tsql',
   POSTGRES: 'postgres',
   MYSQL: 'mysql',
+  MARIADB: 'mysql',
   SNOWFLAKE: 'snowflake',
   REDSHIFT: 'redshift',
   BIGQUERY: 'bigquery',

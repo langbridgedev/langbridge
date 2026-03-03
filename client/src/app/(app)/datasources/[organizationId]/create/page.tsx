@@ -64,6 +64,7 @@ const CONNECTOR_ICON_MAP: Record<string, LucideIcon> = {
   SNOWFLAKE: SnowflakeIcon,
   POSTGRES: Database,
   MYSQL: Database,
+  MARIADB: Database,
   MONGODB: Database,
   REDSHIFT: Database,
   BIGQUERY: Database,

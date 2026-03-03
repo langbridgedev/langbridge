@@ -41,6 +41,7 @@ from .registry import (
 from .snowflake import *  # required for subclass registration
 from .postgres import *  # required for subclass registration
 from .mysql import *  # required for subclass registration
+from .mariadb import *  # required for subclass registration
 from .mongodb import *  # required for subclass registration
 from .redshift import *  # required for subclass registration
 from .bigquery import *  # required for subclass registration
