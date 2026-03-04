@@ -4,9 +4,19 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { FILTER_OPERATORS } from '../types';
 import type { FieldOption, FilterDraft } from '../types';
 import { FieldSelect } from './FieldSelect';
+import {
+  DATE_RANGE_FILTER_PRESETS,
+  ensureOperatorForField,
+  getDefaultFilterOperator,
+  getFilterOperatorsForField,
+  getFilterValuePlaceholder,
+  isValuelessOperator,
+  parseDateRangeFilterValues,
+  serializeDateRangeFilterValues,
+  usesDateRangePresetInput,
+} from '../filterUtils';
 
 interface BiGlobalConfigPanelProps {
   onClose: () => void;
@@ -37,13 +47,16 @@ export function BiGlobalConfigPanel({
   setGlobalFilters,
   onApplyGlobalFilters,
 }: BiGlobalConfigPanelProps) {
+  const getFilterField = (member: string) => fields.find((field) => field.id === member);
+
   const handleAddGlobalFilter = () => {
+    const defaultField = fields[0];
     setGlobalFilters([
       ...globalFilters,
       {
         id: Math.random().toString(36).substr(2, 9),
-        member: fields[0]?.id || '',
-        operator: 'equals',
+        member: defaultField?.id || '',
+        operator: getDefaultFilterOperator(defaultField),
         values: '',
       },
     ]);
@@ -122,42 +135,127 @@ export function BiGlobalConfigPanel({
           )}
           <div className="space-y-2">
             {globalFilters.map(filter => (
-              <div key={filter.id} className="bg-muted/30 p-2 rounded-lg space-y-2 border border-border">
-                <div className="flex items-center gap-2">
-                  <FieldSelect
-                    value={filter.member}
-                    onChange={(value) => handleUpdateGlobalFilter(filter.id, { member: value })}
-                    fields={fields}
-                    className="h-7 text-xs"
-                    inputClassName="text-xs"
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleRemoveGlobalFilter(filter.id)}
-                    className="h-7 w-7 text-destructive hover:bg-destructive/10"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <Select
-                    value={filter.operator}
-                    onChange={(e) => handleUpdateGlobalFilter(filter.id, { operator: e.target.value })}
-                    className="h-7 text-xs"
-                  >
-                    {FILTER_OPERATORS.map(op => (
-                      <option key={op.value} value={op.value}>{op.label}</option>
-                    ))}
-                  </Select>
-                  <Input
-                    value={filter.values}
-                    onChange={(e) => handleUpdateGlobalFilter(filter.id, { values: e.target.value })}
-                    className="h-7 text-xs"
-                    placeholder="Value"
-                  />
-                </div>
-              </div>
+              (() => {
+                const selectedField = getFilterField(filter.member);
+                const operatorOptions = getFilterOperatorsForField(selectedField);
+                const normalizedOperator = ensureOperatorForField(filter.operator, selectedField);
+                const requiresValue = !isValuelessOperator(normalizedOperator);
+                const usesDateRangeInput = usesDateRangePresetInput(selectedField, normalizedOperator);
+                const dateRangeState = parseDateRangeFilterValues(filter.values);
+                return (
+                  <div key={filter.id} className="bg-muted/30 p-2 rounded-lg space-y-2 border border-border">
+                    <div className="flex items-center gap-2">
+                      <FieldSelect
+                        value={filter.member}
+                        onChange={(value) => {
+                          const nextField = getFilterField(value);
+                          handleUpdateGlobalFilter(filter.id, {
+                            member: value,
+                            operator: ensureOperatorForField(filter.operator, nextField),
+                          });
+                        }}
+                        fields={fields}
+                        className="h-7 text-xs"
+                        inputClassName="text-xs"
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleRemoveGlobalFilter(filter.id)}
+                        className="h-7 w-7 text-destructive hover:bg-destructive/10"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        value={normalizedOperator}
+                        onChange={(e) => handleUpdateGlobalFilter(filter.id, { operator: ensureOperatorForField(e.target.value, selectedField) })}
+                        className="h-7 text-xs"
+                      >
+                        {operatorOptions.map((op) => (
+                          <option key={op.value} value={op.value}>{op.label}</option>
+                        ))}
+                      </Select>
+                      {usesDateRangeInput ? (
+                        <>
+                          <Select
+                            value={dateRangeState.preset}
+                            onChange={(e) =>
+                              handleUpdateGlobalFilter(filter.id, {
+                                values: serializeDateRangeFilterValues({
+                                  ...dateRangeState,
+                                  preset: e.target.value as typeof dateRangeState.preset,
+                                }),
+                              })
+                            }
+                            className="h-7 text-xs"
+                          >
+                            {DATE_RANGE_FILTER_PRESETS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </Select>
+                          {dateRangeState.preset === 'custom_between' ? (
+                            <div className="grid grid-cols-2 gap-2">
+                              <Input
+                                type="date"
+                                value={dateRangeState.from}
+                                onChange={(e) =>
+                                  handleUpdateGlobalFilter(filter.id, {
+                                    values: serializeDateRangeFilterValues({
+                                      ...dateRangeState,
+                                      from: e.target.value,
+                                    }),
+                                  })
+                                }
+                                className="h-7 text-xs"
+                              />
+                              <Input
+                                type="date"
+                                value={dateRangeState.to}
+                                onChange={(e) =>
+                                  handleUpdateGlobalFilter(filter.id, {
+                                    values: serializeDateRangeFilterValues({
+                                      ...dateRangeState,
+                                      to: e.target.value,
+                                    }),
+                                  })
+                                }
+                                className="h-7 text-xs"
+                              />
+                            </div>
+                          ) : null}
+                          {(dateRangeState.preset === 'custom_before' || dateRangeState.preset === 'custom_after' || dateRangeState.preset === 'custom_on') ? (
+                            <Input
+                              type="date"
+                              value={dateRangeState.from}
+                              onChange={(e) =>
+                                handleUpdateGlobalFilter(filter.id, {
+                                  values: serializeDateRangeFilterValues({
+                                    ...dateRangeState,
+                                    from: e.target.value,
+                                  }),
+                                })
+                              }
+                              className="h-7 text-xs"
+                            />
+                          ) : null}
+                        </>
+                      ) : (
+                        <Input
+                          value={filter.values}
+                          onChange={(e) => handleUpdateGlobalFilter(filter.id, { values: e.target.value })}
+                          className="h-7 text-xs"
+                          placeholder={getFilterValuePlaceholder(selectedField, normalizedOperator)}
+                          disabled={!requiresValue}
+                        />
+                      )}
+                    </div>
+                  </div>
+                );
+              })()
             ))}
           </div>
         </section>

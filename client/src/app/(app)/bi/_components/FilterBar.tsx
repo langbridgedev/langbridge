@@ -5,9 +5,19 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 
-import { FILTER_OPERATORS } from '../types';
 import type { BiWidget, FieldOption, FilterDraft } from '../types';
 import { FieldSelect } from './FieldSelect';
+import {
+  DATE_RANGE_FILTER_PRESETS,
+  ensureOperatorForField,
+  getDefaultFilterOperator,
+  getFilterOperatorsForField,
+  getFilterValuePlaceholder,
+  isValuelessOperator,
+  parseDateRangeFilterValues,
+  serializeDateRangeFilterValues,
+  usesDateRangePresetInput,
+} from '../filterUtils';
 
 type FilterBarProps = {
   fields: FieldOption[];
@@ -27,14 +37,20 @@ export function FilterBar({
   isEditMode,
 }: FilterBarProps) {
   const activeLabel = useMemo(() => activeWidget?.title || 'No widget selected', [activeWidget]);
+  const fieldById = useMemo(() => {
+    const lookup = new Map<string, FieldOption>();
+    fields.forEach((field) => lookup.set(field.id, field));
+    return lookup;
+  }, [fields]);
 
   const addFilter = () => {
+    const defaultField = fields[0];
     onGlobalFiltersChange([
       ...globalFilters,
       {
         id: makeLocalId(),
-        member: fields[0]?.id || '',
-        operator: 'equals',
+        member: defaultField?.id || '',
+        operator: getDefaultFilterOperator(defaultField),
         values: '',
       },
     ]);
@@ -83,50 +99,141 @@ export function FilterBar({
 
         {globalFilters.length > 0 ? (
           <div className="mt-3 grid gap-2 lg:grid-cols-2 2xl:grid-cols-3">
-            {globalFilters.map((filter) => (
-              <div key={filter.id} className="flex items-center gap-2 rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] px-2 py-2">
-                <div className="flex-1">
-                  <FieldSelect
-                    fields={fields}
-                    value={filter.member}
-                    onChange={(value) => updateFilter(filter.id, { member: value })}
-                    className={`h-7 rounded-lg border-0 bg-transparent px-2 text-xs shadow-none ${
-                      !isEditMode ? 'pointer-events-none opacity-70' : ''
-                    }`}
-                    inputClassName="text-xs"
-                  />
+            {globalFilters.map((filter) => {
+              const selectedField = fieldById.get(filter.member);
+              const operatorOptions = getFilterOperatorsForField(selectedField);
+              const normalizedOperator = ensureOperatorForField(filter.operator, selectedField);
+              const requiresValue = !isValuelessOperator(normalizedOperator);
+              const usesDateRangeInput = usesDateRangePresetInput(selectedField, normalizedOperator);
+              const dateRangeState = parseDateRangeFilterValues(filter.values);
+
+              return (
+                <div key={filter.id} className="rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] px-2 py-2">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <FieldSelect
+                        fields={fields}
+                        value={filter.member}
+                        onChange={(value) => {
+                          const nextField = fieldById.get(value);
+                          updateFilter(filter.id, {
+                            member: value,
+                            operator: ensureOperatorForField(filter.operator, nextField),
+                          });
+                        }}
+                        className={`h-7 rounded-lg border-0 bg-transparent px-2 text-xs shadow-none ${
+                          !isEditMode ? 'pointer-events-none opacity-70' : ''
+                        }`}
+                        inputClassName="text-xs"
+                      />
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-[color:var(--text-muted)] hover:text-red-500"
+                      onClick={() => removeFilter(filter.id)}
+                      aria-label="Remove global filter"
+                      disabled={!isEditMode}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    <Select
+                      value={normalizedOperator}
+                      onChange={(event) => updateFilter(filter.id, { operator: ensureOperatorForField(event.target.value, selectedField) })}
+                      className="h-7 rounded-lg border-0 bg-[color:var(--panel-bg)] px-2 text-xs"
+                      disabled={!isEditMode}
+                    >
+                      {operatorOptions.map((operator) => (
+                        <option key={operator.value} value={operator.value}>
+                          {operator.label}
+                        </option>
+                      ))}
+                    </Select>
+                    {usesDateRangeInput ? (
+                      <>
+                        <Select
+                          value={dateRangeState.preset}
+                          onChange={(event) =>
+                            updateFilter(filter.id, {
+                              values: serializeDateRangeFilterValues({
+                                ...dateRangeState,
+                                preset: event.target.value as typeof dateRangeState.preset,
+                              }),
+                            })
+                          }
+                          className="h-7 rounded-lg border-0 bg-[color:var(--panel-bg)] px-2 text-xs"
+                          disabled={!isEditMode}
+                        >
+                          {DATE_RANGE_FILTER_PRESETS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+                        {dateRangeState.preset === 'custom_between' ? (
+                          <div className="grid grid-cols-2 gap-2">
+                            <Input
+                              type="date"
+                              value={dateRangeState.from}
+                              onChange={(event) =>
+                                updateFilter(filter.id, {
+                                  values: serializeDateRangeFilterValues({
+                                    ...dateRangeState,
+                                    from: event.target.value,
+                                  }),
+                                })
+                              }
+                              className="h-7 rounded-lg border-0 bg-[color:var(--panel-bg)] text-xs"
+                              disabled={!isEditMode}
+                            />
+                            <Input
+                              type="date"
+                              value={dateRangeState.to}
+                              onChange={(event) =>
+                                updateFilter(filter.id, {
+                                  values: serializeDateRangeFilterValues({
+                                    ...dateRangeState,
+                                    to: event.target.value,
+                                  }),
+                                })
+                              }
+                              className="h-7 rounded-lg border-0 bg-[color:var(--panel-bg)] text-xs"
+                              disabled={!isEditMode}
+                            />
+                          </div>
+                        ) : null}
+                        {(dateRangeState.preset === 'custom_before' || dateRangeState.preset === 'custom_after' || dateRangeState.preset === 'custom_on') ? (
+                          <Input
+                            type="date"
+                            value={dateRangeState.from}
+                            onChange={(event) =>
+                              updateFilter(filter.id, {
+                                values: serializeDateRangeFilterValues({
+                                  ...dateRangeState,
+                                  from: event.target.value,
+                                }),
+                              })
+                            }
+                            className="h-7 rounded-lg border-0 bg-[color:var(--panel-bg)] text-xs"
+                            disabled={!isEditMode}
+                          />
+                        ) : null}
+                      </>
+                    ) : (
+                      <Input
+                        value={filter.values}
+                        onChange={(event) => updateFilter(filter.id, { values: event.target.value })}
+                        placeholder={getFilterValuePlaceholder(selectedField, normalizedOperator)}
+                        className="h-7 rounded-lg border-0 bg-[color:var(--panel-bg)] text-xs"
+                        disabled={!isEditMode || !requiresValue}
+                      />
+                    )}
+                  </div>
                 </div>
-                <Select
-                  value={filter.operator}
-                  onChange={(event) => updateFilter(filter.id, { operator: event.target.value })}
-                  className="h-7 w-28 rounded-lg border-0 bg-[color:var(--panel-bg)] px-2 text-xs"
-                  disabled={!isEditMode}
-                >
-                  {FILTER_OPERATORS.map((operator) => (
-                    <option key={operator.value} value={operator.value}>
-                      {operator.label}
-                    </option>
-                  ))}
-                </Select>
-                <Input
-                  value={filter.values}
-                  onChange={(event) => updateFilter(filter.id, { values: event.target.value })}
-                  placeholder="Value"
-                  className="h-7 w-28 rounded-lg border-0 bg-[color:var(--panel-bg)] text-xs"
-                  disabled={!isEditMode}
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 text-[color:var(--text-muted)] hover:text-red-500"
-                  onClick={() => removeFilter(filter.id)}
-                  aria-label="Remove global filter"
-                  disabled={!isEditMode}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="mt-3 rounded-xl border border-dashed border-[color:var(--panel-border)] bg-[color:var(--panel-alt)]/40 px-3 py-2 text-[11px] text-[color:var(--text-muted)]">

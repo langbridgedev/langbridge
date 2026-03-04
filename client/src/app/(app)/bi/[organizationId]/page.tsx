@@ -54,6 +54,7 @@ import { Dashboard } from '../_components/Dashboard';
 import { BiGlobalConfigPanel } from '../_components/BiGlobalConfigPanel';
 import { BiHeader } from '../_components/BiHeader';
 import { BiSidebar } from '../_components/BiSidebar';
+import { toSemanticFilter } from '../filterUtils';
 import { DEFAULT_WIDGET_VISUAL_CONFIG } from '../types';
 import type {
   BiWidget,
@@ -741,6 +742,7 @@ export default function BiStudioPage({ params }: BiStudioPageProps) {
         semanticModelId: selectedModelId,
         selectedModelConfig,
         globalFilters,
+        fieldLookup,
       });
       if (!requestInput) {
         updateWidget(widget.id, {
@@ -759,6 +761,7 @@ export default function BiStudioPage({ params }: BiStudioPageProps) {
   }, [
     activeDashboardId,
     dashboardRefreshMode,
+    fieldLookup,
     globalFilters,
     organizationId,
     pendingAutoRefreshDashboardId,
@@ -875,6 +878,7 @@ export default function BiStudioPage({ params }: BiStudioPageProps) {
       semanticModelId: selectedModelId,
       selectedModelConfig,
       globalFilters,
+      fieldLookup,
     });
     if (!requestInput) {
       toast({
@@ -902,6 +906,7 @@ export default function BiStudioPage({ params }: BiStudioPageProps) {
         semanticModelId: selectedModelId,
         selectedModelConfig,
         globalFilters,
+        fieldLookup,
       });
       if (!requestInput) {
         updateWidget(widget.id, {
@@ -917,6 +922,7 @@ export default function BiStudioPage({ params }: BiStudioPageProps) {
       enqueueWidgetQuery(widget.id, requestInput);
     });
   }, [
+    fieldLookup,
     globalFilters,
     organizationId,
     projectScope,
@@ -1718,8 +1724,9 @@ function buildWidgetQueryRequestInput(input: {
   semanticModelId: string;
   selectedModelConfig: SelectedModelConfig;
   globalFilters: FilterDraft[];
+  fieldLookup: Map<string, FieldOption>;
 }): QueryRequestInput | null {
-  const query = buildSemanticQueryPayload(input.widget, input.globalFilters);
+  const query = buildSemanticQueryPayload(input.widget, input.globalFilters, input.fieldLookup);
   if (input.selectedModelConfig.kind === 'unified') {
     if (input.selectedModelConfig.semanticModelIds.length === 0) {
       return null;
@@ -1747,7 +1754,11 @@ function buildWidgetQueryRequestInput(input: {
   };
 }
 
-function buildSemanticQueryPayload(widget: BiWidget, globalFilters: FilterDraft[]): SemanticQueryPayload {
+function buildSemanticQueryPayload(
+  widget: BiWidget,
+  globalFilters: FilterDraft[],
+  fieldLookup: Map<string, FieldOption>,
+): SemanticQueryPayload {
   const timeDateRange = resolveTimeDateRange(widget);
   const timeDimensionsPayload = widget.timeDimension
     ? [
@@ -1758,7 +1769,7 @@ function buildSemanticQueryPayload(widget: BiWidget, globalFilters: FilterDraft[
         },
       ]
     : [];
-  const filterPayload = buildSemanticFilters([...globalFilters, ...widget.filters]);
+  const filterPayload = buildSemanticFilters([...globalFilters, ...widget.filters], fieldLookup);
   const orderPayload =
     widget.orderBys.length > 0
       ? widget.orderBys.map((order) => ({ [order.member]: order.direction }))
@@ -1809,24 +1820,10 @@ function resolveTimeDateRange(widget: BiWidget): string | string[] | undefined {
   return undefined;
 }
 
-function buildSemanticFilters(filters: FilterDraft[]) {
+function buildSemanticFilters(filters: FilterDraft[], fieldLookup: Map<string, FieldOption>) {
   return filters.flatMap((filter) => {
-    const member = filter.member.trim();
-    if (!member) {
-      return [];
-    }
-    const operator = filter.operator.trim() || 'equals';
-    if (operator === 'set' || operator === 'notset') {
-      return [{ member, operator }];
-    }
-    const values = filter.values
-      .split(',')
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0);
-    if (values.length === 0) {
-      return [];
-    }
-    return [{ member, operator, values }];
+    const normalized = toSemanticFilter(filter, fieldLookup.get(filter.member.trim()));
+    return normalized ? [normalized] : [];
   });
 }
 

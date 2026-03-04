@@ -225,7 +225,7 @@ class TsqlSemanticTranslator:
         order_aliases: Dict[str, str] = {}
 
         for dimension in dimensions:
-            expr = self._column_expression(alias_map, dimension.table, dimension.column, dimension.expression)
+            expr = self._column_expression(alias_map, dimension.table, dimension.column, dimension.expression, data_type=dimension.data_type)
             alias = self._alias_for_member(f"{dimension.table}.{dimension.column}")
             select_clauses.append(exp.alias_(expr, alias, quoted=True))
             group_by_expressions.append(expr)
@@ -242,6 +242,7 @@ class TsqlSemanticTranslator:
                 alias_map,
                 time_dimension.dimension.table,
                 time_dimension.dimension.column,
+                data_type=time_dimension.dimension.data_type,
             )
             expr = base_expr
             if time_dimension.granularity:
@@ -658,6 +659,7 @@ class TsqlSemanticTranslator:
         column: str,
         expression: Optional[str] = None,
         allow_placeholder: bool = False,
+        data_type: Optional[str] = None,
     ) -> exp.Expression:
         if not alias_map:
             if not allow_placeholder:
@@ -668,6 +670,16 @@ class TsqlSemanticTranslator:
         if expression:
             expr = self._ensure_expression(expression)
             return self._replace_table_refs(expr, alias_map)
+        if data_type == "date":
+            # Sometimes the column might be stored as a string but semantically it's a date
+            # Breaks duckdb otherwise since it doesn't allow implicit string to date comparisons
+            return exp.Cast(
+                this=exp.Column(
+                    this=exp.Identifier(this=column, quoted=True),
+                    table=exp.Identifier(this=alias, quoted=False),
+                ),
+                to=exp.DataType(this="DATE"),
+            )
         return exp.Column(
             this=exp.Identifier(this=column, quoted=True),
             table=exp.Identifier(this=alias, quoted=False),

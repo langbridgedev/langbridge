@@ -65,16 +65,24 @@ def format_literal(
     return exp.Literal.string(value_str)
 
 
-def date_trunc(granularity: str, column_expr: exp.Expression, dialect: str = "tsql") -> exp.Expression:
+_SUPPORTED_UNITS = {"week", "month", "quarter", "year", "day", "hour", "minute", "second"}
+
+def date_trunc(granularity: str, col: exp.Expression, dialect: str = "tsql") -> exp.Expression:
     unit = granularity.strip().lower()
-    if unit in {"week", "month", "quarter", "year", "day", "hour", "minute", "second"}:
-        if (dialect or "tsql").lower() in {"postgres", "postgresql"}:
-            return exp.DateTrunc(this=column_expr, unit=exp.Literal.string(unit))
-        unit_var = exp.Var(this=unit)
-        base = exp.Literal.number(0)
-        diff = exp.DateDiff(this=column_expr, expression=base, unit=unit_var)
-        return exp.DateAdd(this=base, expression=diff, unit=unit_var)
-    raise ValueError(f"Unsupported granularity '{granularity}'.")
+    if unit not in _SUPPORTED_UNITS:
+        raise ValueError(f"Unsupported granularity '{granularity}'.")
+
+    d = (dialect or "tsql").lower()
+    if d in {"duckdb", "postgres", "postgresql"}:
+        return exp.DateTrunc(this=col, unit=exp.Literal.string(unit))
+
+    base = exp.Literal.number(0)
+    u = exp.Var(this=unit)
+    return exp.DateAdd(
+        this=base,
+        expression=exp.DateDiff(this=col, expression=base, unit=u),
+        unit=u,
+    )
 
 def parse_relative_date_range(
     range_str: str, dialect: str = "tsql"

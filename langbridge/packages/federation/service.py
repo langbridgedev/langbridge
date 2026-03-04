@@ -51,7 +51,7 @@ class FederatedQueryService:
     async def execute(
         self,
         query: SMQQuery | str | dict[str, Any],
-        dialect: str = "tsql",
+        dialect: str = "duckdb",
         workspace_id: str = "",
     ) -> ResultHandle:
         workflow = self._require_workflow(workspace_id)

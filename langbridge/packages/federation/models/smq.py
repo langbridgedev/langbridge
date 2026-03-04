@@ -45,7 +45,7 @@ class SMQQuery(BaseModel):
     dimensions: list[str] = Field(default_factory=list)
     time_dimensions: list[SMQTimeDimension] = Field(default_factory=list, alias="timeDimensions")
     filters: list[SMQFilter] = Field(default_factory=list)
-    order: list[SMQOrderItem] | dict[str, str] | None = None
+    order: list[SMQOrderItem] | dict[str, str] | list[dict[str, str]] | None = None
     limit: int | None = None
     offset: int | None = None
     timezone: str | None = None

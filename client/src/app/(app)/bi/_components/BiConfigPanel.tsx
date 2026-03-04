@@ -12,12 +12,22 @@ import {
   WidgetVisualConfig,
   FilterDraft, 
   OrderByDraft, 
-  FILTER_OPERATORS, 
   TIME_GRAIN_OPTIONS, 
   DATE_PRESETS,
   FieldOption,
   PALETTE_OPTIONS,
 } from '../types';
+import {
+  DATE_RANGE_FILTER_PRESETS,
+  ensureOperatorForField,
+  getDefaultFilterOperator,
+  getFilterOperatorsForField,
+  getFilterValuePlaceholder,
+  isValuelessOperator,
+  parseDateRangeFilterValues,
+  serializeDateRangeFilterValues,
+  usesDateRangePresetInput,
+} from '../filterUtils';
 
 interface BiConfigPanelProps {
   onClose: () => void;
@@ -108,12 +118,14 @@ export function BiConfigPanel({
   
   // Field lookup for labels
   const getFieldLabel = (id: string) => fields.find(f => f.id === id)?.label || id;
+  const getFilterField = (member: string) => fields.find((field) => field.id === member);
 
   const handleAddFilter = () => {
+    const defaultField = fields[0];
     setFilters([...filters, { 
       id: Math.random().toString(36).substr(2, 9), 
-      member: fields[0]?.id || '', 
-      operator: 'equals', 
+      member: defaultField?.id || '', 
+      operator: getDefaultFilterOperator(defaultField), 
       values: '' 
     }]);
   };
@@ -489,35 +501,120 @@ export function BiConfigPanel({
             {filters.length === 0 && <div className="text-xs text-muted-foreground italic">No filters applied</div>}
             <div className="space-y-2">
               {filters.map(filter => (
-                <div key={filter.id} className="bg-muted/30 p-2 rounded-lg space-y-2 border border-border">
-                  <div className="flex items-center gap-2">
-                    <FieldSelect
-                      value={filter.member}
-                      onChange={(value) => handleUpdateFilter(filter.id, { member: value })}
-                      fields={fields}
-                      className="h-7 text-xs"
-                      inputClassName="text-xs"
-                    />
-                    <Button variant="ghost" size="icon" onClick={() => handleRemoveFilter(filter.id)} className="h-7 w-7 text-destructive hover:bg-destructive/10">
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Select 
-                      value={filter.operator} 
-                      onChange={(e) => handleUpdateFilter(filter.id, { operator: e.target.value })}
-                      className="h-7 text-xs"
-                    >
-                      {FILTER_OPERATORS.map(op => <option key={op.value} value={op.value}>{op.label}</option>)}
-                    </Select>
-                    <Input 
-                      value={filter.values} 
-                      onChange={(e) => handleUpdateFilter(filter.id, { values: e.target.value })}
-                      className="h-7 text-xs"
-                      placeholder="Value"
-                    />
-                  </div>
-                </div>
+                (() => {
+                  const selectedField = getFilterField(filter.member);
+                  const operatorOptions = getFilterOperatorsForField(selectedField);
+                  const normalizedOperator = ensureOperatorForField(filter.operator, selectedField);
+                  const requiresValue = !isValuelessOperator(normalizedOperator);
+                  const usesDateRangeInput = usesDateRangePresetInput(selectedField, normalizedOperator);
+                  const dateRangeState = parseDateRangeFilterValues(filter.values);
+                  return (
+                    <div key={filter.id} className="bg-muted/30 p-2 rounded-lg space-y-2 border border-border">
+                      <div className="flex items-center gap-2">
+                        <FieldSelect
+                          value={filter.member}
+                          onChange={(value) => {
+                            const nextField = getFilterField(value);
+                            handleUpdateFilter(filter.id, {
+                              member: value,
+                              operator: ensureOperatorForField(filter.operator, nextField),
+                            });
+                          }}
+                          fields={fields}
+                          className="h-7 text-xs"
+                          inputClassName="text-xs"
+                        />
+                        <Button variant="ghost" size="icon" onClick={() => handleRemoveFilter(filter.id)} className="h-7 w-7 text-destructive hover:bg-destructive/10">
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                      <div className="space-y-2">
+                        <Select 
+                          value={normalizedOperator} 
+                          onChange={(e) => handleUpdateFilter(filter.id, { operator: ensureOperatorForField(e.target.value, selectedField) })}
+                          className="h-7 text-xs"
+                        >
+                          {operatorOptions.map((op) => <option key={op.value} value={op.value}>{op.label}</option>)}
+                        </Select>
+                        {usesDateRangeInput ? (
+                          <>
+                            <Select
+                              value={dateRangeState.preset}
+                              onChange={(e) =>
+                                handleUpdateFilter(filter.id, {
+                                  values: serializeDateRangeFilterValues({
+                                    ...dateRangeState,
+                                    preset: e.target.value as typeof dateRangeState.preset,
+                                  }),
+                                })
+                              }
+                              className="h-7 text-xs"
+                            >
+                              {DATE_RANGE_FILTER_PRESETS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </Select>
+                            {dateRangeState.preset === 'custom_between' ? (
+                              <div className="grid grid-cols-2 gap-2">
+                                <Input
+                                  type="date"
+                                  value={dateRangeState.from}
+                                  onChange={(e) =>
+                                    handleUpdateFilter(filter.id, {
+                                      values: serializeDateRangeFilterValues({
+                                        ...dateRangeState,
+                                        from: e.target.value,
+                                      }),
+                                    })
+                                  }
+                                  className="h-7 text-xs"
+                                />
+                                <Input
+                                  type="date"
+                                  value={dateRangeState.to}
+                                  onChange={(e) =>
+                                    handleUpdateFilter(filter.id, {
+                                      values: serializeDateRangeFilterValues({
+                                        ...dateRangeState,
+                                        to: e.target.value,
+                                      }),
+                                    })
+                                  }
+                                  className="h-7 text-xs"
+                                />
+                              </div>
+                            ) : null}
+                            {(dateRangeState.preset === 'custom_before' || dateRangeState.preset === 'custom_after' || dateRangeState.preset === 'custom_on') ? (
+                              <Input
+                                type="date"
+                                value={dateRangeState.from}
+                                onChange={(e) =>
+                                  handleUpdateFilter(filter.id, {
+                                    values: serializeDateRangeFilterValues({
+                                      ...dateRangeState,
+                                      from: e.target.value,
+                                    }),
+                                  })
+                                }
+                                className="h-7 text-xs"
+                              />
+                            ) : null}
+                          </>
+                        ) : (
+                          <Input 
+                            value={filter.values} 
+                            onChange={(e) => handleUpdateFilter(filter.id, { values: e.target.value })}
+                            className="h-7 text-xs"
+                            placeholder={getFilterValuePlaceholder(selectedField, normalizedOperator)}
+                            disabled={!requiresValue}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()
               ))}
             </div>
           </section>

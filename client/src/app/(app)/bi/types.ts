@@ -38,6 +38,11 @@ export type FilterDraft = {
   values: string;
 };
 
+export type FilterOperatorOption = {
+  value: string;
+  label: string;
+};
+
 export type OrderByDraft = {
   id: string;
   member: string;
@@ -110,7 +115,7 @@ export type DashboardBuilderState = {
   widgets: PersistedBiWidget[];
 };
 
-export const FILTER_OPERATORS = [
+export const FILTER_OPERATORS: FilterOperatorOption[] = [
   { value: 'equals', label: 'Equals' },
   { value: 'notequals', label: 'Not equals' },
   { value: 'contains', label: 'Contains' },
@@ -120,6 +125,13 @@ export const FILTER_OPERATORS = [
   { value: 'lte', label: 'Less or equal' },
   { value: 'in', label: 'In list' },
   { value: 'notin', label: 'Not in list' },
+  { value: 'set', label: 'Is set' },
+  { value: 'notset', label: 'Is not set' },
+];
+
+export const DATE_FILTER_OPERATORS: FilterOperatorOption[] = [
+  { value: 'indaterange', label: 'In date range' },
+  { value: 'notindaterange', label: 'Not in date range' },
   { value: 'set', label: 'Is set' },
   { value: 'notset', label: 'Is not set' },
 ];

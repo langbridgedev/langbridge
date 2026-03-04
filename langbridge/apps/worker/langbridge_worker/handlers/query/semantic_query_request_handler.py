@@ -45,10 +45,8 @@ from langbridge.packages.common.langbridge_common.utils.sql import (
     transpile_sql,
 )
 from langbridge.packages.connectors.langbridge_connectors.api import (
-    ConnectorRuntimeTypeSqlDialectMap,
     SqlConnector,
     SqlConnectorFactory,
-    get_connector_config_factory,
 )
 from langbridge.packages.connectors.langbridge_connectors.api.config import ConnectorRuntimeType
 from langbridge.packages.messaging.langbridge_messaging.broker.base import MessageBroker
@@ -71,13 +69,8 @@ from langbridge.packages.semantic.langbridge_semantic.loader import (
 from langbridge.apps.worker.langbridge_worker.secrets import SecretProviderRegistry
 from langbridge.packages.semantic.langbridge_semantic.model import SemanticModel
 from langbridge.packages.semantic.langbridge_semantic.query import SemanticQuery, SemanticQueryEngine
-from langbridge.packages.semantic.langbridge_semantic.unified_query import (
-    TenantAwareQueryContext,
-    UnifiedSourceModel,
-    apply_tenant_aware_context,
-    build_unified_semantic_model,
-)
 from langbridge.packages.federation.models import FederationWorkflow, VirtualDataset, VirtualTableBinding
+from langbridge.apps.worker.langbridge_worker.semantic_query_execution_service import SemanticQueryExecutionService
 
 
 class SemanticQueryRequestHandler(BaseMessageHandler):
@@ -105,6 +98,11 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         self._federated_query_tool = federated_query_tool
         self._engine = SemanticQueryEngine()
         self._sql_connector_factory = SqlConnectorFactory()
+        self._query_execution_service = SemanticQueryExecutionService(
+            semantic_model_repository=self._semantic_model_repository,
+            federated_query_tool=self._federated_query_tool,
+            logger=self._logger,
+        )
 
     async def handle(self, payload: SemanticQueryRequestMessage) -> None:
         if (
@@ -715,28 +713,9 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         event_emitter: BrokerJobEventEmitter,
     ) -> UnifiedSemanticQueryResponse:
         if not request.semantic_model_ids:
-                raise BusinessValidationError(
-                    "semantic_model_ids must include at least one model id for unified query scope."
-                )
-
-        semantic_model, table_connector_map = await self._build_unified_model_and_map(
-            organization_id=request.organisation_id,
-            semantic_model_ids=request.semantic_model_ids,
-            joins=request.joins,
-            metrics=request.metrics,
-        )
-        if self._federated_query_tool is None:
-            raise BusinessValidationError("Federated query tool is not configured on this worker.")
-        execution_model = apply_tenant_aware_context(
-            semantic_model,
-            context=TenantAwareQueryContext(
-                organization_id=request.organisation_id,
-                execution_connector_id=self._build_unified_execution_connector_id(
-                    organization_id=request.organisation_id
-                ),
-            ),
-            table_connector_map=table_connector_map,
-        )
+            raise BusinessValidationError(
+                "semantic_model_ids must include at least one model id for unified query scope."
+            )
 
         job_record.progress = 45
         job_record.status_message = "Compiling semantic query."
@@ -747,182 +726,24 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
             source="worker",
         )
 
-        try:
-            plan = self._engine.compile(
-                semantic_query,
-                execution_model,
-                dialect="tsql",
-            )
-        except Exception as exc:
-            raise BusinessValidationError(f"Semantic query translation failed: {exc}") from exc
-
-        workflow_payload = self._build_federation_workflow_payload(
-            organization_id=request.organisation_id,
-            semantic_model=execution_model,
-            source_semantic_model=semantic_model,
-            table_connector_map=table_connector_map,
-        )
-        tool_payload = {
-            "workspace_id": str(request.organisation_id),
-            "query": semantic_query.model_dump(by_alias=True, exclude_none=True),
-            "dialect": "tsql",
-            "workflow": workflow_payload,
-            "semantic_model": execution_model.model_dump(by_alias=True, exclude_none=True),
-        }
-
         job_record.progress = 70
         job_record.status_message = "Executing federated semantic query."
+        execution = await self._query_execution_service.execute_unified_query(
+            organization_id=request.organisation_id,
+            project_id=request.project_id,
+            semantic_query=semantic_query,
+            semantic_model_ids=request.semantic_model_ids,
+            joins=request.joins,
+            metrics=request.metrics,
+        )
         await event_emitter.emit(
             event_type="SemanticQueryExecuting",
             message="Executing semantic query SQL.",
             visibility=AgentEventVisibility.public,
             source="worker",
-            details={"sql": plan.sql, "query_scope": request.query_scope},
+            details={"sql": execution.compiled_sql, "query_scope": request.query_scope},
         )
-
-        execution = await self._federated_query_tool.execute_federated_query(tool_payload)
-        data_payload = execution.get("rows", [])
-        if not isinstance(data_payload, list):
-            raise BusinessValidationError("Federated query execution returned an invalid row payload.")
-
-        return UnifiedSemanticQueryResponse(
-            id=uuid.uuid4(),
-            organization_id=request.organisation_id,
-            project_id=request.project_id,
-            connector_id=self._build_unified_execution_connector_id(
-                organization_id=request.organisation_id
-            ),
-            semantic_model_ids=request.semantic_model_ids or [],
-            data=data_payload,
-            annotations=plan.annotations,
-            metadata=plan.metadata,
-        )
-        
-    async def _build_unified_model_and_map(
-        self,
-        *,
-        organization_id: uuid.UUID,
-        semantic_model_ids: list[uuid.UUID],
-        joins: list[Any] | None,
-        metrics: Mapping[str, Any] | None,
-    ) -> tuple[SemanticModel, dict[str, uuid.UUID]]:
-        normalized_model_ids = self._normalize_model_ids(semantic_model_ids)
-        source_models: list[UnifiedSourceModel] = []
-        for semantic_model_id in normalized_model_ids:
-            semantic_model_record = await self._semantic_model_repository.get_for_scope(
-                model_id=semantic_model_id,
-                organization_id=organization_id,
-            )
-            if semantic_model_record is None:
-                raise BusinessValidationError(
-                    f"Semantic model '{semantic_model_id}' not found for unified query."
-                )
-            source_models.append(
-                UnifiedSourceModel(
-                    model=self._load_model_payload(semantic_model_record.content_yaml),
-                    connector_id=semantic_model_record.connector_id,
-                )
-            )
-
-        joins_payload = [
-            join.model_dump(by_alias=True, exclude_none=True)
-            if hasattr(join, "model_dump")
-            else dict(join)
-            for join in (joins or [])
-        ]
-        metrics_payload: dict[str, Any] = {}
-        for metric_name, metric_value in (metrics or {}).items():
-            if hasattr(metric_value, "model_dump"):
-                metrics_payload[metric_name] = metric_value.model_dump(
-                    by_alias=True, exclude_none=True
-                )
-            elif isinstance(metric_value, Mapping):
-                metrics_payload[metric_name] = dict(metric_value)
-            else:
-                metrics_payload[metric_name] = metric_value
-
-        try:
-            return build_unified_semantic_model(
-                source_models=source_models,
-                joins=joins_payload,
-                metrics=metrics_payload or None,
-            )
-        except (SemanticModelError, ValueError) as exc:
-            raise BusinessValidationError(
-                f"Unified semantic model failed validation: {exc}"
-            ) from exc
-
-    @staticmethod
-    def _build_unified_execution_connector_id(*, organization_id: uuid.UUID) -> uuid.UUID:
-        return uuid.uuid5(
-            uuid.NAMESPACE_DNS,
-            f"langbridge-unified-federation:{organization_id}",
-        )
-
-    def _build_federation_workflow_payload(
-        self,
-        *,
-        organization_id: uuid.UUID,
-        semantic_model: SemanticModel,
-        source_semantic_model: SemanticModel,
-        table_connector_map: Mapping[str, uuid.UUID],
-    ) -> dict[str, Any]:
-        workspace_id = str(organization_id)
-        semantic_model_id = str(uuid.uuid4())
-        dataset_id = f"unified_semantic_{organization_id.hex[:12]}_{semantic_model_id[:12]}"
-        tables: dict[str, dict[str, Any]] = {}
-        for table_key, table in semantic_model.tables.items():
-            source_table = source_semantic_model.tables.get(table_key, table)
-            connector_id = table_connector_map.get(table_key)
-            if connector_id is None:
-                raise BusinessValidationError(
-                    f"Missing connector binding for unified table '{table_key}'."
-                )
-            source_catalog = source_table.catalog
-            uses_synthetic_catalog = (
-                source_catalog is None
-                and table.catalog is not None
-            )
-            tables[table_key] = {
-                "table_key": table_key,
-                "source_id": f"source_{connector_id.hex[:12]}",
-                "connector_id": str(connector_id),
-                "schema": table.schema,
-                "table": table.name,
-                "catalog": table.catalog,
-                "metadata": {
-                    "physical_catalog": source_catalog,
-                    "physical_schema": source_table.schema,
-                    "physical_table": source_table.name,
-                    "skip_catalog_in_pushdown": uses_synthetic_catalog,
-                },
-            }
-
-        relationships = [
-            {
-                "name": relationship.name,
-                "left_table": relationship.from_,
-                "right_table": relationship.to,
-                "join_type": relationship.type,
-                "condition": relationship.join_on,
-            }
-            for relationship in (semantic_model.relationships or [])
-        ]
-        return {
-            "id": f"workflow_{dataset_id}",
-            "workspace_id": workspace_id,
-            "dataset": {
-                "id": dataset_id,
-                "name": "Unified Semantic Dataset",
-                "workspace_id": workspace_id,
-                "tables": tables,
-                "relationships": relationships,
-            },
-            "broadcast_threshold_bytes": settings.FEDERATION_BROADCAST_THRESHOLD_BYTES,
-            "partition_count": settings.FEDERATION_PARTITION_COUNT,
-            "max_stage_retries": settings.FEDERATION_STAGE_MAX_RETRIES,
-            "stage_parallelism": settings.FEDERATION_STAGE_PARALLELISM,
-        }
+        return execution.response
 
     async def _create_sql_connector(
         self,
@@ -930,20 +751,12 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         connector_type: ConnectorRuntimeType,
         connector_config: dict[str, Any],
     ) -> SqlConnector:
-        dialect = ConnectorRuntimeTypeSqlDialectMap.get(connector_type)
-        if dialect is None:
-            raise BusinessValidationError(
-                f"Connector type {connector_type.value} does not support SQL operations."
-            )
-        config_factory = get_connector_config_factory(connector_type)
-        config_instance = config_factory.create(connector_config.get("config", {}))
-        sql_connector = self._sql_connector_factory.create_sql_connector(
-            dialect,
-            config_instance,
+        return await self._query_execution_service.create_sql_connector(
+            connector_type=connector_type,
+            connector_config=connector_config,
+            sql_connector_factory=self._sql_connector_factory,
             logger=self._logger,
         )
-        await sql_connector.test_connection()
-        return sql_connector
 
     def _resolve_connector_config(self, connector: ConnectorResponse) -> dict[str, Any]:
         resolved_payload = dict(connector.config or {})

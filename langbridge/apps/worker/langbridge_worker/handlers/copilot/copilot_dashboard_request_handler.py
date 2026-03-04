@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,7 +15,10 @@ from langbridge.packages.common.langbridge_common.contracts.connectors import Co
 from langbridge.packages.common.langbridge_common.contracts.jobs.copilot_dashboard_job import (
     CreateCopilotDashboardJobRequest,
 )
-from langbridge.packages.common.langbridge_common.contracts.semantic import SemanticQueryResponse
+from langbridge.packages.common.langbridge_common.contracts.semantic import (
+    SemanticQueryResponse,
+    UnifiedSemanticQueryResponse,
+)
 from langbridge.packages.common.langbridge_common.db.job import JobRecord, JobStatus
 from langbridge.packages.common.langbridge_common.errors.application_errors import (
     BusinessValidationError,
@@ -34,10 +38,8 @@ from langbridge.packages.common.langbridge_common.repositories.semantic_model_re
     SemanticModelRepository,
 )
 from langbridge.packages.connectors.langbridge_connectors.api import (
-    ConnectorRuntimeTypeSqlDialectMap,
     SqlConnector,
     SqlConnectorFactory,
-    get_connector_config_factory,
 )
 from langbridge.packages.connectors.langbridge_connectors.api.config import ConnectorRuntimeType
 from langbridge.packages.messaging.langbridge_messaging.broker.base import MessageBroker
@@ -46,17 +48,30 @@ from langbridge.packages.messaging.langbridge_messaging.contracts.jobs.copilot_d
     CopilotDashboardRequestMessage,
 )
 from langbridge.packages.messaging.langbridge_messaging.handler import BaseMessageHandler
+from langbridge.apps.worker.langbridge_worker.tools import FederatedQueryTool
 from langbridge.packages.orchestrator.langbridge_orchestrator.definitions import AgentDefinitionModel
 from langbridge.packages.orchestrator.langbridge_orchestrator.llm.provider import create_provider
 from langbridge.packages.orchestrator.langbridge_orchestrator.llm.provider.base import LLMProvider
 from langbridge.packages.semantic.langbridge_semantic.loader import SemanticModelError, load_semantic_model
 from langbridge.packages.semantic.langbridge_semantic.model import SemanticModel
 from langbridge.packages.semantic.langbridge_semantic.query import SemanticQuery, SemanticQueryEngine
+from langbridge.apps.worker.langbridge_worker.semantic_query_execution_service import (
+    SemanticQueryExecutionService,
+    UnifiedModelConfig,
+)
 
 
 VALID_CHART_TYPES = {"table", "bar", "line", "pie"}
 VALID_WIDGET_SIZES = {"small", "wide", "tall", "large"}
 SQL_TOOL_NAMES = {"sql", "sql_analyst", "sql_analytics"}
+
+
+@dataclass(frozen=True)
+class _QueryRuntime:
+    semantic_model_record: Any
+    semantic_model: SemanticModel
+    sql_connector: SqlConnector | None
+    unified_config: UnifiedModelConfig | None
 
 
 class _CopilotFilter(BaseModel):
@@ -107,6 +122,7 @@ class CopilotDashboardRequestHandler(BaseMessageHandler):
         semantic_model_repository: SemanticModelRepository,
         connector_repository: ConnectorRepository,
         message_broker: MessageBroker,
+        federated_query_tool: FederatedQueryTool | None = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
         self._job_repository = job_repository
@@ -115,8 +131,14 @@ class CopilotDashboardRequestHandler(BaseMessageHandler):
         self._semantic_model_repository = semantic_model_repository
         self._connector_repository = connector_repository
         self._message_broker = message_broker
+        self._federated_query_tool = federated_query_tool
         self._engine = SemanticQueryEngine()
         self._sql_connector_factory = SqlConnectorFactory()
+        self._query_execution_service = SemanticQueryExecutionService(
+            semantic_model_repository=self._semantic_model_repository,
+            federated_query_tool=self._federated_query_tool,
+            logger=self._logger,
+        )
 
     async def handle(self, payload: CopilotDashboardRequestMessage) -> None:
         self._logger.info("Received BI copilot dashboard job %s", payload.job_id)
@@ -158,7 +180,7 @@ class CopilotDashboardRequestHandler(BaseMessageHandler):
         try:
             request = self._parse_job_payload(job_record)
             agent_definition, llm_provider = await self._load_agent_and_provider(request)
-            semantic_model_record, semantic_model, sql_connector = await self._load_query_runtime(request)
+            query_runtime = await self._load_query_runtime(request)
             self._validate_agent_semantic_binding(agent_definition, request.semantic_model_id)
 
             job_record.progress = 25
@@ -173,7 +195,7 @@ class CopilotDashboardRequestHandler(BaseMessageHandler):
             dashboard_plan = await self._build_dashboard_plan(
                 llm_provider=llm_provider,
                 request=request,
-                semantic_model=semantic_model,
+                semantic_model=query_runtime.semantic_model,
             )
 
             global_filters = self._normalize_filters(dashboard_plan.global_filters)
@@ -182,7 +204,7 @@ class CopilotDashboardRequestHandler(BaseMessageHandler):
                 max_widgets=request.max_widgets,
             )
             if not widgets:
-                widgets = self._fallback_widgets_from_model(semantic_model)
+                widgets = self._fallback_widgets_from_model(query_runtime.semantic_model)
 
             job_record.progress = 40
             job_record.status_message = "Building widget previews."
@@ -213,9 +235,10 @@ class CopilotDashboardRequestHandler(BaseMessageHandler):
                     try:
                         query_result = await self._execute_widget_query(
                             request=request,
-                            semantic_model_record_id=semantic_model_record.id,
-                            sql_connector=sql_connector,
-                            semantic_model=semantic_model,
+                            semantic_model_record_id=query_runtime.semantic_model_record.id,
+                            sql_connector=query_runtime.sql_connector,
+                            semantic_model=query_runtime.semantic_model,
+                            unified_config=query_runtime.unified_config,
                             widget=widget,
                             global_filters=global_filters,
                         )
@@ -389,7 +412,7 @@ class CopilotDashboardRequestHandler(BaseMessageHandler):
     async def _load_query_runtime(
         self,
         request: CreateCopilotDashboardJobRequest,
-    ) -> tuple[Any, SemanticModel, SqlConnector]:
+    ) -> _QueryRuntime:
         semantic_model_record = await self._semantic_model_repository.get_for_scope(
             model_id=request.semantic_model_id,
             organization_id=request.organisation_id,
@@ -401,6 +424,17 @@ class CopilotDashboardRequestHandler(BaseMessageHandler):
             semantic_model = load_semantic_model(semantic_model_record.content_yaml)
         except SemanticModelError as exc:
             raise BusinessValidationError(f"Semantic model failed validation: {exc}") from exc
+
+        unified_config = SemanticQueryExecutionService.parse_unified_model_config_from_record(
+            semantic_model_record
+        )
+        if unified_config is not None:
+            return _QueryRuntime(
+                semantic_model_record=semantic_model_record,
+                semantic_model=semantic_model,
+                sql_connector=None,
+                unified_config=unified_config,
+            )
 
         connector = await self._connector_repository.get_by_id(semantic_model_record.connector_id)
         if connector is None:
@@ -422,7 +456,12 @@ class CopilotDashboardRequestHandler(BaseMessageHandler):
         if not isinstance(sql_connector, SqlConnector):
             raise BusinessValidationError("Only SQL connectors are supported for BI copilot.")
 
-        return semantic_model_record, semantic_model, sql_connector
+        return _QueryRuntime(
+            semantic_model_record=semantic_model_record,
+            semantic_model=semantic_model,
+            sql_connector=sql_connector,
+            unified_config=None,
+        )
 
     async def _build_dashboard_plan(
         self,
@@ -641,13 +680,33 @@ Keep widgets practical and diverse, max 6 widgets.
         *,
         request: CreateCopilotDashboardJobRequest,
         semantic_model_record_id: uuid.UUID,
-        sql_connector: SqlConnector,
+        sql_connector: SqlConnector | None,
         semantic_model: SemanticModel,
+        unified_config: UnifiedModelConfig | None,
         widget: dict[str, Any],
         global_filters: list[dict[str, Any]],
-    ) -> SemanticQueryResponse:
-        query_payload = self._build_query_payload(widget=widget, global_filters=global_filters)
+    ) -> SemanticQueryResponse | UnifiedSemanticQueryResponse:
+        query_payload = SemanticQueryExecutionService.build_widget_query_payload(
+            widget=widget,
+            global_filters=global_filters,
+        )
         semantic_query = SemanticQuery.model_validate(query_payload)
+
+        if unified_config is not None:
+            execution = await self._query_execution_service.execute_unified_query(
+                organization_id=request.organisation_id,
+                project_id=request.project_id,
+                semantic_query=semantic_query,
+                semantic_model_ids=unified_config.semantic_model_ids,
+                joins=unified_config.joins,
+                metrics=unified_config.metrics,
+            )
+            return execution.response
+
+        if sql_connector is None:
+            raise BusinessValidationError(
+                "A SQL connector is required for non-unified copilot preview execution."
+            )
 
         rewrite_expression = None
         if sql_connector.EXPRESSION_REWRITE:
@@ -679,110 +738,18 @@ Keep widgets practical and diverse, max 6 widgets.
             metadata=plan.metadata,
         )
 
-    def _build_query_payload(
-        self,
-        *,
-        widget: dict[str, Any],
-        global_filters: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        time_dimensions = []
-        time_dimension = str(widget.get("timeDimension") or "").strip()
-        if time_dimension:
-            time_dimensions.append(
-                {
-                    "dimension": time_dimension,
-                    "granularity": str(widget.get("timeGrain") or "").strip() or None,
-                    "dateRange": self._resolve_widget_time_date_range(widget),
-                }
-            )
-
-        all_filters = [*global_filters, *list(widget.get("filters") or [])]
-        filters_payload = self._to_semantic_filters(all_filters)
-
-        order_payload = [
-            {entry["member"]: entry["direction"]}
-            for entry in list(widget.get("orderBys") or [])
-            if isinstance(entry, dict) and entry.get("member")
-        ]
-
-        return {
-            "measures": list(widget.get("measures") or []),
-            "dimensions": list(widget.get("dimensions") or []),
-            "timeDimensions": time_dimensions,
-            "filters": filters_payload,
-            "order": order_payload or None,
-            "limit": int(widget.get("limit") or 500),
-        }
-
-    @staticmethod
-    def _resolve_widget_time_date_range(widget: dict[str, Any]) -> str | list[str] | None:
-        preset = str(widget.get("timeRangePreset") or "").strip()
-        if not preset or preset == "no_filter":
-            return None
-        if preset in {"today", "yesterday", "last_7_days", "last_30_days", "month_to_date", "year_to_date"}:
-            return preset
-
-        from_date = str(widget.get("timeRangeFrom") or "").strip()
-        to_date = str(widget.get("timeRangeTo") or "").strip()
-        if preset == "custom_between":
-            if from_date and to_date:
-                return [from_date, to_date]
-            return None
-        if preset == "custom_before":
-            date = from_date or to_date
-            return f"before:{date}" if date else None
-        if preset == "custom_after":
-            date = from_date or to_date
-            return f"after:{date}" if date else None
-        if preset == "custom_on":
-            date = from_date or to_date
-            return f"on:{date}" if date else None
-        return None
-
-    @staticmethod
-    def _to_semantic_filters(filters: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        payload: list[dict[str, Any]] = []
-        for filter_entry in filters:
-            member = str(filter_entry.get("member") or "").strip()
-            if not member:
-                continue
-            operator = str(filter_entry.get("operator") or "equals").strip().lower() or "equals"
-            if operator in {"set", "notset"}:
-                payload.append({"member": member, "operator": operator})
-                continue
-
-            raw_values = filter_entry.get("values")
-            values: list[str] = []
-            if isinstance(raw_values, str):
-                values = [part.strip() for part in raw_values.split(",") if part.strip()]
-            elif isinstance(raw_values, list):
-                values = [str(part).strip() for part in raw_values if str(part).strip()]
-
-            if not values:
-                continue
-            payload.append({"member": member, "operator": operator, "values": values})
-        return payload
-
     async def _create_sql_connector(
         self,
         *,
         connector_type: ConnectorRuntimeType,
         connector_config: dict[str, Any],
     ) -> SqlConnector:
-        dialect = ConnectorRuntimeTypeSqlDialectMap.get(connector_type)
-        if dialect is None:
-            raise BusinessValidationError(
-                f"Connector type {connector_type.value} does not support SQL operations."
-            )
-        config_factory = get_connector_config_factory(connector_type)
-        config_instance = config_factory.create(connector_config.get("config", {}))
-        sql_connector = self._sql_connector_factory.create_sql_connector(
-            dialect,
-            config_instance,
+        return await self._query_execution_service.create_sql_connector(
+            connector_type=connector_type,
+            connector_config=connector_config,
+            sql_connector_factory=self._sql_connector_factory,
             logger=self._logger,
         )
-        await sql_connector.test_connection()
-        return sql_connector
 
     @staticmethod
     def _build_summary(
