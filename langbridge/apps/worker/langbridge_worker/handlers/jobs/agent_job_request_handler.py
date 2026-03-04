@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import logging
 import uuid
@@ -63,6 +61,7 @@ from langbridge.packages.orchestrator.langbridge_orchestrator.runtime import (
     AgentOrchestratorFactory,
 )
 from langbridge.packages.orchestrator.langbridge_orchestrator.agents.supervisor import MemoryManager
+from langbridge.apps.worker.langbridge_worker.tools import FederatedQueryTool
 
 
 class AgentJobRequestHandler(BaseMessageHandler):
@@ -79,6 +78,7 @@ class AgentJobRequestHandler(BaseMessageHandler):
         thread_message_repository: ThreadMessageRepository,
         memory_repository: ConversationMemoryRepository,
         message_broker: MessageBroker,
+        federated_query_tool: FederatedQueryTool | None = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
         self._job_repository = job_repository
@@ -91,6 +91,7 @@ class AgentJobRequestHandler(BaseMessageHandler):
         self._agent_orchestrator_factory = AgentOrchestratorFactory(
             semantic_model_store=semantic_model_store,
             connector_store=connector_store,
+            federated_query_tool=federated_query_tool,
         )
 
     async def handle(self, payload: AgentJobRequestMessage) -> None:

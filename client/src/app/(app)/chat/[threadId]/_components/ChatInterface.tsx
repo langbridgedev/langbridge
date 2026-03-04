@@ -47,6 +47,7 @@ type ConversationTurn = {
   status: 'pending' | 'ready' | 'error';
   jobId?: string;
   jobStatus?: string;
+  awaitingFinalPayload?: boolean;
   events?: AgentJobEvent[];
   internalEvents?: AgentJobEvent[];
   hasInternalEvents?: boolean;
@@ -288,6 +289,7 @@ export function ChatInterface({ threadId, organizationId }: ChatInterfaceProps) 
                   status: 'pending',
                   jobId: data.jobId,
                   jobStatus: data.jobStatus ?? 'queued',
+                  awaitingFinalPayload: false,
                   events: [],
                   hasInternalEvents: false,
                   thinkingBreakdown: null,
@@ -421,6 +423,7 @@ export function ChatInterface({ threadId, organizationId }: ChatInterfaceProps) 
         createdAt,
         status: 'pending',
         jobStatus: 'queued',
+        awaitingFinalPayload: false,
         events: [],
         internalEvents: [],
         showThinking: false,
@@ -563,7 +566,10 @@ export function ChatInterface({ threadId, organizationId }: ChatInterfaceProps) 
 
   useEffect(() => {
     const pendingTurns = turns.filter(
-      (turn) => turn.status === 'pending' && turn.jobId && !isTerminalJobStatus(turn.jobStatus),
+      (turn) =>
+        turn.status === 'pending' &&
+        turn.jobId &&
+        (!isTerminalJobStatus(turn.jobStatus) || Boolean(turn.awaitingFinalPayload)),
     );
     if (pendingTurns.length === 0) {
       return;
@@ -595,6 +601,10 @@ export function ChatInterface({ threadId, organizationId }: ChatInterfaceProps) 
               const errorPayload = asRecord(job.error);
               const isFailed = job.status === 'failed' || job.status === 'cancelled';
               const isReady = job.status === 'succeeded';
+              const hasFinalPayload = job.finalResponse !== null && job.finalResponse !== undefined;
+              const finishedAtMs = job.finishedAt ? Date.parse(job.finishedAt) : Number.NaN;
+              const finalizeWaitExpired =
+                Number.isFinite(finishedAtMs) && Date.now() - finishedAtMs > 10_000;
 
               setTurns((previous) =>
                 previous.map((currentTurn) => {
@@ -607,6 +617,7 @@ export function ChatInterface({ threadId, organizationId }: ChatInterfaceProps) 
                       ...currentTurn,
                       status: 'error',
                       jobStatus: job.status,
+                      awaitingFinalPayload: false,
                       events: job.events ?? currentTurn.events ?? [],
                       hasInternalEvents: Boolean(job.hasInternalEvents),
                       errorMessage: getErrorMessage(errorPayload?.message ?? errorPayload ?? 'Request failed.'),
@@ -614,10 +625,22 @@ export function ChatInterface({ threadId, organizationId }: ChatInterfaceProps) 
                   }
 
                   if (isReady) {
+                    if (!hasFinalPayload && !finalizeWaitExpired) {
+                      return {
+                        ...currentTurn,
+                        status: 'pending',
+                        jobStatus: job.status,
+                        awaitingFinalPayload: true,
+                        events: job.events ?? currentTurn.events ?? [],
+                        hasInternalEvents: Boolean(job.hasInternalEvents),
+                      };
+                    }
+
                     return {
                       ...currentTurn,
                       status: 'ready',
                       jobStatus: job.status,
+                      awaitingFinalPayload: false,
                       events: job.events ?? currentTurn.events ?? [],
                       hasInternalEvents: Boolean(job.hasInternalEvents),
                       summary: job.finalResponse?.summary ?? currentTurn.summary ?? 'Response completed.',
@@ -630,13 +653,14 @@ export function ChatInterface({ threadId, organizationId }: ChatInterfaceProps) 
                   return {
                     ...currentTurn,
                     jobStatus: job.status,
+                    awaitingFinalPayload: false,
                     events: job.events ?? currentTurn.events ?? [],
                     hasInternalEvents: Boolean(job.hasInternalEvents),
                   };
                 }),
               );
 
-              if (isReady || isFailed) {
+              if ((isReady && (hasFinalPayload || finalizeWaitExpired)) || isFailed) {
                 shouldRefreshHistory = true;
               }
             } catch {

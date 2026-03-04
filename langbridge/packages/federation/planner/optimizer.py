@@ -164,6 +164,15 @@ def _build_scan_sql(
 ) -> str:
     metadata = binding.metadata if isinstance(getattr(binding, "metadata", None), dict) else {}
     physical_sql = metadata.get("physical_sql")
+    normalized_filters = [
+        _rewrite_filter_for_scan(
+            expression=expression,
+            alias=alias,
+            binding=binding,
+        )
+        for expression in pushed_filters
+    ]
+
     if isinstance(physical_sql, str) and physical_sql.strip():
         sql_text = physical_sql.strip().rstrip(";")
         alias_identifier = exp.Identifier(this=alias, quoted=True).sql(dialect=dialect)
@@ -176,8 +185,8 @@ def _build_scan_sql(
                 projected.append(f"{alias_identifier}.{column_identifier}")
             select_clause = ", ".join(projected)
         query_sql = f"SELECT {select_clause} FROM ({sql_text}) AS {alias_identifier}"
-        if pushed_filters:
-            where_sql = " AND ".join(expression.sql(dialect=dialect) for expression in pushed_filters)
+        if normalized_filters:
+            where_sql = " AND ".join(expression.sql(dialect=dialect) for expression in normalized_filters)
             query_sql = f"{query_sql} WHERE {where_sql}"
         if pushed_limit is not None:
             query_sql, _ = enforce_preview_limit(query_sql, max_rows=pushed_limit, dialect=dialect)
@@ -209,13 +218,66 @@ def _build_scan_sql(
         ]
         select_expr = exp.select(*columns).from_(table_ref)
 
-    if pushed_filters:
-        select_expr = select_expr.where(exp.and_(*pushed_filters))
+    if normalized_filters:
+        select_expr = select_expr.where(exp.and_(*normalized_filters))
 
     if pushed_limit is not None:
         select_expr = select_expr.limit(pushed_limit)
 
     return select_expr.sql(dialect=dialect)
+
+
+def _rewrite_filter_for_scan(
+    *,
+    expression: exp.Expression,
+    alias: str,
+    binding,
+) -> exp.Expression:
+    metadata = binding.metadata if isinstance(getattr(binding, "metadata", None), dict) else {}
+    physical_catalog = metadata.get("physical_catalog", binding.catalog)
+    physical_schema = metadata.get("physical_schema", binding.schema)
+    physical_table = metadata.get("physical_table", binding.table)
+
+    valid_tables = {
+        str(alias).strip().lower(),
+        str(binding.table_key).strip().lower(),
+        str(binding.table).strip().lower(),
+        str(physical_table).strip().lower(),
+    }
+    valid_schemas = {
+        str(schema).strip().lower()
+        for schema in (binding.schema, physical_schema)
+        if str(schema).strip()
+    }
+    valid_catalogs = {
+        str(catalog).strip().lower()
+        for catalog in (binding.catalog, physical_catalog)
+        if str(catalog).strip()
+    }
+
+    def _replace(node: exp.Expression) -> exp.Expression:
+        if not isinstance(node, exp.Column):
+            return node
+
+        table_name = str(node.table or "").strip().lower()
+        schema_name = str(node.db or "").strip().lower() or None
+        catalog_name = str(node.catalog or "").strip().lower() or None
+        should_rebind = False
+        if table_name:
+            should_rebind = table_name in valid_tables
+            if should_rebind and schema_name is not None and valid_schemas and schema_name not in valid_schemas:
+                should_rebind = False
+            if should_rebind and catalog_name is not None and valid_catalogs and catalog_name not in valid_catalogs:
+                should_rebind = False
+
+        rewritten = node.copy()
+        if should_rebind:
+            rewritten.set("table", exp.Identifier(this=alias, quoted=False))
+        rewritten.set("db", None)
+        rewritten.set("catalog", None)
+        return rewritten
+
+    return expression.transform(_replace)
 
 
 def _binding_requires_scan_level_rewrite(binding) -> bool:

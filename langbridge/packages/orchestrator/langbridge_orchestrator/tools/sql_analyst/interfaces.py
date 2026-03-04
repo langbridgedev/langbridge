@@ -73,3 +73,14 @@ class AnalystQueryResponse(BaseModel):
     result: QueryResult | None = None
     error: str | None = None
     execution_time_ms: int | None = None
+
+
+class FederatedSqlExecutor(Protocol):
+    async def execute_sql(
+        self,
+        *,
+        sql: str,
+        dialect: str,
+        max_rows: int | None = None,
+    ) -> QueryResult:
+        ...

@@ -43,30 +43,48 @@ def logical_plan_from_sql(
     parsed = parse_sql(sql, dialect=dialect)
     select_expr = parsed.select
 
-    table_map: dict[str, TableRef] = {}
+    cte_names = _extract_cte_names(select_expr)
+    has_cte = bool(cte_names)
 
-    base_table = select_expr.args.get("from")
-    if base_table is None or base_table.this is None:
-        raise QueryParsingError("Query must include a FROM clause.")
-    base_alias, base_binding = _resolve_table(base_table.this, virtual_dataset)
-    table_map[base_alias] = _table_ref(alias=base_alias, binding=base_binding)
-
-    joins: list[JoinRef] = []
-    for join in select_expr.args.get("joins") or []:
-        if not isinstance(join, exp.Join):
-            continue
-        alias, binding = _resolve_table(join.this, virtual_dataset)
-        table_map[alias] = _table_ref(alias=alias, binding=binding)
-        join_kind = _join_kind(join)
-        on_expr = join.args.get("on")
-        joins.append(
-            JoinRef(
-                left_alias=joins[-1].right_alias if joins else base_alias,
-                right_alias=alias,
-                join_type=join_kind,
-                on_sql=on_expr.sql(dialect=dialect) if on_expr is not None else "1=1",
-            )
+    table_map: dict[str, TableRef]
+    base_alias: str
+    joins: list[JoinRef]
+    if has_cte:
+        table_map = _resolve_physical_tables(
+            expression=parsed.expression,
+            virtual_dataset=virtual_dataset,
+            cte_names=cte_names,
         )
+        if not table_map:
+            raise QueryParsingError(
+                f"Query does not reference any mapped physical tables in virtual dataset '{virtual_dataset.id}'."
+            )
+        base_alias = next(iter(table_map.keys()))
+        joins = []
+    else:
+        table_map = {}
+        base_table = select_expr.args.get("from")
+        if base_table is None or base_table.this is None:
+            raise QueryParsingError("Query must include a FROM clause.")
+        base_alias, base_binding = _resolve_table(base_table.this, virtual_dataset)
+        table_map[base_alias] = _table_ref(alias=base_alias, binding=base_binding)
+
+        joins = []
+        for join in select_expr.args.get("joins") or []:
+            if not isinstance(join, exp.Join):
+                continue
+            alias, binding = _resolve_table(join.this, virtual_dataset)
+            table_map[alias] = _table_ref(alias=alias, binding=binding)
+            join_kind = _join_kind(join)
+            on_expr = join.args.get("on")
+            joins.append(
+                JoinRef(
+                    left_alias=joins[-1].right_alias if joins else base_alias,
+                    right_alias=alias,
+                    join_type=join_kind,
+                    on_sql=on_expr.sql(dialect=dialect) if on_expr is not None else "1=1",
+                )
+            )
 
     where_expr = select_expr.args.get("where")
     having_expr = select_expr.args.get("having")
@@ -85,7 +103,7 @@ def logical_plan_from_sql(
         order_by_sql=[item.sql(dialect=dialect) for item in (order_expr.expressions if isinstance(order_expr, exp.Order) else [])],
         limit=_extract_int(select_expr.args.get("limit")),
         offset=_extract_int(select_expr.args.get("offset")),
-        has_cte=select_expr.args.get("with") is not None,
+        has_cte=has_cte,
     )
     return logical_plan, parsed.expression
 
@@ -149,7 +167,15 @@ def rewrite_tables_to_stage_sql(
     *,
     stage_tables: dict[str, str],
 ) -> str:
+    alias_lookup = _build_table_alias_lookup(expression)
+
     def _replace(node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.Column):
+            return _rewrite_column_for_stage(
+                column=node,
+                stage_tables=stage_tables,
+                alias_lookup=alias_lookup,
+            )
         if not isinstance(node, exp.Table):
             return node
         alias = node.alias_or_name
@@ -160,6 +186,78 @@ def rewrite_tables_to_stage_sql(
 
     transformed = expression.transform(_replace)
     return transformed.sql(dialect="duckdb")
+
+
+def _build_table_alias_lookup(expression: exp.Expression) -> dict[str, str]:
+    candidate_aliases: dict[str, set[str]] = {}
+
+    def _add(key: str | None, alias: str | None) -> None:
+        if not key or not alias:
+            return
+        normalized_key = key.strip().lower()
+        normalized_alias = alias.strip()
+        if not normalized_key or not normalized_alias:
+            return
+        candidate_aliases.setdefault(normalized_key, set()).add(normalized_alias)
+
+    for table in expression.find_all(exp.Table):
+        alias = str(table.alias_or_name or "").strip()
+        if not alias:
+            continue
+
+        table_name = str(table.name or "").strip()
+        schema_name = str(table.db or "").strip()
+        catalog_name = str(table.catalog or "").strip()
+
+        _add(alias, alias)
+        _add(table_name, alias)
+        if schema_name and table_name:
+            _add(f"{schema_name}.{table_name}", alias)
+        if catalog_name and schema_name and table_name:
+            _add(f"{catalog_name}.{schema_name}.{table_name}", alias)
+
+    return {
+        key: next(iter(aliases))
+        for key, aliases in candidate_aliases.items()
+        if len(aliases) == 1
+    }
+
+
+def _rewrite_column_for_stage(
+    *,
+    column: exp.Column,
+    stage_tables: dict[str, str],
+    alias_lookup: dict[str, str],
+) -> exp.Column:
+    table_name = str(column.table or "").strip()
+    schema_name = str(column.db or "").strip()
+    catalog_name = str(column.catalog or "").strip()
+
+    resolved_alias: str | None = None
+    candidates: list[str] = []
+    if table_name:
+        candidates.append(table_name)
+    if schema_name and table_name:
+        candidates.append(f"{schema_name}.{table_name}")
+    if catalog_name and schema_name and table_name:
+        candidates.append(f"{catalog_name}.{schema_name}.{table_name}")
+
+    for candidate in candidates:
+        normalized_candidate = candidate.strip().lower()
+        alias = alias_lookup.get(normalized_candidate)
+        if alias:
+            resolved_alias = alias
+            break
+
+    if resolved_alias is None and table_name and table_name in stage_tables:
+        resolved_alias = table_name
+
+    rewritten = column.copy()
+    if resolved_alias:
+        rewritten.set("table", exp.Identifier(this=resolved_alias, quoted=False))
+    rewritten.set("db", None)
+    rewritten.set("catalog", None)
+    return rewritten
 
 
 def _extract_select(expression: exp.Expression) -> exp.Select | None:
@@ -173,6 +271,53 @@ def _extract_select(expression: exp.Expression) -> exp.Select | None:
         body = expression.this
         return body if isinstance(body, exp.Select) else None
     return expression.find(exp.Select)
+
+
+def _extract_cte_names(select_expr: exp.Select) -> set[str]:
+    names: set[str] = set()
+    with_clause = select_expr.args.get("with")
+    if not isinstance(with_clause, exp.With):
+        return names
+
+    for entry in with_clause.expressions or []:
+        alias = str(getattr(entry, "alias_or_name", "") or "").strip()
+        if alias:
+            names.add(alias.lower())
+    return names
+
+
+def _resolve_physical_tables(
+    *,
+    expression: exp.Expression,
+    virtual_dataset: VirtualDataset,
+    cte_names: set[str],
+) -> dict[str, TableRef]:
+    table_map: dict[str, TableRef] = {}
+    for table_expression in expression.find_all(exp.Table):
+        table_name = str(table_expression.name or "").strip()
+        schema_name = str(table_expression.db or "").strip()
+        catalog_name = str(table_expression.catalog or "").strip()
+        if (
+            table_name
+            and table_name.lower() in cte_names
+            and not schema_name
+            and not catalog_name
+        ):
+            continue
+
+        alias, binding = _resolve_table(table_expression, virtual_dataset)
+        candidate = _table_ref(alias=alias, binding=binding)
+        existing = table_map.get(alias)
+        if existing is None:
+            table_map[alias] = candidate
+            continue
+        if existing.table_key != candidate.table_key:
+            raise QueryParsingError(
+                f"Alias '{alias}' resolves to multiple physical tables in virtual dataset '{virtual_dataset.id}'. "
+                "Use explicit table aliases to disambiguate."
+            )
+
+    return table_map
 
 
 def _resolve_table(

@@ -9,20 +9,26 @@ import logging
 import math
 import re
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 
 import sqlglot
+from sqlglot import exp
 
 from langbridge.packages.common.langbridge_common.interfaces.agent_events import (
     AgentEventVisibility,
     IAgentEventEmitter,
+)
+from langbridge.packages.common.langbridge_common.utils.sql import (
+    enforce_preview_limit,
 )
 from langbridge.packages.connectors.langbridge_connectors.api import SqlConnector
 from langbridge.packages.orchestrator.langbridge_orchestrator.llm.provider import LLMProvider
 from .interfaces import (
     AnalystQueryRequest,
     AnalystQueryResponse,
+    FederatedSqlExecutor,
     QueryResult,
     SemanticModel,
 )
@@ -61,6 +67,18 @@ class VectorMatch:
     source_text: str
 
 
+@dataclass(slots=True)
+class SourceAnalysis:
+    source_ids: set[str]
+    unresolved_tables: list[str]
+    ambiguous_tables: list[str]
+    has_catalog_qualified_refs: bool = False
+
+    @property
+    def is_cross_source(self) -> bool:
+        return len(self.source_ids) > 1
+
+
 VECTOR_SIMILARITY_THRESHOLD = 0.83
 
 
@@ -78,13 +96,16 @@ class SqlAnalystTool:
         *,
         llm: LLMProvider,
         semantic_model: SemanticModelLike,
-        connector: SqlConnector,
+        connector: SqlConnector | None,
         dialect: str,
         logger: Optional[logging.Logger] = None,
         llm_temperature: float = 0.0,
         priority: int = 0,
         embedder: Optional[EmbeddingProvider] = None,
         event_emitter: Optional[IAgentEventEmitter] = None,
+        federated_sql_executor: FederatedSqlExecutor | None = None,
+        table_source_map: dict[str, str] | None = None,
+        prefer_federated_execution: bool = False,
     ) -> None:
         self.llm = llm
         self.semantic_model = semantic_model
@@ -97,6 +118,19 @@ class SqlAnalystTool:
         self.embedder = embedder
         self._vector_columns = self._extract_vector_columns()
         self._event_emitter = event_emitter
+        self._federated_sql_executor = federated_sql_executor
+        self._prefer_federated_execution = bool(prefer_federated_execution)
+        self._table_source_map = {
+            str(table_key).strip().lower(): str(source_id).strip()
+            for table_key, source_id in (table_source_map or {}).items()
+            if str(table_key).strip() and str(source_id).strip()
+        }
+        (
+            self._sources_by_table_key,
+            self._sources_by_catalog_schema_table,
+            self._sources_by_schema_table,
+            self._sources_by_table_name,
+        ) = self._build_table_source_indexes()
 
     @property
     def name(self) -> str:
@@ -131,6 +165,130 @@ class SqlAnalystTool:
                         )
                     )
         return catalog
+
+    def _build_table_source_indexes(
+        self,
+    ) -> tuple[
+        dict[str, set[str]],
+        dict[tuple[str | None, str | None, str], set[str]],
+        dict[tuple[str | None, str], set[str]],
+        dict[str, set[str]],
+    ]:
+        by_table_key: dict[str, set[str]] = defaultdict(set)
+        by_catalog_schema_table: dict[tuple[str | None, str | None, str], set[str]] = defaultdict(set)
+        by_schema_table: dict[tuple[str | None, str], set[str]] = defaultdict(set)
+        by_table_name: dict[str, set[str]] = defaultdict(set)
+
+        for table_key, table in self.semantic_model.tables.items():
+            source_id = self._table_source_map.get(str(table_key).strip().lower())
+            if not source_id:
+                continue
+            table_name = str(table.name or "").strip().lower()
+            if not table_name:
+                continue
+            schema_name = str(table.schema or "").strip().lower() or None
+            catalog_name = str(table.catalog or "").strip().lower() or None
+
+            by_table_key[str(table_key).strip().lower()].add(source_id)
+            by_catalog_schema_table[(catalog_name, schema_name, table_name)].add(source_id)
+            by_schema_table[(schema_name, table_name)].add(source_id)
+            by_table_name[table_name].add(source_id)
+
+        return by_table_key, by_catalog_schema_table, by_schema_table, by_table_name
+
+    def _analyze_query_sources(
+        self,
+        *,
+        sql: str,
+        dialect: str,
+    ) -> SourceAnalysis:
+        try:
+            expression = sqlglot.parse_one(sql, read=dialect)
+        except sqlglot.ParseError:
+            return SourceAnalysis(
+                source_ids=set(),
+                unresolved_tables=[],
+                ambiguous_tables=[],
+                has_catalog_qualified_refs=False,
+            )
+
+        resolved_sources: set[str] = set()
+        unresolved_tables: list[str] = []
+        ambiguous_tables: list[str] = []
+        has_catalog_qualified_refs = False
+        track_sources = bool(self._table_source_map)
+
+        for table in expression.find_all(exp.Table):
+            if table.catalog:
+                has_catalog_qualified_refs = True
+            if not track_sources:
+                continue
+            candidate_sources = self._resolve_sources_for_table(table)
+            if not candidate_sources:
+                unresolved_tables.append(table.sql())
+                continue
+            if len(candidate_sources) > 1:
+                ambiguous_tables.append(table.sql())
+                continue
+            resolved_sources.update(candidate_sources)
+
+        if not has_catalog_qualified_refs:
+            for column in expression.find_all(exp.Column):
+                if column.catalog:
+                    has_catalog_qualified_refs = True
+                    break
+
+        return SourceAnalysis(
+            source_ids=resolved_sources,
+            unresolved_tables=unresolved_tables,
+            ambiguous_tables=ambiguous_tables,
+            has_catalog_qualified_refs=has_catalog_qualified_refs,
+        )
+
+    def _resolve_sources_for_table(self, table: exp.Table) -> set[str]:
+        table_name = str(table.name or "").strip().lower()
+        if not table_name:
+            return set()
+
+        table_key_sources = self._sources_by_table_key.get(table_name, set())
+        if table_key_sources:
+            return set(table_key_sources)
+
+        schema_name = str(table.db or "").strip().lower() or None
+        catalog_name = str(table.catalog or "").strip().lower() or None
+
+        candidates: set[str] = set()
+        if catalog_name is not None:
+            candidates.update(
+                self._sources_by_catalog_schema_table.get(
+                    (catalog_name, schema_name, table_name),
+                    set(),
+                )
+            )
+            if candidates:
+                return candidates
+
+        if schema_name is not None:
+            candidates.update(self._sources_by_schema_table.get((schema_name, table_name), set()))
+            if candidates:
+                return candidates
+
+        return set(self._sources_by_table_name.get(table_name, set()))
+
+    def _resolve_execution_route(self, source_analysis: SourceAnalysis) -> tuple[bool, str]:
+        if self._federated_sql_executor is None:
+            return False, "federation_unavailable"
+
+        if self._prefer_federated_execution:
+            return True, "prefer_federated_execution"
+
+        if source_analysis.is_cross_source:
+            return True, "cross_source_detected"
+
+        if source_analysis.has_catalog_qualified_refs:
+            return True, "catalog_qualified_sql_detected"
+
+        return False, "single_source_detected"
 
     def run(self, query_request: AnalystQueryRequest) -> AnalystQueryResponse:
         """
@@ -221,30 +379,99 @@ class SqlAnalystTool:
                 execution_time_ms=elapsed,
             )
 
-        try:
-            self.logger.debug(
-                f"Transpiling {canonical_sql} - postgres -> {self.dialect}"
+        source_analysis = self._analyze_query_sources(sql=canonical_sql, dialect="postgres")
+        routed_to_federation, route_reason = self._resolve_execution_route(source_analysis)
+
+        self.logger.info(
+            "sql_tool_route model=%s routed_to_federation=%s reason=%s source_count=%d",
+            self.name,
+            routed_to_federation,
+            route_reason,
+            len(source_analysis.source_ids),
+        )
+        await self._emit_event(
+            event_type="SqlExecutionRouting",
+            message="Resolved SQL execution route.",
+            visibility=AgentEventVisibility.internal,
+            details={
+                "model": self.name,
+                "routed_to_federation": routed_to_federation,
+                "route_reason": route_reason,
+                "detected_source_ids": sorted(source_analysis.source_ids),
+                "unresolved_tables": source_analysis.unresolved_tables,
+                "ambiguous_tables": source_analysis.ambiguous_tables,
+            },
+        )
+
+        if source_analysis.is_cross_source and self._federated_sql_executor is None:
+            elapsed = int((time.perf_counter() - start_ts) * 1000)
+            error = (
+                "Cross-source query detected for this SQL tool, but federated execution is not configured. "
+                "Enable federation for this unified model or query a single source."
             )
-            transpiled_sql = sqlglot.transpile(
-                canonical_sql,
-                read="postgres",
-                write=self.dialect,
-            )[0]
-            self.logger.info("Successful Transpile %s", transpiled_sql)
             await self._emit_event(
-                event_type="SqlTranspiled",
-                message="SQL transpiled for connector dialect.",
-                visibility=AgentEventVisibility.internal,
+                event_type="SqlExecutionRoutingFailed",
+                message="Cross-source SQL requires federated execution.",
+                visibility=AgentEventVisibility.public,
                 details={
                     "model": self.name,
-                    "dialect": self.dialect,
-                    "sql_canonical": canonical_sql,
-                    "sql_executable": transpiled_sql,
+                    "error": error,
+                    "detected_source_ids": sorted(source_analysis.source_ids),
                 },
             )
+            return AnalystQueryResponse(
+                sql_canonical=canonical_sql,
+                sql_executable="",
+                dialect=self.dialect,
+                model_name=self.name,
+                error=error,
+                execution_time_ms=elapsed,
+            )
+
+        execution_dialect = self.dialect
+        try:
+            if routed_to_federation:
+                execution_dialect = "postgres"
+                transpiled_sql = canonical_sql
+                if active_request.limit:
+                    transpiled_sql, _ = enforce_preview_limit(
+                        canonical_sql,
+                        max_rows=active_request.limit,
+                        dialect="postgres",
+                    )
+                await self._emit_event(
+                    event_type="SqlTranspiled",
+                    message="SQL prepared for federated execution.",
+                    visibility=AgentEventVisibility.internal,
+                    details={
+                        "model": self.name,
+                        "dialect": execution_dialect,
+                        "sql_canonical": canonical_sql,
+                        "sql_executable": transpiled_sql,
+                    },
+                )
+            else:
+                self.logger.debug("Transpiling %s - postgres -> %s", canonical_sql, self.dialect)
+                transpiled_sql = sqlglot.transpile(
+                    canonical_sql,
+                    read="postgres",
+                    write=self.dialect,
+                )[0]
+                self.logger.info("Successful Transpile %s", transpiled_sql)
+                await self._emit_event(
+                    event_type="SqlTranspiled",
+                    message="SQL transpiled for connector dialect.",
+                    visibility=AgentEventVisibility.internal,
+                    details={
+                        "model": self.name,
+                        "dialect": execution_dialect,
+                        "sql_canonical": canonical_sql,
+                        "sql_executable": transpiled_sql,
+                    },
+                )
         except Exception as exc:  # pragma: no cover - sqlglot error path
             elapsed = int((time.perf_counter() - start_ts) * 1000)
-            self.logger.exception("Transpile failed for model %s", exc)
+            self.logger.exception("Transpile failed for model %s", self.name)
             await self._emit_event(
                 event_type="SqlTranspileFailed",
                 message="Failed to prepare SQL for execution.",
@@ -254,7 +481,7 @@ class SqlAnalystTool:
             return AnalystQueryResponse(
                 sql_canonical=canonical_sql,
                 sql_executable="",
-                dialect=self.dialect,
+                dialect=execution_dialect,
                 model_name=self.name,
                 error=f"Transpile failed: {exc}",
                 execution_time_ms=elapsed,
@@ -268,13 +495,15 @@ class SqlAnalystTool:
 
         result_payload: QueryResult | None = None
         execution_error: Optional[str] = None
+        execution_mode = "federated" if routed_to_federation else "single"
         await self._emit_event(
             event_type="SqlExecutionPrepared",
             message="Prepared executable SQL statement.",
             visibility=AgentEventVisibility.internal,
             details={
                 "model": self.name,
-                "dialect": self.dialect,
+                "dialect": execution_dialect,
+                "execution_mode": execution_mode,
                 "sql_executable": transpiled_sql,
                 "sql_canonical": canonical_sql,
                 "max_rows": active_request.limit,
@@ -286,22 +515,36 @@ class SqlAnalystTool:
             visibility=AgentEventVisibility.public,
             details={
                 "model": self.name,
-                "dialect": self.dialect,
+                "dialect": execution_dialect,
+                "execution_mode": execution_mode,
                 "max_rows": active_request.limit,
             },
         )
         try:
-            connector_result = await self.connector.execute(
-                transpiled_sql,
-                max_rows=active_request.limit,
-            )
-            result_payload = QueryResult.from_connector(connector_result)
+            if routed_to_federation:
+                if self._federated_sql_executor is None:
+                    raise RuntimeError("Federated SQL executor is not configured.")
+                result_payload = await self._federated_sql_executor.execute_sql(
+                    sql=transpiled_sql,
+                    dialect=execution_dialect,
+                    max_rows=active_request.limit,
+                )
+            else:
+                if self.connector is None:
+                    raise RuntimeError("SQL connector is not configured.")
+                connector_result = await self.connector.execute(
+                    transpiled_sql,
+                    max_rows=active_request.limit,
+                )
+                result_payload = QueryResult.from_connector(connector_result)
+
             await self._emit_event(
                 event_type="SqlExecutionCompleted",
                 message="SQL query completed.",
                 visibility=AgentEventVisibility.public,
                 details={
                     "model": self.name,
+                    "execution_mode": execution_mode,
                     "row_count": result_payload.rowcount,
                     "elapsed_ms": result_payload.elapsed_ms,
                 },
@@ -312,7 +555,8 @@ class SqlAnalystTool:
                 visibility=AgentEventVisibility.internal,
                 details={
                     "model": self.name,
-                    "dialect": self.dialect,
+                    "dialect": execution_dialect,
+                    "execution_mode": execution_mode,
                     "sql_executable": transpiled_sql,
                     "sql_canonical": canonical_sql,
                     "row_count": result_payload.rowcount,
@@ -320,22 +564,27 @@ class SqlAnalystTool:
                     "columns": result_payload.columns,
                 },
             )
-        except Exception as exc:  # pragma: no cover - depends on connector implementation
+        except Exception as exc:  # pragma: no cover - depends on runtime executor implementations
             self.logger.exception("Execution failed for model %s", self.name)
             execution_error = f"Execution failed: {exc}"
             await self._emit_event(
                 event_type="SqlExecutionFailed",
                 message="SQL query failed.",
                 visibility=AgentEventVisibility.public,
-                details={"model": self.name, "error": str(exc)},
+                details={
+                    "model": self.name,
+                    "execution_mode": execution_mode,
+                    "error": str(exc),
+                },
             )
             await self._emit_event(
                 event_type="SqlExecutionFailedInternal",
-                message="Execution failed with SQL audit details.",
+                message="Execution failed with SQL audit details. Exception: %s" % exc,
                 visibility=AgentEventVisibility.internal,
                 details={
                     "model": self.name,
-                    "dialect": self.dialect,
+                    "dialect": execution_dialect,
+                    "execution_mode": execution_mode,
                     "sql_executable": transpiled_sql,
                     "sql_canonical": canonical_sql,
                     "error": str(exc),
@@ -347,7 +596,7 @@ class SqlAnalystTool:
         return AnalystQueryResponse(
             sql_canonical=canonical_sql,
             sql_executable=transpiled_sql,
-            dialect=self.dialect,
+            dialect=execution_dialect,
             model_name=self.name,
             result=result_payload,
             error=execution_error,
@@ -389,6 +638,13 @@ class SqlAnalystTool:
         if request.limit:
             limit_hint = f"Prefer applying LIMIT {request.limit} if appropriate.\n"
 
+        execution_rules = (
+            "- This model can span multiple connectors; cross-source joins are supported via federation.\n"
+            "- Use table names exactly as listed in the model. If catalog is shown, use catalog.schema.table to disambiguate.\n"
+            if self._federated_sql_executor is not None
+            else "- This tool executes on a single connector. Do not generate cross-source joins across different connectors.\n"
+        )
+
         return (
             "You are an expert analytics engineer generating SQL.\n"
             f"{self._model_summary}\n"
@@ -397,9 +653,10 @@ class SqlAnalystTool:
             "- The SQL must target PostgreSQL dialect.\n"
             "- Do not include comments, explanations, or additional text.\n"
             "- Use only tables, relationships, measures, dimensions, and metrics defined above.\n"
+            f"{execution_rules}"
             """
             - Fully qualify columns as table.column. No SELECT *.
-            - Use the physical table names shown in the model (schema.table); model keys are labels only.
+            - Use the physical table names shown in the model; model keys are labels only.
             - Use only relationships defined in the model; INNER JOIN by default.
             - Expand metrics using their expression verbatim.
             - Apply table filters when the request mentions their name or synonyms.
@@ -533,6 +790,10 @@ class SqlAnalystTool:
         table = model.tables.get(table_key)
         if table is None:
             return table_key
+        if table.catalog and table.schema:
+            return f"{table.catalog}.{table.schema}.{table.name}"
+        if table.catalog:
+            return f"{table.catalog}.{table.name}"
         if table.schema:
             return f"{table.schema}.{table.name}"
         return table.name

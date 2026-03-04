@@ -71,7 +71,6 @@ type BiStudioPageProps = {
 };
 
 const DEFAULT_DASHBOARD_NAME = 'Untitled dashboard';
-const TERMINAL_JOB_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
 const JOB_STATUS_POLL_INTERVAL_MS = 1500;
 
 type CopilotAgentOption = {
@@ -524,9 +523,7 @@ export default function BiStudioPage({ params }: BiStudioPageProps) {
   }, [dashboardsQuery.data, activeDashboardId, isDraftMode, startDraftDashboard, applyDashboardRecord]);
 
   useEffect(() => {
-    const pendingWidgets = widgets.filter(
-      (widget) => widget.isLoading && widget.jobId && !isTerminalJobStatus(widget.jobStatus),
-    );
+    const pendingWidgets = widgets.filter((widget) => widget.isLoading && widget.jobId);
     if (pendingWidgets.length === 0) {
       return;
     }
@@ -565,7 +562,20 @@ export default function BiStudioPage({ params }: BiStudioPageProps) {
 
               if (job.status === 'succeeded') {
                 const result = normalizeSemanticQueryResponse(job.finalResponse?.result, selectedModelId);
+                const finishedAtMs = job.finishedAt ? Date.parse(job.finishedAt) : Number.NaN;
+                const finalizeWaitExpired =
+                  Number.isFinite(finishedAtMs) && Date.now() - finishedAtMs > 10_000;
                 if (!result) {
+                  if (!finalizeWaitExpired) {
+                    updateWidget(widget.id, {
+                      isLoading: true,
+                      jobStatus: job.status,
+                      progress: Math.max(progress, 95),
+                      statusMessage: 'Finalizing semantic query result...',
+                      error: null,
+                    });
+                    return;
+                  }
                   updateWidget(widget.id, {
                     isLoading: false,
                     jobStatus: 'failed',
@@ -655,7 +665,14 @@ export default function BiStudioPage({ params }: BiStudioPageProps) {
         }
 
         const result = normalizeCopilotDashboardResult(job.finalResponse?.result);
+        const finishedAtMs = job.finishedAt ? Date.parse(job.finishedAt) : Number.NaN;
+        const finalizeWaitExpired =
+          Number.isFinite(finishedAtMs) && Date.now() - finishedAtMs > 10_000;
         if (!result) {
+          if (!finalizeWaitExpired) {
+            setCopilotStatusMessage('Finalizing dashboard payload...');
+            return;
+          }
           setCopilotJobId(null);
           setCopilotStatusMessage('Copilot job completed without a valid dashboard payload.');
           toast({
@@ -1825,13 +1842,6 @@ function buildSemanticFilters(filters: FilterDraft[], fieldLookup: Map<string, F
     const normalized = toSemanticFilter(filter, fieldLookup.get(filter.member.trim()));
     return normalized ? [normalized] : [];
   });
-}
-
-function isTerminalJobStatus(status: string | null | undefined): boolean {
-  if (!status) {
-    return false;
-  }
-  return TERMINAL_JOB_STATUSES.has(status);
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
