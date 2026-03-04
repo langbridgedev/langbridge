@@ -1,5 +1,6 @@
 import { apiFetch } from '../http';
 import type {
+  ConnectorCatalogResponse,
   ConnectorConfigSchema,
   ConnectorResponse,
   CreateConnectorPayload,
@@ -74,7 +75,59 @@ export async function updateConnector(
   });
 }
 
+export async function fetchConnectorCatalog(
+  organizationId: string,
+  connectorId: string,
+  options?: {
+    search?: string;
+    includeSchemas?: string[];
+    excludeSchemas?: string[];
+    includeSystemSchemas?: boolean;
+    includeColumns?: boolean;
+    limit?: number;
+    offset?: number;
+  },
+): Promise<ConnectorCatalogResponse> {
+  if (!connectorId) {
+    throw new Error('Connector id is required.');
+  }
+  const params = new URLSearchParams();
+  if (options?.search?.trim()) {
+    params.set('search', options.search.trim());
+  }
+  for (const schema of options?.includeSchemas || []) {
+    if (schema.trim()) {
+      params.append('include_schemas', schema.trim());
+    }
+  }
+  for (const schema of options?.excludeSchemas || []) {
+    if (schema.trim()) {
+      params.append('exclude_schemas', schema.trim());
+    }
+  }
+  if (options?.includeSystemSchemas) {
+    params.set('include_system_schemas', 'true');
+  }
+  if (options?.includeColumns === false) {
+    params.set('include_columns', 'false');
+  }
+  if (typeof options?.limit === 'number' && Number.isFinite(options.limit)) {
+    params.set('limit', String(Math.max(1, Math.min(1000, Math.floor(options.limit)))));
+  }
+  if (typeof options?.offset === 'number' && Number.isFinite(options.offset)) {
+    params.set('offset', String(Math.max(0, Math.floor(options.offset))));
+  }
+  const query = params.toString();
+  return apiFetch<ConnectorCatalogResponse>(
+    `${basePath(organizationId)}/${encodeURIComponent(connectorId)}/catalog${query ? `?${query}` : ''}`,
+  );
+}
+
 export type {
+  ConnectorCatalogColumn,
+  ConnectorCatalogResponse,
+  ConnectorCatalogSchema,
+  ConnectorCatalogTable,
   ConnectorConfigEntry,
   ConnectorConfigSchema,
   ConnectorResponse,

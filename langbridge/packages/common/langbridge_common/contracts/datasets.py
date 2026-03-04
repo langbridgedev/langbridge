@@ -59,6 +59,13 @@ class DatasetPolicyRequest(_Base):
     allow_dml: bool | None = None
 
 
+class DatasetPolicyDefaultsRequest(_Base):
+    max_preview_rows: int | None = Field(default=None, ge=1)
+    max_export_rows: int | None = Field(default=None, ge=1)
+    allow_dml: bool | None = None
+    redaction_rules: dict[str, str] = Field(default_factory=dict)
+
+
 class DatasetPolicyResponse(_Base):
     max_rows_preview: int
     max_export_rows: int
@@ -107,6 +114,75 @@ class DatasetCreateRequest(_Base):
             if not self.referenced_dataset_ids and not self.federated_plan:
                 raise ValueError("FEDERATED datasets require referenced_dataset_ids or federated_plan.")
         return self
+
+
+class DatasetSelectionColumnRequest(_Base):
+    name: str = Field(..., min_length=1, max_length=255)
+    data_type: str | None = Field(default=None, max_length=128)
+    nullable: bool | None = None
+
+
+class DatasetSelectionRequest(_Base):
+    schema: str = Field(..., min_length=1, max_length=255)
+    table: str = Field(..., min_length=1, max_length=255)
+    columns: list[DatasetSelectionColumnRequest] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_columns(self) -> "DatasetSelectionRequest":
+        names = [column.name.strip().lower() for column in self.columns if column.name.strip()]
+        if len(set(names)) != len(names):
+            raise ValueError("columns must contain unique names per table selection.")
+        return self
+
+
+class DatasetEnsureRequest(_Base):
+    workspace_id: UUID
+    project_id: UUID | None = None
+    connection_id: UUID
+    schema: str = Field(..., min_length=1, max_length=255)
+    table: str = Field(..., min_length=1, max_length=255)
+    columns: list[DatasetSelectionColumnRequest] = Field(default_factory=list)
+    name: str | None = Field(default=None, max_length=255)
+    naming_template: str | None = Field(default=None, max_length=128)
+    policy_defaults: DatasetPolicyDefaultsRequest | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class DatasetEnsureResponse(_Base):
+    dataset_id: UUID
+    created: bool
+    name: str
+
+
+class DatasetBulkCreateRequest(_Base):
+    workspace_id: UUID
+    project_id: UUID | None = None
+    connection_id: UUID
+    selections: list[DatasetSelectionRequest] = Field(default_factory=list)
+    naming_template: str = "{schema}.{table}"
+    policy_defaults: DatasetPolicyDefaultsRequest | None = None
+    tags: list[str] = Field(default_factory=list)
+    profile_after_create: bool = False
+
+    @model_validator(mode="after")
+    def _validate_bulk_shape(self) -> "DatasetBulkCreateRequest":
+        if len(self.selections) == 0:
+            raise ValueError("At least one table selection is required.")
+        if len(self.selections) > 500:
+            raise ValueError("At most 500 table selections are allowed per bulk request.")
+        return self
+
+
+class DatasetBulkCreateStartResponse(_Base):
+    job_id: UUID
+    job_status: str
+
+
+class DatasetBulkCreateResult(_Base):
+    created_count: int = 0
+    reused_count: int = 0
+    dataset_ids: list[UUID] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DatasetUpdateRequest(_Base):
@@ -171,8 +247,6 @@ class DatasetPreviewRequest(_Base):
     filters: dict[str, Any] = Field(default_factory=dict)
     sort: list[DatasetPreviewSortItem] = Field(default_factory=list)
     user_context: dict[str, Any] = Field(default_factory=dict)
-    wait_for_completion: bool = True
-    wait_timeout_seconds: int = Field(default=20, ge=1, le=120)
 
 
 class DatasetPreviewColumn(_Base):
@@ -198,8 +272,6 @@ class DatasetProfileRequest(_Base):
     workspace_id: UUID
     project_id: UUID | None = None
     user_context: dict[str, Any] = Field(default_factory=dict)
-    wait_for_completion: bool = True
-    wait_timeout_seconds: int = Field(default=40, ge=1, le=180)
 
 
 class DatasetProfileResponse(_Base):

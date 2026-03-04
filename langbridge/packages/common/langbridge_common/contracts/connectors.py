@@ -87,6 +87,7 @@ class ConnectorResponse(_Base):
     connection_metadata: ConnectionMetadata | None = None
     secret_references: dict[str, SecretReference] = Field(default_factory=dict)
     connection_policy: ConnectionPolicy | None = None
+    catalog_summary: "ConnectorCatalogSummary | None" = None
 
     @staticmethod
     def from_connector(
@@ -196,3 +197,39 @@ class ConnectorSourceSchemaViewResponse(_Base):
     name: str
     columns: Dict[str, ConnectorSourceSchemaColumnResponse] = {}
     definition: str
+
+
+class ConnectorCatalogSummary(_Base):
+    schema_count: int = 0
+    table_count: int = 0
+    column_count: int = 0
+
+
+class ConnectorCatalogColumnResponse(_Base):
+    name: str
+    type: str
+    nullable: Optional[bool] = None
+    primary_key: Optional[bool] = False
+
+
+class ConnectorCatalogTableResponse(_Base):
+    schema: str
+    name: str
+    fully_qualified_name: str
+    columns: list[ConnectorCatalogColumnResponse] = Field(default_factory=list)
+
+
+class ConnectorCatalogSchemaResponse(_Base):
+    name: str
+    tables: list[ConnectorCatalogTableResponse] = Field(default_factory=list)
+
+
+class ConnectorCatalogResponse(_Base):
+    connector_id: UUID
+    schemas: list[ConnectorCatalogSchemaResponse] = Field(default_factory=list)
+    schema_count: int = 0
+    table_count: int = 0
+    column_count: int = 0
+    offset: int = 0
+    limit: int = 200
+    has_more: bool = False

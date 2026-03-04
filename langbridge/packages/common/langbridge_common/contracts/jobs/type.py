@@ -9,3 +9,4 @@ class JobType(str, Enum):
     SQL = "sql"
     DATASET_PREVIEW = "dataset_preview"
     DATASET_PROFILE = "dataset_profile"
+    DATASET_BULK_CREATE = "dataset_bulk_create"

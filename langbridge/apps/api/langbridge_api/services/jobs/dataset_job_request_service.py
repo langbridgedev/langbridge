@@ -5,6 +5,7 @@ import uuid
 
 from langbridge.apps.api.langbridge_api.services.task_dispatch_service import TaskDispatchService
 from langbridge.packages.common.langbridge_common.contracts.jobs.dataset_job import (
+    CreateDatasetBulkCreateJobRequest,
     CreateDatasetPreviewJobRequest,
     CreateDatasetProfileJobRequest,
 )
@@ -50,6 +51,16 @@ class DatasetJobRequestService:
             status_message="Dataset profiling queued.",
             event_type="DatasetProfileQueued",
             event_message="Dataset profiling queued.",
+        )
+
+    async def create_bulk_create_job(self, request: CreateDatasetBulkCreateJobRequest) -> JobRecord:
+        return await self._create_job(
+            job_type=JobType.DATASET_BULK_CREATE,
+            workspace_id=request.workspace_id,
+            payload=request.model_dump(mode="json"),
+            status_message="Bulk dataset creation queued.",
+            event_type="DatasetBulkCreateQueued",
+            event_message="Bulk dataset creation queued.",
         )
 
     async def _create_job(

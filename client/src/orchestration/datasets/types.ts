@@ -23,6 +23,13 @@ export interface DatasetPolicy {
   allowDml: boolean;
 }
 
+export interface DatasetPolicyDefaults {
+  maxPreviewRows?: number;
+  maxExportRows?: number;
+  allowDml?: boolean;
+  redactionRules?: Record<string, string>;
+}
+
 export interface DatasetStats {
   rowCountEstimate?: number | null;
   bytesEstimate?: number | null;
@@ -92,8 +99,6 @@ export interface DatasetPreviewRequestPayload {
   filters?: Record<string, unknown>;
   sort?: DatasetPreviewSortItem[];
   userContext?: Record<string, unknown>;
-  waitForCompletion?: boolean;
-  waitTimeoutSeconds?: number;
 }
 
 export interface DatasetPreviewColumn {
@@ -119,8 +124,6 @@ export interface DatasetProfileRequestPayload {
   workspaceId: string;
   projectId?: string | null;
   userContext?: Record<string, unknown>;
-  waitForCompletion?: boolean;
-  waitTimeoutSeconds?: number;
 }
 
 export interface DatasetProfileResponse {
@@ -154,6 +157,53 @@ export interface DatasetCreatePayload {
   columns?: DatasetColumn[];
   policy?: Partial<DatasetPolicy>;
   status?: DatasetStatus;
+}
+
+export interface DatasetSelectionColumnPayload {
+  name: string;
+  dataType?: string | null;
+  nullable?: boolean | null;
+}
+
+export interface DatasetTableSelectionPayload {
+  schema: string;
+  table: string;
+  columns: DatasetSelectionColumnPayload[];
+}
+
+export interface DatasetEnsurePayload {
+  workspaceId: string;
+  projectId?: string | null;
+  connectionId: string;
+  schema: string;
+  table: string;
+  columns: DatasetSelectionColumnPayload[];
+  name?: string;
+  namingTemplate?: string;
+  policyDefaults?: DatasetPolicyDefaults;
+  tags?: string[];
+}
+
+export interface DatasetEnsureResponse {
+  datasetId: string;
+  created: boolean;
+  name: string;
+}
+
+export interface DatasetBulkCreatePayload {
+  workspaceId: string;
+  projectId?: string | null;
+  connectionId: string;
+  selections: DatasetTableSelectionPayload[];
+  namingTemplate?: string;
+  policyDefaults?: DatasetPolicyDefaults;
+  tags?: string[];
+  profileAfterCreate?: boolean;
+}
+
+export interface DatasetBulkCreateStartResponse {
+  jobId: string;
+  jobStatus: string;
 }
 
 export interface DatasetUpdatePayload {

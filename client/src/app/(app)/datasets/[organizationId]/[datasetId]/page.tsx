@@ -14,6 +14,8 @@ import { useWorkspaceScope } from '@/context/workspaceScope';
 import { ApiError } from '@/orchestration/http';
 import {
   deleteDataset,
+  fetchPreviewDatasetJob,
+  fetchProfileDatasetJob,
   fetchDatasetUsage,
   getDataset,
   previewDataset,
@@ -36,6 +38,10 @@ type EditablePolicy = {
   redactionRules: string;
   rowFilters: string;
 };
+
+const JOB_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
+const JOB_POLL_INTERVAL_MS = 1200;
+const JOB_POLL_TIMEOUT_MS = 60_000;
 
 export default function DatasetDetailPage({ params }: DatasetDetailPageProps): JSX.Element {
   const { organizationId, datasetId } = params;
@@ -141,13 +147,14 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps): J
   });
 
   const previewMutation = useMutation({
-    mutationFn: () =>
-      previewDataset(datasetId, {
+    mutationFn: async () => {
+      const queued = await previewDataset(datasetId, {
         workspaceId: organizationId,
         projectId: selectedProjectId || undefined,
         limit: Math.max(1, Number(previewLimit) || 100),
-        waitForCompletion: true,
-      }),
+      });
+      return pollDatasetPreviewJob(datasetId, queued.jobId, organizationId);
+    },
     onSuccess: (result) => {
       setPreviewResult(result);
       setError(null);
@@ -158,12 +165,13 @@ export default function DatasetDetailPage({ params }: DatasetDetailPageProps): J
   });
 
   const profileMutation = useMutation({
-    mutationFn: () =>
-      profileDataset(datasetId, {
+    mutationFn: async () => {
+      const queued = await profileDataset(datasetId, {
         workspaceId: organizationId,
         projectId: selectedProjectId || undefined,
-        waitForCompletion: true,
-      }),
+      });
+      return pollDatasetProfileJob(datasetId, queued.jobId, organizationId);
+    },
     onSuccess: (result) => {
       setProfileResult(result);
       setError(null);
@@ -453,4 +461,40 @@ function resolveError(error: unknown): string {
     return error.message;
   }
   return 'Something went wrong while processing the request.';
+}
+
+async function pollDatasetPreviewJob(
+  datasetId: string,
+  jobId: string,
+  workspaceId: string,
+): Promise<DatasetPreviewResponse> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < JOB_POLL_TIMEOUT_MS) {
+    const state = await fetchPreviewDatasetJob(datasetId, jobId, workspaceId);
+    if (JOB_TERMINAL_STATUSES.has(state.status)) {
+      return state;
+    }
+    await sleep(JOB_POLL_INTERVAL_MS);
+  }
+  throw new Error('Dataset preview timed out while waiting for job completion.');
+}
+
+async function pollDatasetProfileJob(
+  datasetId: string,
+  jobId: string,
+  workspaceId: string,
+): Promise<DatasetProfileResponse> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < JOB_POLL_TIMEOUT_MS) {
+    const state = await fetchProfileDatasetJob(datasetId, jobId, workspaceId);
+    if (JOB_TERMINAL_STATUSES.has(state.status)) {
+      return state;
+    }
+    await sleep(JOB_POLL_INTERVAL_MS);
+  }
+  throw new Error('Dataset profile timed out while waiting for job completion.');
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

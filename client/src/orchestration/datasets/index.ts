@@ -1,8 +1,12 @@
 import { apiFetch } from '@/orchestration/http';
 
 import type {
+  DatasetBulkCreatePayload,
+  DatasetBulkCreateStartResponse,
   DatasetCatalogResponse,
   DatasetCreatePayload,
+  DatasetEnsurePayload,
+  DatasetEnsureResponse,
   DatasetListResponse,
   DatasetPreviewRequestPayload,
   DatasetPreviewResponse,
@@ -53,6 +57,22 @@ export async function listDatasets(
 
 export async function createDataset(payload: DatasetCreatePayload): Promise<DatasetRecord> {
   return apiFetch<DatasetRecord>(DATASET_BASE_PATH, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function ensureDataset(payload: DatasetEnsurePayload): Promise<DatasetEnsureResponse> {
+  return apiFetch<DatasetEnsureResponse>(`${DATASET_BASE_PATH}/ensure`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function bulkCreateDatasets(
+  payload: DatasetBulkCreatePayload,
+): Promise<DatasetBulkCreateStartResponse> {
+  return apiFetch<DatasetBulkCreateStartResponse>(`${DATASET_BASE_PATH}/bulk-create`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -113,6 +133,40 @@ export async function profileDataset(
   });
 }
 
+export async function fetchPreviewDatasetJob(
+  datasetId: string,
+  jobId: string,
+  workspaceId: string,
+): Promise<DatasetPreviewResponse> {
+  if (!datasetId) {
+    throw new Error('Dataset id is required.');
+  }
+  if (!jobId) {
+    throw new Error('Job id is required.');
+  }
+  const params = new URLSearchParams({ workspace_id: requiredWorkspaceId(workspaceId) });
+  return apiFetch<DatasetPreviewResponse>(
+    `${DATASET_BASE_PATH}/${encodeURIComponent(datasetId)}/preview/jobs/${encodeURIComponent(jobId)}?${params.toString()}`,
+  );
+}
+
+export async function fetchProfileDatasetJob(
+  datasetId: string,
+  jobId: string,
+  workspaceId: string,
+): Promise<DatasetProfileResponse> {
+  if (!datasetId) {
+    throw new Error('Dataset id is required.');
+  }
+  if (!jobId) {
+    throw new Error('Job id is required.');
+  }
+  const params = new URLSearchParams({ workspace_id: requiredWorkspaceId(workspaceId) });
+  return apiFetch<DatasetProfileResponse>(
+    `${DATASET_BASE_PATH}/${encodeURIComponent(datasetId)}/profile/jobs/${encodeURIComponent(jobId)}?${params.toString()}`,
+  );
+}
+
 export async function fetchDatasetCatalog(
   workspaceId: string,
   projectId?: string | null,
@@ -136,10 +190,14 @@ export async function fetchDatasetUsage(
 }
 
 export type {
+  DatasetBulkCreatePayload,
+  DatasetBulkCreateStartResponse,
   DatasetCatalogItem,
   DatasetCatalogResponse,
   DatasetColumn,
   DatasetCreatePayload,
+  DatasetEnsurePayload,
+  DatasetEnsureResponse,
   DatasetListResponse,
   DatasetPolicy,
   DatasetPreviewRequestPayload,

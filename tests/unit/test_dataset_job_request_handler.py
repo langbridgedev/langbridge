@@ -10,6 +10,7 @@ from langbridge.apps.worker.langbridge_worker.handlers.query.dataset_job_request
     DatasetJobRequestHandler,
 )
 from langbridge.packages.common.langbridge_common.contracts.jobs.dataset_job import (
+    CreateDatasetBulkCreateJobRequest,
     CreateDatasetPreviewJobRequest,
 )
 from langbridge.packages.common.langbridge_common.contracts.jobs.type import JobType
@@ -40,34 +41,59 @@ class _FakeJobRepository:
 
 
 class _FakeDatasetRepository:
-    def __init__(self, dataset: DatasetRecord) -> None:
-        self._dataset = dataset
+    def __init__(self, dataset: DatasetRecord | None = None) -> None:
+        self._datasets: dict[uuid.UUID, DatasetRecord] = {}
+        if dataset is not None:
+            self._datasets[dataset.id] = dataset
 
     async def get_for_workspace(self, *, dataset_id: uuid.UUID, workspace_id: uuid.UUID):
-        if self._dataset.id == dataset_id and self._dataset.workspace_id == workspace_id:
-            return self._dataset
+        row = self._datasets.get(dataset_id)
+        if row is not None and row.workspace_id == workspace_id:
+            return row
         return None
+
+    async def list_for_workspace(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        project_id: uuid.UUID | None = None,
+        dataset_types: list[str] | None = None,
+        limit: int = 5000,
+    ) -> list[DatasetRecord]:
+        rows = [item for item in self._datasets.values() if item.workspace_id == workspace_id]
+        if project_id is not None:
+            rows = [item for item in rows if item.project_id == project_id]
+        if dataset_types:
+            allowed = {value.upper() for value in dataset_types}
+            rows = [item for item in rows if str(item.dataset_type).upper() in allowed]
+        return rows[:limit]
+
+    def add(self, dataset: DatasetRecord) -> None:
+        self._datasets[dataset.id] = dataset
 
 
 class _FakeDatasetColumnRepository:
-    def __init__(self, columns: list[DatasetColumnRecord]) -> None:
-        self._columns = columns
+    def __init__(self, columns: list[DatasetColumnRecord] | None = None) -> None:
+        self._columns = list(columns or [])
 
     async def list_for_dataset(self, *, dataset_id: uuid.UUID) -> list[DatasetColumnRecord]:
         return [column for column in self._columns if column.dataset_id == dataset_id]
 
+    def add(self, column: DatasetColumnRecord) -> None:
+        self._columns.append(column)
+
 
 class _FakeDatasetPolicyRepository:
     def __init__(self, policy: DatasetPolicyRecord | None) -> None:
-        self._policy = policy
+        self._policies: dict[uuid.UUID, DatasetPolicyRecord] = {}
+        if policy is not None:
+            self._policies[policy.dataset_id] = policy
 
     async def get_for_dataset(self, *, dataset_id: uuid.UUID):
-        if self._policy is not None and self._policy.dataset_id == dataset_id:
-            return self._policy
-        return None
+        return self._policies.get(dataset_id)
 
     def add(self, policy: DatasetPolicyRecord) -> None:
-        self._policy = policy
+        self._policies[policy.dataset_id] = policy
 
 
 class _FakeFederatedQueryTool:
@@ -331,3 +357,127 @@ async def test_dataset_sql_preview_blocks_dml_statements() -> None:
     error_message = str((job_record.error or {}).get("message") or "")
     assert "SELECT" in error_message.upper()
     assert federated_tool.calls == []
+
+
+@pytest.mark.anyio
+async def test_dataset_bulk_create_reuses_existing_and_creates_missing() -> None:
+    workspace_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    connection_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+
+    existing_dataset = DatasetRecord(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        project_id=None,
+        connection_id=connection_id,
+        created_by=user_id,
+        updated_by=user_id,
+        name="public.orders",
+        description=None,
+        tags_json=["auto-generated"],
+        dataset_type="TABLE",
+        dialect=None,
+        catalog_name=None,
+        schema_name="public",
+        table_name="orders",
+        sql_text=None,
+        referenced_dataset_ids_json=[],
+        federated_plan_json=None,
+        file_config_json=None,
+        status="published",
+        revision_id=None,
+        row_count_estimate=None,
+        bytes_estimate=None,
+        last_profiled_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    existing_columns = [
+        DatasetColumnRecord(
+            id=uuid.uuid4(),
+            dataset_id=existing_dataset.id,
+            workspace_id=workspace_id,
+            name="order_id",
+            data_type="integer",
+            nullable=False,
+            ordinal_position=0,
+            description=None,
+            is_allowed=True,
+            is_computed=False,
+            expression=None,
+            created_at=now,
+            updated_at=now,
+        ),
+        DatasetColumnRecord(
+            id=uuid.uuid4(),
+            dataset_id=existing_dataset.id,
+            workspace_id=workspace_id,
+            name="amount",
+            data_type="decimal",
+            nullable=False,
+            ordinal_position=1,
+            description=None,
+            is_allowed=True,
+            is_computed=False,
+            expression=None,
+            created_at=now,
+            updated_at=now,
+        ),
+    ]
+
+    dataset_repository = _FakeDatasetRepository(existing_dataset)
+    dataset_column_repository = _FakeDatasetColumnRepository(existing_columns)
+    dataset_policy_repository = _FakeDatasetPolicyRepository(policy=None)
+
+    job_record = _build_job_record(workspace_id=workspace_id, job_type=JobType.DATASET_BULK_CREATE)
+    handler = DatasetJobRequestHandler(
+        job_repository=_FakeJobRepository(job_record),
+        dataset_repository=dataset_repository,
+        dataset_column_repository=dataset_column_repository,
+        dataset_policy_repository=dataset_policy_repository,
+        federated_query_tool=_FakeFederatedQueryTool(responses=[]),
+    )
+
+    request = CreateDatasetBulkCreateJobRequest(
+        workspace_id=workspace_id,
+        project_id=None,
+        user_id=user_id,
+        connection_id=connection_id,
+        selections=[
+            {
+                "schema": "public",
+                "table": "orders",
+                "columns": [
+                    {"name": "order_id", "data_type": "integer"},
+                    {"name": "amount", "data_type": "decimal"},
+                ],
+            },
+            {
+                "schema": "public",
+                "table": "customers",
+                "columns": [
+                    {"name": "customer_id", "data_type": "integer"},
+                    {"name": "customer_name", "data_type": "text"},
+                ],
+            },
+        ],
+        naming_template="{schema}.{table}",
+        tags=["auto-generated", "connection-bootstrap"],
+    )
+    message = DatasetJobRequestMessage(
+        job_id=job_record.id,
+        job_type=JobType.DATASET_BULK_CREATE,
+        job_request=request.model_dump(mode="json"),
+    )
+
+    await handler.handle(message)
+
+    assert job_record.status == JobStatus.succeeded
+    result = (job_record.result or {}).get("result") or {}
+    assert result["created_count"] == 1
+    assert result["reused_count"] == 1
+    assert len(result["items"]) == 2
+
+    all_datasets = await dataset_repository.list_for_workspace(workspace_id=workspace_id, limit=10)
+    assert len(all_datasets) == 2

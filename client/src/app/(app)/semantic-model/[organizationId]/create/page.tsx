@@ -22,7 +22,11 @@ import { useWorkspaceScope } from '@/context/workspaceScope';
 import { fetchLLMConnections } from '@/orchestration/agents';
 import { fetchConnectors } from '@/orchestration/connectors';
 import type { ConnectorResponse } from '@/orchestration/connectors/types';
-import { fetchDatasetCatalog, type DatasetCatalogItem } from '@/orchestration/datasets';
+import {
+  bulkCreateDatasets,
+  fetchDatasetCatalog,
+  type DatasetCatalogItem,
+} from '@/orchestration/datasets';
 import {
   createSemanticModel,
   fetchSemanticModel,
@@ -174,6 +178,7 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [selectedColumns, setSelectedColumns] = useState<Record<string, string[]>>({});
   const [includeSampleValues, setIncludeSampleValues] = useState(false);
+  const [autoCreateDatasetsFromSelection, setAutoCreateDatasetsFromSelection] = useState(true);
   const [questionPrompts, setQuestionPrompts] = useState<string[]>([]);
   const [promptInput, setPromptInput] = useState('');
   const [builder, setBuilder] = useState<BuilderModel>(() => createEmptyBuilderModel());
@@ -781,6 +786,94 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
     selectedTables.forEach((tableRef) => {
       selectedColumnsPayload[tableRef] = selectedColumns[tableRef] ?? [];
     });
+    const datasetBindings: Record<string, string> = {};
+    if (autoCreateDatasetsFromSelection) {
+      const selections = selectedTables.map((tableRef) => {
+        const table = catalogTables.find((entry) => entry.tableRef === tableRef);
+        const selectedNameSet = new Set(selectedColumnsPayload[tableRef] ?? []);
+        const [schema, ...tableParts] = tableRef.split('.');
+        const tableName = tableParts.join('.');
+        return {
+          schema,
+          table: tableName,
+          columns: (table?.columns || [])
+            .filter((column) => selectedNameSet.has(column.name))
+            .map((column) => ({
+              name: column.name,
+              dataType: column.type || 'unknown',
+              nullable: column.nullable ?? true,
+            })),
+        };
+      });
+      const ensureColumns = selections.every((selection) => selection.columns.length > 0);
+      if (!ensureColumns) {
+        throw new Error('Automatic dataset creation requires at least one column per selected table.');
+      }
+      const bulkCreate = await bulkCreateDatasets({
+        workspaceId: organizationId,
+        projectId: normalizedProjectId || undefined,
+        connectionId: selectedConnectorId,
+        selections,
+        namingTemplate: '{schema}.{table}',
+        policyDefaults: {
+          maxPreviewRows: 1000,
+          maxExportRows: 100000,
+          allowDml: false,
+          redactionRules: {},
+        },
+        tags: ['auto-generated', 'semantic-builder'],
+        profileAfterCreate: includeSampleValues,
+      });
+      let bulkTerminalState: Awaited<ReturnType<typeof fetchAgentJobState>> | null = null;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const state = await fetchAgentJobState(organizationId, bulkCreate.jobId);
+        if (state.status === 'succeeded' || state.status === 'failed' || state.status === 'cancelled') {
+          bulkTerminalState = state;
+          break;
+        }
+        await sleep(2000);
+      }
+      if (!bulkTerminalState || bulkTerminalState.status !== 'succeeded') {
+        throw new Error('Automatic dataset creation job did not complete successfully.');
+      }
+      const bulkResult =
+        bulkTerminalState.finalResponse && typeof bulkTerminalState.finalResponse.result === 'object'
+          ? (bulkTerminalState.finalResponse.result as Record<string, unknown>)
+          : null;
+      const resultItems = Array.isArray(bulkResult?.items) ? bulkResult.items : [];
+      resultItems.forEach((item) => {
+        if (!item || typeof item !== 'object') {
+          return;
+        }
+        const schema = typeof item.schema === 'string' ? item.schema : '';
+        const table = typeof item.table === 'string' ? item.table : '';
+        const datasetId = typeof item.dataset_id === 'string' ? item.dataset_id : '';
+        if (schema && table && datasetId) {
+          datasetBindings[`${schema}.${table}`] = datasetId;
+        }
+      });
+    }
+
+    const applyDatasetBindings = (model: BuilderModel): BuilderModel => ({
+      ...model,
+      tables: model.tables.map((table) => {
+        if (table.datasetId) {
+          return table;
+        }
+        if (!table.schema || !table.name) {
+          return table;
+        }
+        const matched = datasetBindings[`${table.schema}.${table.name}`];
+        if (!matched) {
+          return table;
+        }
+        return {
+          ...table,
+          datasetId: matched,
+        };
+      }),
+    });
+
     if (creationMode === 'auto') {
       const response = await generateSemanticModelYamlFromSelection(organizationId, {
         connectorId: selectedConnectorId,
@@ -789,7 +882,13 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
         includeSampleValues,
         description: formState.description.trim() || undefined,
       });
-      applyBuilderFromYaml(response.yamlText);
+      const parsedModel = parseYamlToBuilderModel(response.yamlText);
+      const boundModel = applyDatasetBindings(parsedModel);
+      const finalYaml = serializeBuilderModel(boundModel, selectedConnector?.name);
+      setBuilder(boundModel);
+      setYamlDraft(finalYaml);
+      setYamlDirty(false);
+      setYamlError(null);
       setStage('builder');
       setNotice(
         response.warnings.length > 0
@@ -841,11 +940,18 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
 
     const model = await fetchSemanticModel(job.semanticModelId, organizationId);
     setEditingModel(model);
-    applyBuilderFromYaml(yamlFromJob ?? model.contentYaml);
+    const parsedModel = parseYamlToBuilderModel(yamlFromJob ?? model.contentYaml);
+    const boundModel = applyDatasetBindings(parsedModel);
+    const finalYaml = serializeBuilderModel(boundModel, selectedConnector?.name);
+    setBuilder(boundModel);
+    setYamlDraft(finalYaml);
+    setYamlDirty(false);
+    setYamlError(null);
     setStage('builder');
     setNotice('Agentic draft generated and loaded as a draft model.');
   }, [
-    applyBuilderFromYaml,
+    autoCreateDatasetsFromSelection,
+    catalogTables,
     creationMode,
     formState.description,
     formState.filename,
@@ -854,9 +960,14 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
     organizationId,
     questionPrompts,
     selectedColumns,
+    selectedConnector?.name,
     selectedConnectorId,
     normalizedProjectId,
+    setBuilder,
     selectedTables,
+    setYamlDraft,
+    setYamlDirty,
+    setYamlError,
   ]);
 
   const handleWizardNext = useCallback(async () => {
@@ -1307,15 +1418,26 @@ export default function SemanticModelPage({ params }: SemanticModelPageProps): J
                 </div>
                 <div className="flex items-center justify-between text-sm text-[color:var(--text-muted)]">
                   <span>{selectedColumnCount} columns selected</span>
-                  <label className="inline-flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={includeSampleValues}
-                      onChange={(event) => setIncludeSampleValues(event.target.checked)}
-                      className="h-4 w-4"
-                    />
-                    Include example data
-                  </label>
+                  <div className="flex flex-wrap items-center gap-4">
+                    <label className="inline-flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={autoCreateDatasetsFromSelection}
+                        onChange={(event) => setAutoCreateDatasetsFromSelection(event.target.checked)}
+                        className="h-4 w-4"
+                      />
+                      Create datasets automatically
+                    </label>
+                    <label className="inline-flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={includeSampleValues}
+                        onChange={(event) => setIncludeSampleValues(event.target.checked)}
+                        className="h-4 w-4"
+                      />
+                      Include example data
+                    </label>
+                  </div>
                 </div>
                 <div className="inline-flex rounded-full border border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] p-1">
                   <button

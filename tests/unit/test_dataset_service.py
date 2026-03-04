@@ -10,14 +10,19 @@ import pytest
 from langbridge.apps.api.langbridge_api.services.dataset_service import DatasetService
 from langbridge.packages.common.langbridge_common.contracts.auth import UserResponse
 from langbridge.packages.common.langbridge_common.contracts.datasets import (
+    DatasetBulkCreateRequest,
     DatasetColumnRequest,
     DatasetCreateRequest,
+    DatasetEnsureRequest,
     DatasetPolicyRequest,
     DatasetPreviewRequest,
+    DatasetSelectionColumnRequest,
+    DatasetSelectionRequest,
     DatasetType,
     DatasetUpdateRequest,
 )
 from langbridge.packages.common.langbridge_common.contracts.jobs.dataset_job import (
+    CreateDatasetBulkCreateJobRequest,
     CreateDatasetPreviewJobRequest,
 )
 from langbridge.packages.common.langbridge_common.db.dataset import (
@@ -235,6 +240,7 @@ class _FakeDatasetJobRequestService:
     def __init__(self, *, job_repository: _FakeJobRepository) -> None:
         self._job_repository = job_repository
         self.preview_requests: list[CreateDatasetPreviewJobRequest] = []
+        self.bulk_requests: list[CreateDatasetBulkCreateJobRequest] = []
 
     async def create_preview_job(self, request: CreateDatasetPreviewJobRequest) -> JobRecord:
         self.preview_requests.append(request)
@@ -271,6 +277,25 @@ class _FakeDatasetJobRequestService:
 
     async def create_profile_job(self, request):
         raise RuntimeError("Profile dispatch not expected in this test.")
+
+    async def create_bulk_create_job(self, request: CreateDatasetBulkCreateJobRequest) -> JobRecord:
+        self.bulk_requests.append(request)
+        now = datetime.now(timezone.utc)
+        job = JobRecord(
+            id=uuid.uuid4(),
+            organisation_id=str(request.workspace_id),
+            job_type=request.job_type.value,
+            payload=request.model_dump(mode="json"),
+            headers={},
+            status=JobStatus.queued,
+            progress=0,
+            status_message="Bulk dataset creation queued.",
+            created_at=now,
+            queued_at=now,
+            updated_at=now,
+        )
+        self._job_repository.add(job)
+        return job
 
 
 @dataclass
@@ -390,18 +415,25 @@ async def test_dataset_service_crud_and_preview_dispatch() -> None:
     assert updated.policy.max_rows_preview == 75
     assert updated.policy.redaction_rules["customer_email"] == "hash"
 
-    preview = await service.preview_dataset(
+    queued_preview = await service.preview_dataset(
         dataset_id=created.id,
         request=DatasetPreviewRequest(
             workspace_id=workspace_id,
             limit=500,
-            wait_for_completion=True,
         ),
+        current_user=current_user,
+    )
+    assert queued_preview.job_id is not None
+    assert queued_preview.effective_limit == 75
+
+    preview = await service.get_preview_job_result(
+        dataset_id=created.id,
+        job_id=queued_preview.job_id,
+        workspace_id=workspace_id,
         current_user=current_user,
     )
     assert preview.status == JobStatus.succeeded.value
     assert preview.rows == [{"order_id": 101}]
-    assert preview.effective_limit == 75
     assert len(dataset_job_request_service.preview_requests) == 1
     assert dataset_job_request_service.preview_requests[0].enforced_limit == 75
 
@@ -468,3 +500,120 @@ async def test_dataset_create_does_not_insert_policy_twice_when_repo_cannot_read
 
     assert created.policy.max_rows_preview == 1000
     assert dataset_policy_repository.add_count == 1
+
+
+@pytest.mark.anyio
+async def test_ensure_dataset_is_idempotent_for_same_selection_signature() -> None:
+    workspace_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    connector_id = uuid.uuid4()
+    current_user = UserResponse(
+        id=user_id,
+        username="dataset-user",
+        email="dataset@example.com",
+        is_active=True,
+        available_organizations=[workspace_id],
+    )
+    connector = _FakeConnector(
+        id=connector_id,
+        connector_type="POSTGRES",
+        organizations=[_OrgRef(id=workspace_id)],
+    )
+    dataset_repository = _FakeDatasetRepository()
+    dataset_column_repository = _FakeDatasetColumnRepository()
+    dataset_policy_repository = _FakeDatasetPolicyRepository()
+    dataset_revision_repository = _FakeDatasetRevisionRepository()
+    job_repository = _FakeJobRepository()
+    service = DatasetService(
+        dataset_repository=dataset_repository,
+        dataset_column_repository=dataset_column_repository,
+        dataset_policy_repository=dataset_policy_repository,
+        dataset_revision_repository=dataset_revision_repository,
+        connector_repository=_FakeConnectorRepository(connector),
+        semantic_model_repository=_FakeSemanticModelRepository(),
+        sql_workspace_policy_repository=_FakeSqlWorkspacePolicyRepository(max_preview_rows=120),
+        organization_repository=_FakeOrganizationRepository(workspace_id=workspace_id),
+        user_repository=_FakeUserRepository(),
+        connector_service=_FakeConnectorService(),
+        dataset_job_request_service=_FakeDatasetJobRequestService(job_repository=job_repository),
+        job_repository=job_repository,
+        request_context_provider=_FakeRequestContextProvider(),
+    )
+
+    payload = DatasetEnsureRequest(
+        workspace_id=workspace_id,
+        connection_id=connector_id,
+        schema="public",
+        table="orders",
+        columns=[
+            DatasetSelectionColumnRequest(name="order_id", data_type="integer"),
+            DatasetSelectionColumnRequest(name="amount", data_type="decimal"),
+        ],
+        tags=["auto-generated"],
+    )
+    first = await service.ensure_dataset(request=payload, current_user=current_user)
+    second = await service.ensure_dataset(request=payload, current_user=current_user)
+
+    assert first.created is True
+    assert second.created is False
+    assert first.dataset_id == second.dataset_id
+
+
+@pytest.mark.anyio
+async def test_start_bulk_create_dispatches_job_with_deduped_selections() -> None:
+    workspace_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    connector_id = uuid.uuid4()
+    current_user = UserResponse(
+        id=user_id,
+        username="dataset-user",
+        email="dataset@example.com",
+        is_active=True,
+        available_organizations=[workspace_id],
+    )
+    connector = _FakeConnector(
+        id=connector_id,
+        connector_type="POSTGRES",
+        organizations=[_OrgRef(id=workspace_id)],
+    )
+    dataset_job_service = _FakeDatasetJobRequestService(job_repository=_FakeJobRepository())
+    service = DatasetService(
+        dataset_repository=_FakeDatasetRepository(),
+        dataset_column_repository=_FakeDatasetColumnRepository(),
+        dataset_policy_repository=_FakeDatasetPolicyRepository(),
+        dataset_revision_repository=_FakeDatasetRevisionRepository(),
+        connector_repository=_FakeConnectorRepository(connector),
+        semantic_model_repository=_FakeSemanticModelRepository(),
+        sql_workspace_policy_repository=_FakeSqlWorkspacePolicyRepository(max_preview_rows=120),
+        organization_repository=_FakeOrganizationRepository(workspace_id=workspace_id),
+        user_repository=_FakeUserRepository(),
+        connector_service=_FakeConnectorService(),
+        dataset_job_request_service=dataset_job_service,
+        job_repository=_FakeJobRepository(),
+        request_context_provider=_FakeRequestContextProvider(),
+    )
+
+    response = await service.start_bulk_create(
+        request=DatasetBulkCreateRequest(
+            workspace_id=workspace_id,
+            connection_id=connector_id,
+            selections=[
+                DatasetSelectionRequest(
+                    schema="public",
+                    table="orders",
+                    columns=[DatasetSelectionColumnRequest(name="order_id", data_type="integer")],
+                ),
+                DatasetSelectionRequest(
+                    schema="public",
+                    table="orders",
+                    columns=[DatasetSelectionColumnRequest(name="order_id", data_type="integer")],
+                ),
+            ],
+            tags=["auto-generated"],
+        ),
+        current_user=current_user,
+    )
+
+    assert response.job_status == JobStatus.queued.value
+    assert len(dataset_job_service.bulk_requests) == 1
+    assert len(dataset_job_service.bulk_requests[0].selections) == 1

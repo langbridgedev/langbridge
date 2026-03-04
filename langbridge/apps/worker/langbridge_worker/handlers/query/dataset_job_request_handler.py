@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -13,6 +14,7 @@ from sqlglot import exp
 from langbridge.apps.worker.langbridge_worker.tools import FederatedQueryTool
 from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.packages.common.langbridge_common.contracts.jobs.dataset_job import (
+    CreateDatasetBulkCreateJobRequest,
     CreateDatasetPreviewJobRequest,
     CreateDatasetProfileJobRequest,
 )
@@ -93,6 +95,13 @@ class DatasetJobRequestHandler(BaseMessageHandler):
                 request = self._parse_profile_request(payload)
                 result = await self._run_profile(request)
                 summary = "Dataset profiling completed."
+            elif payload.job_type == JobType.DATASET_BULK_CREATE:
+                request = self._parse_bulk_create_request(payload)
+                result = await self._run_bulk_create(request, job_record)
+                summary = (
+                    f"Bulk dataset creation completed: {result.get('created_count', 0)} created, "
+                    f"{result.get('reused_count', 0)} reused."
+                )
             else:
                 raise BusinessValidationError(f"Unsupported dataset job type '{payload.job_type.value}'.")
 
@@ -126,6 +135,12 @@ class DatasetJobRequestHandler(BaseMessageHandler):
             return CreateDatasetProfileJobRequest.model_validate(payload.job_request)
         except ValidationError as exc:
             raise BusinessValidationError("Invalid dataset profile request payload.") from exc
+
+    def _parse_bulk_create_request(self, payload: DatasetJobRequestMessage) -> CreateDatasetBulkCreateJobRequest:
+        try:
+            return CreateDatasetBulkCreateJobRequest.model_validate(payload.job_request)
+        except ValidationError as exc:
+            raise BusinessValidationError("Invalid dataset bulk-create request payload.") from exc
 
     async def _run_preview(self, request: CreateDatasetPreviewJobRequest) -> dict[str, Any]:
         dataset, columns, policy = await self._load_dataset_bundle(
@@ -264,6 +279,294 @@ class DatasetJobRequestHandler(BaseMessageHandler):
             "profiled_at": now.isoformat(),
         }
 
+    async def _run_bulk_create(
+        self,
+        request: CreateDatasetBulkCreateJobRequest,
+        job_record: JobRecord,
+    ) -> dict[str, Any]:
+        created_count = 0
+        reused_count = 0
+        dataset_ids: list[str] = []
+        items: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        total = max(1, len(request.selections))
+
+        for index, selection in enumerate(request.selections):
+            job_record.progress = min(95, 10 + int((index / total) * 85))
+            job_record.status_message = (
+                f"Processing {selection.schema}.{selection.table} ({index + 1}/{total})"
+            )
+            try:
+                existing = await self._find_existing_table_dataset(
+                    workspace_id=request.workspace_id,
+                    project_id=request.project_id,
+                    connection_id=request.connection_id,
+                    schema_name=selection.schema,
+                    table_name=selection.table,
+                    selected_columns=[column.name for column in selection.columns],
+                )
+                if existing is not None:
+                    reused_count += 1
+                    dataset_ids.append(str(existing.id))
+                    items.append(
+                        {
+                            "schema": selection.schema,
+                            "table": selection.table,
+                            "dataset_id": str(existing.id),
+                            "created": False,
+                        }
+                    )
+                    continue
+
+                dataset = await self._create_table_dataset_from_selection(
+                    request=request,
+                    schema_name=selection.schema,
+                    table_name=selection.table,
+                    columns=selection.columns,
+                )
+                created_count += 1
+                dataset_ids.append(str(dataset.id))
+                items.append(
+                    {
+                        "schema": selection.schema,
+                        "table": selection.table,
+                        "dataset_id": str(dataset.id),
+                        "created": True,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - continue processing the remaining selections
+                errors.append(
+                    {
+                        "schema": selection.schema,
+                        "table": selection.table,
+                        "error": sanitize_sql_error_message(str(exc)),
+                    }
+                )
+
+        return {
+            "created_count": created_count,
+            "reused_count": reused_count,
+            "dataset_ids": dataset_ids[:200],
+            "items": items[:500],
+            "errors": errors[:200],
+        }
+
+    async def _find_existing_table_dataset(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        project_id: uuid.UUID | None,
+        connection_id: uuid.UUID,
+        schema_name: str,
+        table_name: str,
+        selected_columns: list[str],
+    ) -> DatasetRecord | None:
+        candidates = await self._dataset_repository.list_for_workspace(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            dataset_types=["TABLE"],
+            limit=5000,
+        )
+        requested_signature = self._selection_signature(schema_name, table_name, selected_columns)
+        for dataset in candidates:
+            if dataset.connection_id != connection_id:
+                continue
+            if (dataset.schema_name or "").strip().lower() != schema_name.strip().lower():
+                continue
+            if (dataset.table_name or "").strip().lower() != table_name.strip().lower():
+                continue
+            columns = await self._dataset_column_repository.list_for_dataset(dataset_id=dataset.id)
+            existing_signature = self._selection_signature(
+                schema_name,
+                table_name,
+                [column.name for column in columns if column.is_allowed],
+            )
+            if existing_signature == requested_signature:
+                return dataset
+        return None
+
+    async def _create_table_dataset_from_selection(
+        self,
+        *,
+        request: CreateDatasetBulkCreateJobRequest,
+        schema_name: str,
+        table_name: str,
+        columns: list[Any],
+    ) -> DatasetRecord:
+        selected_columns: list[DatasetColumnRecord] = []
+        for index, column in enumerate(columns):
+            column_name = str(getattr(column, "name", "")).strip()
+            if not column_name:
+                continue
+            selected_columns.append(
+                DatasetColumnRecord(
+                    id=uuid.uuid4(),
+                    dataset_id=uuid.uuid4(),  # placeholder overwritten below
+                    workspace_id=request.workspace_id,
+                    name=column_name,
+                    data_type=str(getattr(column, "data_type", None) or "unknown"),
+                    nullable=bool(getattr(column, "nullable", True)),
+                    ordinal_position=index,
+                    description=None,
+                    is_allowed=True,
+                    is_computed=False,
+                    expression=None,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+
+        base_name = self._render_name_template(
+            request.naming_template,
+            connection_id=request.connection_id,
+            schema_name=schema_name,
+            table_name=table_name,
+        )
+        final_name = await self._ensure_unique_dataset_name(
+            workspace_id=request.workspace_id,
+            project_id=request.project_id,
+            base_name=base_name,
+            suffix_seed=self._selection_signature(
+                schema_name,
+                table_name,
+                [column.name for column in selected_columns],
+            ),
+        )
+        now = datetime.now(timezone.utc)
+        dataset = DatasetRecord(
+            id=uuid.uuid4(),
+            workspace_id=request.workspace_id,
+            project_id=request.project_id,
+            connection_id=request.connection_id,
+            created_by=request.user_id,
+            updated_by=request.user_id,
+            name=final_name,
+            description=None,
+            tags_json=self._normalize_tags(list(request.tags or [])),
+            dataset_type="TABLE",
+            dialect=None,
+            catalog_name=None,
+            schema_name=schema_name,
+            table_name=table_name,
+            sql_text=None,
+            referenced_dataset_ids_json=[],
+            federated_plan_json=None,
+            file_config_json=None,
+            status="published",
+            revision_id=None,
+            row_count_estimate=None,
+            bytes_estimate=None,
+            last_profiled_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        self._dataset_repository.add(dataset)
+
+        if not selected_columns:
+            selected_columns.append(
+                DatasetColumnRecord(
+                    id=uuid.uuid4(),
+                    dataset_id=dataset.id,
+                    workspace_id=request.workspace_id,
+                    name="*",
+                    data_type="unknown",
+                    nullable=True,
+                    ordinal_position=0,
+                    description=None,
+                    is_allowed=True,
+                    is_computed=False,
+                    expression=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        for index, column in enumerate(selected_columns):
+            column.dataset_id = dataset.id
+            column.ordinal_position = index
+            self._dataset_column_repository.add(column)
+
+        defaults = request.policy_defaults
+        max_preview_rows = int(defaults.max_preview_rows) if defaults and defaults.max_preview_rows else settings.SQL_DEFAULT_MAX_PREVIEW_ROWS
+        max_export_rows = int(defaults.max_export_rows) if defaults and defaults.max_export_rows else settings.SQL_DEFAULT_MAX_EXPORT_ROWS
+        max_preview_rows = max(1, min(max_preview_rows, settings.SQL_POLICY_MAX_PREVIEW_ROWS_UPPER_BOUND))
+        max_export_rows = max(1, min(max_export_rows, settings.SQL_POLICY_MAX_EXPORT_ROWS_UPPER_BOUND))
+        allow_dml = bool(defaults.allow_dml) if defaults else False
+        redaction_rules = dict(defaults.redaction_rules or {}) if defaults else {}
+        self._dataset_policy_repository.add(
+            DatasetPolicyRecord(
+                id=uuid.uuid4(),
+                dataset_id=dataset.id,
+                workspace_id=request.workspace_id,
+                max_rows_preview=max_preview_rows,
+                max_export_rows=max_export_rows,
+                redaction_rules_json=redaction_rules,
+                row_filters_json=[],
+                allow_dml=allow_dml,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        return dataset
+
+    async def _ensure_unique_dataset_name(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        project_id: uuid.UUID | None,
+        base_name: str,
+        suffix_seed: str,
+    ) -> str:
+        rows = await self._dataset_repository.list_for_workspace(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            limit=5000,
+        )
+        taken = {row.name.strip().lower() for row in rows if row.name}
+        if base_name.strip().lower() not in taken:
+            return base_name.strip()
+
+        candidate = f"{base_name.strip()}_{suffix_seed[:8]}"
+        if candidate.lower() not in taken:
+            return candidate
+
+        counter = 2
+        while True:
+            numbered = f"{candidate}_{counter}"
+            if numbered.lower() not in taken:
+                return numbered
+            counter += 1
+
+    @staticmethod
+    def _selection_signature(schema_name: str, table_name: str, selected_columns: list[str]) -> str:
+        normalized_columns = ",".join(
+            sorted({column.strip().lower() for column in selected_columns if column and column.strip()})
+        ) or "*"
+        payload = f"{schema_name.strip().lower()}|{table_name.strip().lower()}|{normalized_columns}"
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _render_name_template(
+        naming_template: str,
+        *,
+        connection_id: uuid.UUID,
+        schema_name: str,
+        table_name: str,
+    ) -> str:
+        template = (naming_template or "{schema}.{table}").strip() or "{schema}.{table}"
+        return (
+            template.replace("{connection}", str(connection_id).replace("-", "_"))
+            .replace("{schema}", schema_name.strip() or "schema")
+            .replace("{table}", table_name.strip() or "table")
+        )
+
+    @staticmethod
+    def _normalize_tags(tags: list[str]) -> list[str]:
+        normalized = [tag.strip() for tag in tags if tag and tag.strip()]
+        lowered = {tag.lower() for tag in normalized}
+        if "auto-generated" not in lowered:
+            normalized.append("auto-generated")
+        return normalized
+
     async def _load_dataset_bundle(
         self,
         *,
@@ -304,13 +607,13 @@ class DatasetJobRequestHandler(BaseMessageHandler):
             raise BusinessValidationError("Executable datasets require a connection_id.")
 
         dialect = (dataset.dialect or "tsql").strip().lower() or "tsql"
-        table_key = "dataset_source"
+        table_key = f"{dataset.schema_name}.{dataset.table_name}"
         metadata: dict[str, Any] = {
             "physical_catalog": dataset.catalog_name,
             "physical_schema": dataset.schema_name,
             "physical_table": dataset.table_name,
         }
-        binding_table_name = dataset.table_name or "dataset_source"
+        binding_table_name = dataset.table_name or table_key
         schema_name = dataset.schema_name
         catalog_name = dataset.catalog_name
 

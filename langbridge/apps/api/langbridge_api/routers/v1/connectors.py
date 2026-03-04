@@ -1,7 +1,7 @@
 from typing import Optional
 from uuid import UUID
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from langbridge.apps.api.langbridge_api.auth.dependencies import get_current_user, get_organization, get_project
 from langbridge.packages.connectors.langbridge_connectors.api.config import ConnectorConfigSchema
@@ -10,6 +10,7 @@ from langbridge.apps.api.langbridge_api.ioc import Container
 from langbridge.packages.common.langbridge_common.contracts.auth import UserResponse
 from langbridge.packages.common.langbridge_common.contracts.connectors import (
     ConnectorResponse,
+    ConnectorCatalogResponse,
     ConnectorSourceSchemaColumnResponse,
     ConnectorSourceSchemaResponse,
     ConnectorSourceSchemaTableResponse,
@@ -33,8 +34,20 @@ async def create_connector(
     _org = Depends(get_organization),
     _proj = Depends(get_project),
     connector_service: ConnectorService = Depends(Provide[Container.connector_service]),
+    connector_schema_service: ConnectorSchemaService = Depends(
+        Provide[Container.connector_schema_service]
+    ),
 ) -> ConnectorResponse:
-    return await connector_service.create_connector(request)
+    connector = await connector_service.create_connector(request)
+    try:
+        connector.catalog_summary = await connector_schema_service.get_catalog_summary(
+            connector_id=connector.id,
+            include_system_schemas=False,
+        )
+    except Exception:
+        # Keep connector creation resilient even when catalog introspection fails.
+        connector.catalog_summary = None
+    return connector
 
 
 @router.get("/{connector_id}", response_model=ConnectorResponse)
@@ -111,6 +124,39 @@ async def get_connector_table(
             )
             for column in columns
         },
+    )
+
+
+@router.get(
+    "/{connector_id}/catalog",
+    response_model=ConnectorCatalogResponse,
+)
+@inject
+async def get_connector_catalog(
+    connector_id: UUID,
+    organization_id: UUID,
+    search: str | None = Query(default=None),
+    include_schemas: list[str] = Query(default_factory=list),
+    exclude_schemas: list[str] = Query(default_factory=list),
+    include_system_schemas: bool = Query(default=False),
+    include_columns: bool = Query(default=True),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    current_user: UserResponse = Depends(get_current_user),
+    _org = Depends(get_organization),
+    connector_schema_service: ConnectorSchemaService = Depends(
+        Provide[Container.connector_schema_service]
+    ),
+) -> ConnectorCatalogResponse:
+    return await connector_schema_service.get_catalog(
+        connector_id=connector_id,
+        search=search,
+        include_schemas=include_schemas,
+        exclude_schemas=exclude_schemas,
+        include_system_schemas=include_system_schemas,
+        include_columns=include_columns,
+        limit=limit,
+        offset=offset,
     )
 
 

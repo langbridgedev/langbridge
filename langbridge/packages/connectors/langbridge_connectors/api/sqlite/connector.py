@@ -33,7 +33,7 @@ class SqliteConnector(SqlConnector):
     async def fetch_schemas(self) -> list[str]:
         return ["main"]
     
-    async def fetch_tables(self, _:str) -> list[str]:
+    async def fetch_tables(self, schema:str) -> list[str]:
         try:
             conn = connect(self.database_path)
             cursor = conn.cursor()
@@ -67,7 +67,7 @@ class SqliteConnector(SqlConnector):
             self.logger.error("Failed to fetch table metadata: %s", exc)
             raise ConnectorError(f"Unable to fetch table metadata from SQLite database: {exc}") from exc
         
-    async def fetch_columns(self, _:str, table:str) -> list[ColumnMetadata]:
+    async def fetch_columns(self, schema:str, table:str) -> list[ColumnMetadata]:
         try:
             conn = connect(self.database_path)
             cursor = conn.cursor()
@@ -88,7 +88,7 @@ class SqliteConnector(SqlConnector):
             self.logger.error("Failed to fetch columns: %s", exc)
             raise ConnectorError(f"Unable to fetch columns from SQLite database: {exc}") from exc
     
-    async def fetch_foreign_keys(self, _:str, table:str) -> list[ForeignKeyMetadata]:
+    async def fetch_foreign_keys(self, schema:str, table:str) -> list[ForeignKeyMetadata]:
         try:
             conn = connect(self.database_path)
             cursor = conn.cursor()
@@ -96,7 +96,7 @@ class SqliteConnector(SqlConnector):
             foreign_keys = []
             for row in cursor.fetchall():
                 foreign_key = ForeignKeyMetadata(
-                    schema="main",
+                    schema=schema,
                     table=row[2],
                     name="fk_" + row[3],
                     column=row[3],

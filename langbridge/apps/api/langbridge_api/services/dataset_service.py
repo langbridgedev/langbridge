@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -18,12 +18,18 @@ from langbridge.apps.api.langbridge_api.services.request_context_provider import
 from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.packages.common.langbridge_common.contracts.auth import UserResponse
 from langbridge.packages.common.langbridge_common.contracts.datasets import (
+    DatasetBulkCreateRequest,
+    DatasetBulkCreateStartResponse,
     DatasetCatalogItem,
     DatasetCatalogResponse,
     DatasetColumnRequest,
     DatasetColumnResponse,
     DatasetCreateRequest,
+    DatasetEnsureRequest,
+    DatasetEnsureResponse,
     DatasetListResponse,
+    DatasetSelectionColumnRequest,
+    DatasetPolicyDefaultsRequest,
     DatasetPolicyRequest,
     DatasetPolicyResponse,
     DatasetPreviewColumn,
@@ -39,9 +45,11 @@ from langbridge.packages.common.langbridge_common.contracts.datasets import (
     DatasetUsageResponse,
 )
 from langbridge.packages.common.langbridge_common.contracts.jobs.dataset_job import (
+    CreateDatasetBulkCreateJobRequest,
     CreateDatasetPreviewJobRequest,
     CreateDatasetProfileJobRequest,
 )
+from langbridge.packages.common.langbridge_common.contracts.jobs.type import JobType
 from langbridge.packages.common.langbridge_common.db.dataset import (
     DatasetColumnRecord,
     DatasetPolicyRecord,
@@ -93,6 +101,7 @@ _FORBIDDEN_SECRET_KEYS = {
     "private_key",
     "client_secret",
 }
+_DATASET_AUTO_GENERATED_TAG = "auto-generated"
 
 
 class DatasetService:
@@ -214,6 +223,105 @@ class DatasetService:
         dataset.revision_id = revision_id
         dataset.updated_at = datetime.now(timezone.utc)
         return await self._to_dataset_response(dataset)
+
+    async def ensure_dataset(
+        self,
+        *,
+        request: DatasetEnsureRequest,
+        current_user: UserResponse,
+    ) -> DatasetEnsureResponse:
+        await self._assert_workspace_access(request.workspace_id, current_user)
+        await self._validate_connection_scope(
+            workspace_id=request.workspace_id,
+            connection_id=request.connection_id,
+        )
+        columns = self._normalize_selection_columns(request.columns)
+        existing = await self._find_existing_table_dataset(
+            workspace_id=request.workspace_id,
+            project_id=request.project_id,
+            connection_id=request.connection_id,
+            schema_name=request.schema,
+            table_name=request.table,
+            selected_columns=columns,
+        )
+        if existing is not None:
+            return DatasetEnsureResponse(
+                dataset_id=existing.id,
+                created=False,
+                name=existing.name,
+            )
+
+        await self._assert_workspace_admin(request.workspace_id, current_user)
+        created = await self._create_dataset_from_table_selection(
+            workspace_id=request.workspace_id,
+            project_id=request.project_id,
+            connection_id=request.connection_id,
+            schema_name=request.schema,
+            table_name=request.table,
+            columns=columns,
+            naming_template=request.naming_template,
+            requested_name=request.name,
+            policy_defaults=request.policy_defaults,
+            tags=request.tags,
+            current_user=current_user,
+        )
+        return DatasetEnsureResponse(
+            dataset_id=created.id,
+            created=True,
+            name=created.name,
+        )
+
+    async def start_bulk_create(
+        self,
+        *,
+        request: DatasetBulkCreateRequest,
+        current_user: UserResponse,
+    ) -> DatasetBulkCreateStartResponse:
+        await self._assert_workspace_access(request.workspace_id, current_user)
+        await self._assert_workspace_admin(request.workspace_id, current_user)
+        await self._validate_connection_scope(
+            workspace_id=request.workspace_id,
+            connection_id=request.connection_id,
+        )
+
+        normalized_selections = [
+            selection.model_copy(update={"columns": self._normalize_selection_columns(selection.columns)})
+            for selection in request.selections
+        ]
+        dedupe_key_set: set[str] = set()
+        deduped_selections = []
+        for selection in normalized_selections:
+            key = self._selection_signature(
+                schema_name=selection.schema,
+                table_name=selection.table,
+                selected_columns=[column.name for column in selection.columns],
+            )
+            if key in dedupe_key_set:
+                continue
+            dedupe_key_set.add(key)
+            deduped_selections.append(selection)
+
+        if len(deduped_selections) == 0:
+            raise BusinessValidationError("No unique selections remain after de-duplication.")
+
+        job = await self._dataset_job_request_service.create_bulk_create_job(
+            CreateDatasetBulkCreateJobRequest(
+                workspace_id=request.workspace_id,
+                project_id=request.project_id,
+                user_id=current_user.id,
+                connection_id=request.connection_id,
+                selections=deduped_selections,
+                naming_template=request.naming_template,
+                policy_defaults=request.policy_defaults,
+                tags=list(request.tags or []),
+                profile_after_create=request.profile_after_create,
+                correlation_id=self._request_context_provider.correlation_id,
+            )
+        )
+        return DatasetBulkCreateStartResponse(
+            job_id=job.id,
+            job_status=job.status.value,
+        )
 
     async def get_dataset(
         self,
@@ -400,58 +508,11 @@ class DatasetService:
                 correlation_id=self._request_context_provider.correlation_id,
             )
         )
-
-        if not request.wait_for_completion:
-            return DatasetPreviewResponse(
-                job_id=job.id,
-                status=job.status.value,
-                dataset_id=dataset.id,
-                effective_limit=effective_limit,
-            )
-
-        latest_job = await self._wait_for_job(job.id, timeout_seconds=request.wait_timeout_seconds)
-        if latest_job.status == JobStatus.succeeded:
-            payload = latest_job.result if isinstance(latest_job.result, dict) else {}
-            result = payload.get("result") if isinstance(payload.get("result"), dict) else payload
-            if result is None:
-                return DatasetPreviewResponse(
-                    job_id=latest_job.id,
-                    status=latest_job.status.value,
-                    dataset_id=dataset.id,
-                    effective_limit=effective_limit,
-                    error="Dataset preview job did not return a result.",
-                )
-            columns = [
-                DatasetPreviewColumn(
-                    name=str(column.get("name") or ""),
-                    data_type=(str(column.get("type")) if column.get("type") is not None else None),
-                )
-                for column in (result.get("columns") or [])
-                if isinstance(column, dict) and str(column.get("name") or "").strip()
-            ]
-            rows = [row for row in (result.get("rows") or []) if isinstance(row, dict)]
-            return DatasetPreviewResponse(
-                job_id=latest_job.id,
-                status=latest_job.status.value,
-                dataset_id=dataset.id,
-                columns=columns,
-                rows=rows,
-                row_count_preview=int(result.get("row_count_preview") or len(rows)),
-                effective_limit=effective_limit,
-                redaction_applied=bool(result.get("redaction_applied")),
-                duration_ms=(int(result["duration_ms"]) if result.get("duration_ms") is not None else None),
-                bytes_scanned=(int(result["bytes_scanned"]) if result.get("bytes_scanned") is not None else None),
-            )
-
-        error = None
-        if isinstance(latest_job.error, dict):
-            error = str(latest_job.error.get("message") or "")
         return DatasetPreviewResponse(
-            job_id=latest_job.id,
-            status=latest_job.status.value,
+            job_id=job.id,
+            status=job.status.value,
             dataset_id=dataset.id,
             effective_limit=effective_limit,
-            error=error or "Dataset preview job did not complete successfully.",
         )
 
     async def profile_dataset(
@@ -474,60 +535,316 @@ class DatasetService:
                 correlation_id=self._request_context_provider.correlation_id,
             )
         )
-
-        if not request.wait_for_completion:
-            return DatasetProfileResponse(
-                job_id=job.id,
-                status=job.status.value,
-                dataset_id=dataset.id,
-            )
-
-        latest_job = await self._wait_for_job(job.id, timeout_seconds=request.wait_timeout_seconds)
-        if latest_job.status == JobStatus.succeeded:
-            payload = latest_job.result if isinstance(latest_job.result, dict) else {}
-            result = payload.get("result") if isinstance(payload.get("result"), dict) else payload
-            if result is None:
-                return DatasetProfileResponse(
-                    job_id=latest_job.id,
-                    status=latest_job.status.value,
-                    dataset_id=dataset.id,
-                    error="Dataset profile job did not return a result.",
-                )
-            profiled_at = None
-            if isinstance(result.get("profiled_at"), str):
-                try:
-                    profiled_at = datetime.fromisoformat(str(result["profiled_at"]))
-                except ValueError:
-                    profiled_at = datetime.now(timezone.utc)
-            return DatasetProfileResponse(
-                job_id=latest_job.id,
-                status=latest_job.status.value,
-                dataset_id=dataset.id,
-                row_count_estimate=(
-                    int(result["row_count_estimate"]) if result.get("row_count_estimate") is not None else None
-                ),
-                bytes_estimate=(int(result["bytes_estimate"]) if result.get("bytes_estimate") is not None else None),
-                distinct_counts={
-                    str(key): int(value)
-                    for key, value in (result.get("distinct_counts") or {}).items()
-                    if value is not None
-                },
-                null_rates={
-                    str(key): float(value)
-                    for key, value in (result.get("null_rates") or {}).items()
-                    if value is not None
-                },
-                profiled_at=profiled_at,
-            )
-
-        error = None
-        if isinstance(latest_job.error, dict):
-            error = str(latest_job.error.get("message") or "")
         return DatasetProfileResponse(
-            job_id=latest_job.id,
-            status=latest_job.status.value,
+            job_id=job.id,
+            status=job.status.value,
             dataset_id=dataset.id,
-            error=error or "Dataset profile job did not complete successfully.",
+        )
+
+    async def get_preview_job_result(
+        self,
+        *,
+        dataset_id: uuid.UUID,
+        job_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        current_user: UserResponse,
+    ) -> DatasetPreviewResponse:
+        await self._assert_workspace_access(workspace_id, current_user)
+        dataset = await self._get_dataset(dataset_id=dataset_id, workspace_id=workspace_id)
+        policy = await self._get_or_create_policy(dataset)
+        workspace_cap = await self._get_workspace_preview_cap(workspace_id=workspace_id)
+        latest_job = await self._get_dataset_job(
+            dataset=dataset,
+            job_id=job_id,
+            workspace_id=workspace_id,
+            expected_job_type=JobType.DATASET_PREVIEW,
+            current_user=current_user,
+        )
+        return self._build_preview_response_from_job(
+            dataset_id=dataset.id,
+            policy_max_preview_rows=policy.max_rows_preview,
+            workspace_preview_cap=workspace_cap,
+            latest_job=latest_job,
+        )
+
+    async def get_profile_job_result(
+        self,
+        *,
+        dataset_id: uuid.UUID,
+        job_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        current_user: UserResponse,
+    ) -> DatasetProfileResponse:
+        await self._assert_workspace_access(workspace_id, current_user)
+        dataset = await self._get_dataset(dataset_id=dataset_id, workspace_id=workspace_id)
+        latest_job = await self._get_dataset_job(
+            dataset=dataset,
+            job_id=job_id,
+            workspace_id=workspace_id,
+            expected_job_type=JobType.DATASET_PROFILE,
+            current_user=current_user,
+        )
+        return self._build_profile_response_from_job(
+            dataset_id=dataset.id,
+            latest_job=latest_job,
+        )
+
+    async def _create_dataset_from_table_selection(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        project_id: uuid.UUID | None,
+        connection_id: uuid.UUID,
+        schema_name: str,
+        table_name: str,
+        columns: list[DatasetSelectionColumnRequest],
+        naming_template: str | None,
+        requested_name: str | None,
+        policy_defaults: DatasetPolicyDefaultsRequest | None,
+        tags: list[str],
+        current_user: UserResponse,
+    ) -> DatasetRecord:
+        selected_columns = [
+            DatasetColumnRequest(
+                name=column.name.strip(),
+                data_type=(column.data_type or "unknown"),
+                nullable=column.nullable if column.nullable is not None else True,
+                is_allowed=True,
+                is_computed=False,
+                ordinal_position=index,
+            )
+            for index, column in enumerate(columns)
+            if column.name.strip()
+        ]
+        if not selected_columns:
+            selected_columns = await self._infer_columns_from_table(
+                connection_id=connection_id,
+                schema_name=schema_name,
+                table_name=table_name,
+            )
+
+        connector = await self._connector_repository.get_by_id(connection_id)
+        connection_name = getattr(connector, "name", None) or str(connection_id)
+        inferred_base_name = self._render_dataset_name_template(
+            connection_name=connection_name,
+            schema_name=schema_name,
+            table_name=table_name,
+            naming_template=naming_template or "{schema}.{table}",
+        )
+        base_name = (requested_name or inferred_base_name).strip() or f"{schema_name}.{table_name}"
+        suffix_seed = self._selection_signature(
+            schema_name=schema_name,
+            table_name=table_name,
+            selected_columns=[column.name for column in selected_columns],
+        )
+        final_name = await self._ensure_unique_dataset_name(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            base_name=base_name,
+            suffix_seed=suffix_seed,
+        )
+
+        now = datetime.now(timezone.utc)
+        dataset = DatasetRecord(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            connection_id=connection_id,
+            created_by=current_user.id,
+            updated_by=current_user.id,
+            name=final_name,
+            description=None,
+            tags_json=self._normalize_dataset_tags(tags),
+            dataset_type=DatasetType.TABLE.value,
+            dialect=None,
+            catalog_name=None,
+            schema_name=schema_name.strip() or None,
+            table_name=table_name.strip() or None,
+            sql_text=None,
+            referenced_dataset_ids_json=[],
+            federated_plan_json=None,
+            file_config_json=None,
+            status=DatasetStatus.PUBLISHED.value,
+            revision_id=None,
+            row_count_estimate=None,
+            bytes_estimate=None,
+            last_profiled_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        self._dataset_repository.add(dataset)
+        await self._replace_columns(
+            dataset=dataset,
+            workspace_id=workspace_id,
+            columns=selected_columns,
+        )
+        policy = await self._upsert_policy(
+            dataset=dataset,
+            policy=self._resolve_policy_defaults(policy_defaults),
+        )
+        revision_id = await self._create_revision(
+            dataset=dataset,
+            policy=policy,
+            created_by=current_user.id,
+            note="Auto-generated dataset created.",
+        )
+        dataset.revision_id = revision_id
+        dataset.updated_at = datetime.now(timezone.utc)
+        return dataset
+
+    async def _find_existing_table_dataset(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        project_id: uuid.UUID | None,
+        connection_id: uuid.UUID,
+        schema_name: str,
+        table_name: str,
+        selected_columns: list[DatasetSelectionColumnRequest],
+    ) -> DatasetRecord | None:
+        candidates = await self._dataset_repository.list_for_workspace(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            dataset_types=[DatasetType.TABLE.value],
+            limit=5000,
+        )
+        requested_names = sorted(
+            {column.name.strip().lower() for column in selected_columns if column.name.strip()}
+        )
+        requested_signature = ",".join(requested_names) if requested_names else "*"
+        for dataset in candidates:
+            if dataset.connection_id != connection_id:
+                continue
+            if (dataset.schema_name or "").strip().lower() != schema_name.strip().lower():
+                continue
+            if (dataset.table_name or "").strip().lower() != table_name.strip().lower():
+                continue
+            dataset_columns = await self._dataset_column_repository.list_for_dataset(dataset_id=dataset.id)
+            existing_names = sorted(
+                {
+                    column.name.strip().lower()
+                    for column in dataset_columns
+                    if column.is_allowed and column.name.strip()
+                }
+            )
+            existing_signature = ",".join(existing_names) if existing_names else "*"
+            if existing_signature == requested_signature:
+                return dataset
+        return None
+
+    async def _ensure_unique_dataset_name(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        project_id: uuid.UUID | None,
+        base_name: str,
+        suffix_seed: str,
+    ) -> str:
+        rows = await self._dataset_repository.list_for_workspace(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            limit=5000,
+        )
+        taken_names = {row.name.strip().lower() for row in rows if row.name}
+        normalized_base = base_name.strip()
+        if normalized_base.lower() not in taken_names:
+            return normalized_base
+
+        base_with_signature = f"{normalized_base}_{suffix_seed[:8]}"
+        if base_with_signature.lower() not in taken_names:
+            return base_with_signature
+
+        counter = 2
+        while True:
+            candidate = f"{base_with_signature}_{counter}"
+            if candidate.lower() not in taken_names:
+                return candidate
+            counter += 1
+
+    def _render_dataset_name_template(
+        self,
+        *,
+        connection_name: str,
+        schema_name: str,
+        table_name: str,
+        naming_template: str,
+    ) -> str:
+        safe_schema = schema_name.strip() or "schema"
+        safe_table = table_name.strip() or "table"
+        safe_connection = connection_name.strip().replace(" ", "_").replace("-", "_")
+        template = naming_template.strip() or "{schema}.{table}"
+        return (
+            template.replace("{schema}", safe_schema)
+            .replace("{table}", safe_table)
+            .replace("{connection}", safe_connection)
+        )
+
+    @staticmethod
+    def _selection_signature(
+        *,
+        schema_name: str,
+        table_name: str,
+        selected_columns: list[str],
+    ) -> str:
+        column_part = ",".join(sorted({value.strip().lower() for value in selected_columns if value.strip()})) or "*"
+        payload = f"{schema_name.strip().lower()}|{table_name.strip().lower()}|{column_part}"
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _normalize_selection_columns(
+        columns: list[DatasetSelectionColumnRequest],
+    ) -> list[DatasetSelectionColumnRequest]:
+        seen: set[str] = set()
+        normalized: list[DatasetSelectionColumnRequest] = []
+        for column in columns:
+            key = column.name.strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            normalized.append(
+                DatasetSelectionColumnRequest(
+                    name=column.name.strip(),
+                    data_type=column.data_type,
+                    nullable=column.nullable,
+                )
+            )
+        return normalized
+
+    @staticmethod
+    def _normalize_dataset_tags(tags: list[str]) -> list[str]:
+        normalized = [tag.strip() for tag in (tags or []) if tag and tag.strip()]
+        lowered = {tag.lower() for tag in normalized}
+        if _DATASET_AUTO_GENERATED_TAG not in lowered:
+            normalized.append(_DATASET_AUTO_GENERATED_TAG)
+        return normalized
+
+    def _resolve_policy_defaults(
+        self,
+        policy_defaults: DatasetPolicyDefaultsRequest | None,
+    ) -> DatasetPolicyRequest:
+        max_preview_rows = (
+            policy_defaults.max_preview_rows
+            if policy_defaults and policy_defaults.max_preview_rows is not None
+            else settings.SQL_DEFAULT_MAX_PREVIEW_ROWS
+        )
+        max_export_rows = (
+            policy_defaults.max_export_rows
+            if policy_defaults and policy_defaults.max_export_rows is not None
+            else settings.SQL_DEFAULT_MAX_EXPORT_ROWS
+        )
+        max_preview_rows = max(
+            1,
+            min(int(max_preview_rows), int(settings.SQL_POLICY_MAX_PREVIEW_ROWS_UPPER_BOUND)),
+        )
+        max_export_rows = max(
+            1,
+            min(int(max_export_rows), int(settings.SQL_POLICY_MAX_EXPORT_ROWS_UPPER_BOUND)),
+        )
+        return DatasetPolicyRequest(
+            max_rows_preview=max_preview_rows,
+            max_export_rows=max_export_rows,
+            allow_dml=bool(policy_defaults.allow_dml) if policy_defaults else False,
+            redaction_rules=(dict(policy_defaults.redaction_rules) if policy_defaults else {}),
         )
 
     async def _resolve_create_columns(
@@ -865,21 +1182,153 @@ class DatasetService:
             return sql_policy.max_preview_rows
         return settings.SQL_DEFAULT_MAX_PREVIEW_ROWS
 
-    async def _wait_for_job(self, job_id: uuid.UUID, *, timeout_seconds: int) -> JobRecord:
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout_seconds
-        last_seen: JobRecord | None = None
-        while loop.time() <= deadline:
-            current = await self._job_repository.get_by_id(job_id)
-            if current is None:
-                raise ResourceNotFound("Dataset execution job not found.")
-            last_seen = current
-            if current.status in {JobStatus.succeeded, JobStatus.failed, JobStatus.cancelled}:
-                return current
-            await asyncio.sleep(0.5)
-        if last_seen is None:
+    async def _get_dataset_job(
+        self,
+        *,
+        dataset: DatasetRecord,
+        job_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        expected_job_type: JobType,
+        current_user: UserResponse,
+    ) -> JobRecord:
+        job = await self._job_repository.get_by_id(job_id)
+        if job is None:
             raise ResourceNotFound("Dataset execution job not found.")
-        return last_seen
+        if str(job.organisation_id) != str(workspace_id):
+            raise PermissionDeniedBusinessValidationError("Dataset execution job is outside this workspace.")
+        if str(job.job_type) != expected_job_type.value:
+            raise BusinessValidationError("Dataset execution job type does not match this endpoint.")
+
+        payload = job.payload if isinstance(job.payload, dict) else {}
+        payload_dataset_id = str(payload.get("dataset_id") or "").strip()
+        if payload_dataset_id != str(dataset.id):
+            raise PermissionDeniedBusinessValidationError("Dataset execution job does not belong to this dataset.")
+
+        if not self._is_internal_user(current_user):
+            payload_user_id = str(payload.get("user_id") or "").strip()
+            if payload_user_id and payload_user_id != str(current_user.id):
+                raise PermissionDeniedBusinessValidationError("You do not have access to this dataset execution job.")
+
+        return job
+
+    def _build_preview_response_from_job(
+        self,
+        *,
+        dataset_id: uuid.UUID,
+        policy_max_preview_rows: int,
+        workspace_preview_cap: int,
+        latest_job: JobRecord,
+    ) -> DatasetPreviewResponse:
+        payload = latest_job.result if isinstance(latest_job.result, dict) else {}
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else payload
+        requested_limit_raw = (
+            latest_job.payload.get("requested_limit")
+            if isinstance(latest_job.payload, dict)
+            else None
+        )
+        requested_limit = int(requested_limit_raw) if requested_limit_raw is not None else policy_max_preview_rows
+        effective_limit = min(requested_limit, policy_max_preview_rows, workspace_preview_cap)
+
+        if latest_job.status != JobStatus.succeeded:
+            error = None
+            if isinstance(latest_job.error, dict):
+                error = str(latest_job.error.get("message") or "")
+            return DatasetPreviewResponse(
+                job_id=latest_job.id,
+                status=latest_job.status.value,
+                dataset_id=dataset_id,
+                effective_limit=effective_limit,
+                error=error or "Dataset preview job did not complete successfully.",
+            )
+
+        if result is None:
+            return DatasetPreviewResponse(
+                job_id=latest_job.id,
+                status=latest_job.status.value,
+                dataset_id=dataset_id,
+                effective_limit=effective_limit,
+                error="Dataset preview job did not return a result.",
+            )
+
+        columns = [
+            DatasetPreviewColumn(
+                name=str(column.get("name") or ""),
+                data_type=(str(column.get("type")) if column.get("type") is not None else None),
+            )
+            for column in (result.get("columns") or [])
+            if isinstance(column, dict) and str(column.get("name") or "").strip()
+        ]
+        rows = [row for row in (result.get("rows") or []) if isinstance(row, dict)]
+        result_effective_limit = (
+            int(result["effective_limit"]) if result.get("effective_limit") is not None else effective_limit
+        )
+        return DatasetPreviewResponse(
+            job_id=latest_job.id,
+            status=latest_job.status.value,
+            dataset_id=dataset_id,
+            columns=columns,
+            rows=rows,
+            row_count_preview=int(result.get("row_count_preview") or len(rows)),
+            effective_limit=result_effective_limit,
+            redaction_applied=bool(result.get("redaction_applied")),
+            duration_ms=(int(result["duration_ms"]) if result.get("duration_ms") is not None else None),
+            bytes_scanned=(int(result["bytes_scanned"]) if result.get("bytes_scanned") is not None else None),
+        )
+
+    @staticmethod
+    def _build_profile_response_from_job(
+        *,
+        dataset_id: uuid.UUID,
+        latest_job: JobRecord,
+    ) -> DatasetProfileResponse:
+        payload = latest_job.result if isinstance(latest_job.result, dict) else {}
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else payload
+
+        if latest_job.status != JobStatus.succeeded:
+            error = None
+            if isinstance(latest_job.error, dict):
+                error = str(latest_job.error.get("message") or "")
+            return DatasetProfileResponse(
+                job_id=latest_job.id,
+                status=latest_job.status.value,
+                dataset_id=dataset_id,
+                error=error or "Dataset profile job did not complete successfully.",
+            )
+
+        if result is None:
+            return DatasetProfileResponse(
+                job_id=latest_job.id,
+                status=latest_job.status.value,
+                dataset_id=dataset_id,
+                error="Dataset profile job did not return a result.",
+            )
+
+        profiled_at = None
+        if isinstance(result.get("profiled_at"), str):
+            try:
+                profiled_at = datetime.fromisoformat(str(result["profiled_at"]))
+            except ValueError:
+                profiled_at = datetime.now(timezone.utc)
+        return DatasetProfileResponse(
+            job_id=latest_job.id,
+            status=latest_job.status.value,
+            dataset_id=dataset_id,
+            row_count_estimate=(
+                int(result["row_count_estimate"]) if result.get("row_count_estimate") is not None else None
+            ),
+            bytes_estimate=(int(result["bytes_estimate"]) if result.get("bytes_estimate") is not None else None),
+            distinct_counts={
+                str(key): int(value)
+                for key, value in (result.get("distinct_counts") or {}).items()
+                if value is not None
+            },
+            null_rates={
+                str(key): float(value)
+                for key, value in (result.get("null_rates") or {}).items()
+                if value is not None
+            },
+            profiled_at=profiled_at,
+        )
 
     async def _assert_workspace_access(
         self,

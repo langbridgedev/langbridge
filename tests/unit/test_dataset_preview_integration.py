@@ -327,16 +327,21 @@ async def test_dataset_table_create_then_preview_through_worker_pipeline() -> No
         current_user=current_user,
     )
 
-    preview = await service.preview_dataset(
+    queued_preview = await service.preview_dataset(
         dataset_id=dataset.id,
         request=DatasetPreviewRequest(
             workspace_id=workspace_id,
             limit=100,
-            wait_for_completion=True,
         ),
         current_user=current_user,
     )
 
+    preview = await service.get_preview_job_result(
+        dataset_id=dataset.id,
+        job_id=queued_preview.job_id,
+        workspace_id=workspace_id,
+        current_user=current_user,
+    )
     assert preview.status == JobStatus.succeeded.value
     assert preview.rows == [{"order_id": 1, "amount": 10.5}]
     assert [column.name for column in preview.columns] == ["order_id", "amount"]

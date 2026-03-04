@@ -21,13 +21,10 @@ class Settings(BaseSettings):
     )
     API_V1_STR: str = "/api/v1"
     SECRET_KEY: str = secrets.token_urlsafe(32)
-    # 60 minutes * 24 hours * 8 days = 8 days
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
     DOMAIN: str = "localhost"
     ENVIRONMENT: Literal["local", "staging", "development", "production"] = "local"
     
     IS_LOCAL: bool = ENVIRONMENT == "local"
-    LOCAL_TOKEN: str = "localdevtoken"
 
     UVICORN_RELOAD: bool = False
     
@@ -90,20 +87,7 @@ class Settings(BaseSettings):
     AGENT_MEMORY_EXCHANGE_SIZE: int = 100
     
     SERVICE_USER_SECRET: str = ""
-    
-    SHOPIFY_INTEGRATION_BASE_URL: str = ""
-
-    DISABLE_AUTH: bool = False
-    ENABLE_INTEGRATION: bool = True
-    
-    SHOPIFY_GLOBAL_INTEGRATION_SECRET: str = "hello123"
     DEFAULT_EXPIRES_DAYS: int = 365
-    
-    AGENT_MODEL:str = "ollama"
-    AGENT_HOST:str = "http://192.168.0.154:11434"
-    AGENT_MODEL_NAME:str = "llama3.2" # "mistral:7b-instruct"
-    
-    OPENAI_KEY:str = ""
     
     STORAGE_SETTING: Literal["local", "azure"] = "local"
     DASHBOARD_SNAPSHOT_STORAGE_BACKEND: Literal["local", "azure_blob", "s3"] = "local"
@@ -122,9 +106,6 @@ class Settings(BaseSettings):
     SQL_POLICY_MAX_RUNTIME_SECONDS_UPPER_BOUND: int = 600
     SQL_POLICY_MAX_CONCURRENCY_UPPER_BOUND: int = 20
     SQL_ARTIFACT_LOCAL_DIR: str = ".cache/sql_artifacts"
-    
-    IS_LOCAL_MESSAGING: bool = True
-    INBOX_INTERNAL_REQUEST_URL: str = "http://127.0.0.1:8000/api/v1/message/inbox"
 
     BACKEND_URL: str = "http://localhost:8000"
     FRONTEND_URL: str = "http://localhost:3000"

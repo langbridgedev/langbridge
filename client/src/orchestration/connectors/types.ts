@@ -30,6 +30,11 @@ export interface ConnectorResponse {
   organizationId?: string | null;
   projectId?: string | null;
   config?: Record<string, unknown> | null;
+  catalogSummary?: {
+    schemaCount: number;
+    tableCount: number;
+    columnCount: number;
+  } | null;
 }
 
 export interface ConnectorConfigPayload {
@@ -59,4 +64,34 @@ export interface UpdateConnectorPayload {
   organizationId: string;
   projectId?: string;
   config?: ConnectorConfigPayload;
+}
+
+export interface ConnectorCatalogColumn {
+  name: string;
+  type: string;
+  nullable?: boolean | null;
+  primaryKey?: boolean;
+}
+
+export interface ConnectorCatalogTable {
+  schema: string;
+  name: string;
+  fullyQualifiedName: string;
+  columns: ConnectorCatalogColumn[];
+}
+
+export interface ConnectorCatalogSchema {
+  name: string;
+  tables: ConnectorCatalogTable[];
+}
+
+export interface ConnectorCatalogResponse {
+  connectorId: string;
+  schemas: ConnectorCatalogSchema[];
+  schemaCount: number;
+  tableCount: number;
+  columnCount: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
 }

@@ -9,6 +9,7 @@ export const SETTINGS_CATEGORIES = [
   'Execution & Runtime',
   'AI / LLM',
   'Connectors',
+  'Datasets',
   'Limits & Quotas',
   'Notifications',
   'Audit & Compliance',

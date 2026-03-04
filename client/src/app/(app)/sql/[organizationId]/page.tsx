@@ -31,6 +31,7 @@ import { useToast } from '@/components/ui/toast';
 import { useWorkspaceScope } from '@/context/workspaceScope';
 import { fetchConnectors } from '@/orchestration/connectors';
 import type { ConnectorResponse } from '@/orchestration/connectors/types';
+import { ensureDataset } from '@/orchestration/datasets';
 import {
   assistSql,
   cancelSqlJob,
@@ -307,6 +308,8 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   const [columnsMap, setColumnsMap] = useState<TableColumns>({});
   const [selectedSchema, setSelectedSchema] = useState('');
   const [selectedTable, setSelectedTable] = useState('');
+  const [runAgainstDatasetMode, setRunAgainstDatasetMode] = useState(false);
+  const [lastEnsuredDatasetId, setLastEnsuredDatasetId] = useState<string | null>(null);
   const [sqlLogs, setSqlLogs] = useState<LogEntry[]>([]);
   const [historyScope, setHistoryScope] = useState<'user' | 'workspace'>('user');
   const [selectedSavedQueryId, setSelectedSavedQueryId] = useState('');
@@ -709,6 +712,47 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     [columnsMap, organizationId, selectedConnectionId, federatedMode, toast],
   );
 
+  const ensureDatasetForPhysicalTable = useCallback(
+    async (schema: string, table: string): Promise<string | null> => {
+      if (!organizationId || !selectedConnectionId) {
+        return null;
+      }
+      const key = `${schema}.${table}`;
+      let tableColumns = columnsMap[key];
+      if (!tableColumns || tableColumns.length === 0) {
+        const response = await fetchConnectorColumns(organizationId, selectedConnectionId, schema, table);
+        tableColumns = Object.values(response.columns || {}).map((column) => ({
+          name: column.name,
+          type: column.type,
+        }));
+        setColumnsMap((current) => ({ ...current, [key]: tableColumns || [] }));
+      }
+      const ensured = await ensureDataset({
+        workspaceId: organizationId,
+        projectId: selectedProjectId || undefined,
+        connectionId: selectedConnectionId,
+        schema,
+        table,
+        columns: (tableColumns || []).map((column) => ({
+          name: column.name,
+          dataType: column.type,
+          nullable: true,
+        })),
+        namingTemplate: '{schema}.{table}',
+        tags: ['auto-generated', 'sql-workbench'],
+      });
+      setLastEnsuredDatasetId(ensured.datasetId);
+      appendLog(
+        'info',
+        ensured.created
+          ? `Created governed dataset ${ensured.name} (${ensured.datasetId}).`
+          : `Reused governed dataset ${ensured.name} (${ensured.datasetId}).`,
+      );
+      return ensured.datasetId;
+    },
+    [appendLog, columnsMap, organizationId, selectedConnectionId, selectedProjectId],
+  );
+
   const federatedSourceValidation = useMemo(() => {
     const issues: string[] = [];
     const seenAliases = new Set<string>();
@@ -746,7 +790,7 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   }, [federatedSources]);
 
   const runSql = useCallback(
-    (overrideQuery?: string, options?: { explain?: boolean }) => {
+    async (overrideQuery?: string, options?: { explain?: boolean }) => {
       if (!organizationId) {
         return;
       }
@@ -778,6 +822,47 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
         }
       }
 
+      if (!federatedMode) {
+        const selectedPhysical = selectedTable.includes('.')
+          ? selectedTable.split('.')
+          : null;
+        const inferredMatch = sql.match(/\b([a-zA-Z_][\w$]*)\.([a-zA-Z_][\w$]*)\b/);
+        const targetSchema = selectedPhysical && selectedPhysical.length >= 2
+          ? selectedPhysical[0]
+          : inferredMatch?.[1] || '';
+        const targetTable = selectedPhysical && selectedPhysical.length >= 2
+          ? selectedPhysical.slice(1).join('.')
+          : inferredMatch?.[2] || '';
+
+        if (runAgainstDatasetMode && targetSchema && targetTable) {
+          try {
+            await ensureDatasetForPhysicalTable(targetSchema, targetTable);
+          } catch (error) {
+            toast({
+              title: 'Dataset creation failed',
+              description: error instanceof Error ? error.message : 'Unable to ensure dataset for selected table.',
+              variant: 'destructive',
+            });
+            return;
+          }
+        } else if (!runAgainstDatasetMode && inferredMatch) {
+          const shouldEnsure = window.confirm(
+            `Detected physical table ${inferredMatch[1]}.${inferredMatch[2]}. Create governed dataset?`,
+          );
+          if (shouldEnsure) {
+            try {
+              await ensureDatasetForPhysicalTable(inferredMatch[1], inferredMatch[2]);
+            } catch (error) {
+              toast({
+                title: 'Dataset creation failed',
+                description: error instanceof Error ? error.message : 'Unable to ensure dataset from detected table.',
+                variant: 'destructive',
+              });
+            }
+          }
+        }
+      }
+
       const paramsPayload = Object.fromEntries(
         Object.entries(parameterValues)
           .filter(([, value]) => value !== '')
@@ -806,9 +891,12 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
       });
     },
     [
+      ensureDatasetForPhysicalTable,
       organizationId,
       toast,
       federatedMode,
+      runAgainstDatasetMode,
+      selectedTable,
       selectedConnectionId,
       queryDialect,
       parameterValues,
@@ -1299,7 +1387,7 @@ WHERE [${column}] IS NOT NULL
 ORDER BY [${column}] ASC;`;
     }
     applyQueryText(profilingSql, { immediateState: true });
-    runSql(profilingSql);
+    void runSql(profilingSql);
   }, [applyQueryText, runSql]);
 
   const shareLink = useMemo(() => {
@@ -1353,6 +1441,21 @@ ORDER BY [${column}] ASC;`;
               </option>
             ))}
           </Select>
+          {!federatedMode ? (
+            <label className="flex items-center gap-2 text-xs text-[color:var(--text-secondary)]">
+              <input
+                type="checkbox"
+                checked={runAgainstDatasetMode}
+                onChange={(event) => setRunAgainstDatasetMode(event.target.checked)}
+              />
+              Run against dataset mode
+            </label>
+          ) : null}
+          {lastEnsuredDatasetId ? (
+            <p className="text-[11px] text-[color:var(--text-muted)]">
+              Last ensured dataset: <span className="font-mono">{lastEnsuredDatasetId}</span>
+            </p>
+          ) : null}
           <label className="flex items-center gap-2 text-xs text-[color:var(--text-secondary)]">
             <input
               type="checkbox"
@@ -1471,16 +1574,34 @@ ORDER BY [${column}] ASC;`;
                         const key = `${schemaNode.schema}.${table}`;
                         return (
                           <div key={key} className="rounded-lg bg-[color:var(--panel-alt)] p-2">
-                            <button
-                              type="button"
-                              className="font-medium"
-                              onClick={() => {
-                                setSelectedTable(key);
-                                void loadTableColumns(schemaNode.schema, table);
-                              }}
-                            >
-                              {table}
-                            </button>
+                            <div className="flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                className="font-medium"
+                                onClick={() => {
+                                  setSelectedTable(key);
+                                  void loadTableColumns(schemaNode.schema, table);
+                                }}
+                              >
+                                {table}
+                              </button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => {
+                                  void ensureDatasetForPhysicalTable(schemaNode.schema, table).catch((error) => {
+                                    toast({
+                                      title: 'Dataset creation failed',
+                                      description: error instanceof Error ? error.message : 'Unable to ensure dataset.',
+                                      variant: 'destructive',
+                                    });
+                                  });
+                                }}
+                              >
+                                Ensure dataset
+                              </Button>
+                            </div>
                             {selectedTable === key ? (
                               <div className="mt-1 space-y-1">
                                 {(columnsMap[key] || []).map((column) => (
@@ -1515,10 +1636,10 @@ ORDER BY [${column}] ASC;`;
       <section className="space-y-4">
         <div className="surface-panel rounded-2xl p-4 shadow-soft">
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={() => runSql()} isLoading={executeMutation.isPending}>
+            <Button size="sm" onClick={() => void runSql()} isLoading={executeMutation.isPending}>
               <Play className="h-4 w-4" /> Run
             </Button>
-            <Button size="sm" variant="outline" onClick={() => runSql(undefined, { explain: true })}>
+            <Button size="sm" variant="outline" onClick={() => void runSql(undefined, { explain: true })}>
               <Search className="h-4 w-4" /> Explain
             </Button>
             <Button size="sm" variant="outline" onClick={cancelRunningJob} disabled={!jobId}>
