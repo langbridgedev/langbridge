@@ -17,7 +17,7 @@ from langbridge.packages.messaging.langbridge_messaging.contracts.messages impor
 )
 
 
-@register_payload("test")
+@register_payload(MessageType.AGENT_JOB_REQUEST.value)
 class _TestMessagePayload(BaseMessagePayload):
     message: str
 
@@ -79,7 +79,7 @@ class _FakeBroker:
 
 def _received_message(entry_id: str) -> ReceivedMessage:
     envelope = MessageEnvelope(
-        message_type=MessageType.TEST,
+        message_type=MessageType.AGENT_JOB_REQUEST,
         payload=_TestMessagePayload(message=f"message-{entry_id}"),
     )
     receipt = MessageReceipt(

@@ -23,7 +23,7 @@ from langbridge.packages.messaging.langbridge_messaging.contracts.base import (
 )
 from langbridge.packages.messaging.langbridge_messaging.contracts.messages import MessageEnvelope
 
-@register_payload("test")
+@register_payload(MessageType.AGENT_JOB_REQUEST.value)
 class TestMessagePayload(BaseMessagePayload):
     message: str
 
@@ -132,7 +132,7 @@ async def test_edge_pull_and_ack_flow() -> None:
     tenant_id = uuid.uuid4()
     runtime_id = uuid.uuid4()
     envelope = MessageEnvelope(
-        message_type=MessageType.TEST,
+        message_type=MessageType.AGENT_JOB_REQUEST,
         payload=TestMessagePayload(message="hello"),
     )
     task_id = await service.enqueue_for_runtime(
@@ -148,7 +148,7 @@ async def test_edge_pull_and_ack_flow() -> None:
     )
     assert len(pulled) == 1
     assert pulled[0].task_id == task_id
-    assert pulled[0].envelope.message_type == MessageType.TEST
+    assert pulled[0].envelope.message_type == MessageType.AGENT_JOB_REQUEST
 
     ack = await service.ack_task(
         tenant_id=tenant_id,
