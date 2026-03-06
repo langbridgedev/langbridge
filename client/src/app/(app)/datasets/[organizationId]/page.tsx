@@ -28,6 +28,7 @@ import {
   type DatasetColumn,
   type DatasetCreatePayload,
   type DatasetType,
+  uploadCsvDataset,
 } from '@/orchestration/datasets';
 import { fetchConnectorColumns, fetchConnectorSchemas, fetchConnectorTables } from '@/orchestration/sql';
 
@@ -40,6 +41,7 @@ type CreateState = {
   description: string;
   tags: string;
   datasetType: DatasetType;
+  file: File | null;
   connectionId: string;
   schemaName: string;
   tableName: string;
@@ -53,6 +55,7 @@ const DEFAULT_CREATE_STATE: CreateState = {
   description: '',
   tags: '',
   datasetType: 'TABLE',
+  file: null,
   connectionId: '',
   schemaName: '',
   tableName: '',
@@ -119,6 +122,29 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
       setSelectedColumns({});
       await queryClient.invalidateQueries({ queryKey: ['datasets-list', organizationId] });
       router.push(`/datasets/${organizationId}/${dataset.id}`);
+    },
+    onError: (error: unknown) => {
+      setModalError(resolveError(error));
+    },
+  });
+  const uploadMutation = useMutation({
+    mutationFn: async (payload: {
+      workspaceId: string;
+      name: string;
+      file: File;
+      projectId?: string | null;
+      description?: string | null;
+      tags?: string[];
+    }) => uploadCsvDataset(payload),
+    onSuccess: async (response) => {
+      setCreateOpen(false);
+      setCreateState(DEFAULT_CREATE_STATE);
+      setColumns([]);
+      setSchemas([]);
+      setTables([]);
+      setSelectedColumns({});
+      await queryClient.invalidateQueries({ queryKey: ['datasets-list', organizationId] });
+      router.push(`/datasets/${organizationId}/${response.datasetId}`);
     },
     onError: (error: unknown) => {
       setModalError(resolveError(error));
@@ -267,8 +293,24 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
         setModalError('Choose a connection, schema, and table for TABLE datasets.');
         return;
       }
-    } else if (!payload.sqlText?.trim()) {
+    } else if (payload.datasetType === 'SQL' && !payload.sqlText?.trim()) {
       setModalError('SQL text is required for SQL datasets.');
+      return;
+    }
+
+    if (payload.datasetType === 'FILE') {
+      if (!createState.file) {
+        setModalError('Choose a CSV file to upload.');
+        return;
+      }
+      await uploadMutation.mutateAsync({
+        workspaceId: organizationId,
+        projectId: selectedProjectId || undefined,
+        name: payload.name,
+        description: payload.description,
+        tags,
+        file: createState.file,
+      });
       return;
     }
 
@@ -387,9 +429,7 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
                 <option value="FEDERATED" disabled>
                   Federated (Feature flag)
                 </option>
-                <option value="FILE" disabled>
-                  File (Feature flag)
-                </option>
+                <option value="FILE">File</option>
               </Select>
             </div>
             <div className="space-y-1 md:col-span-2">
@@ -519,6 +559,25 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
                 </div>
               </div>
             </div>
+          ) : createState.datasetType === 'FILE' ? (
+            <div className="space-y-4 rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4">
+              <div className="space-y-1">
+                <Label>CSV file</Label>
+                <Input
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(event) =>
+                    setCreateState((current) => ({
+                      ...current,
+                      file: event.target.files?.[0] ?? null,
+                    }))
+                  }
+                />
+                <p className="text-xs text-[color:var(--text-muted)]">
+                  Upload a CSV and Langbridge will convert it to Parquet before publishing the dataset.
+                </p>
+              </div>
+            </div>
           ) : (
             <div className="space-y-4 rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4">
               <div className="space-y-1">
@@ -553,10 +612,10 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
           {modalError ? <p className="text-sm text-rose-600">{modalError}</p> : null}
 
           <DialogFooter>
-            <Button variant="outline" onClick={closeCreateModal} disabled={createMutation.isPending}>
+            <Button variant="outline" onClick={closeCreateModal} disabled={createMutation.isPending || uploadMutation.isPending}>
               Cancel
             </Button>
-            <Button onClick={() => void submitCreate()} isLoading={createMutation.isPending}>
+            <Button onClick={() => void submitCreate()} isLoading={createMutation.isPending || uploadMutation.isPending}>
               Create dataset
             </Button>
           </DialogFooter>

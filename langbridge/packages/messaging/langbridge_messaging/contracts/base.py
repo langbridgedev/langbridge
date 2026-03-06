@@ -23,6 +23,7 @@ class MessageType(str, Enum):
     COPILOT_DASHBOARD_COMPLETION = "copilot_dashboard_completion"
     SQL_JOB_REQUEST = "sql_job_request"
     DATASET_JOB_REQUEST = "dataset_job_request"
+    CONNECTOR_SYNC_JOB_REQUEST = "connector_sync_job_request"
     
 
     def __str__(self) -> str:

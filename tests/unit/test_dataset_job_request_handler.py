@@ -9,6 +9,7 @@ import pytest
 from langbridge.apps.worker.langbridge_worker.handlers.query.dataset_job_request_handler import (
     DatasetJobRequestHandler,
 )
+from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.packages.common.langbridge_common.contracts.jobs.dataset_job import (
     CreateDatasetBulkCreateJobRequest,
     CreateDatasetPreviewJobRequest,
@@ -78,6 +79,9 @@ class _FakeDatasetColumnRepository:
 
     async def list_for_dataset(self, *, dataset_id: uuid.UUID) -> list[DatasetColumnRecord]:
         return [column for column in self._columns if column.dataset_id == dataset_id]
+
+    async def delete_for_dataset(self, *, dataset_id: uuid.UUID) -> None:
+        self._columns = [column for column in self._columns if column.dataset_id != dataset_id]
 
     def add(self, column: DatasetColumnRecord) -> None:
         self._columns.append(column)
@@ -357,6 +361,169 @@ async def test_dataset_sql_preview_blocks_dml_statements() -> None:
     error_message = str((job_record.error or {}).get("message") or "")
     assert "SELECT" in error_message.upper()
     assert federated_tool.calls == []
+
+
+@pytest.mark.anyio
+async def test_file_dataset_preview_builds_file_backed_workflow() -> None:
+    workspace_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+
+    dataset = DatasetRecord(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        project_id=None,
+        connection_id=None,
+        created_by=user_id,
+        updated_by=user_id,
+        name="orders_file",
+        description=None,
+        tags_json=[],
+        dataset_type="FILE",
+        dialect="duckdb",
+        catalog_name=None,
+        schema_name=None,
+        table_name="orders_file",
+        storage_uri="file:///tmp/orders.parquet",
+        sql_text=None,
+        referenced_dataset_ids_json=[],
+        federated_plan_json=None,
+        file_config_json={"format": "parquet"},
+        status="published",
+        revision_id=None,
+        row_count_estimate=None,
+        bytes_estimate=None,
+        last_profiled_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    columns = [
+        DatasetColumnRecord(
+            id=uuid.uuid4(),
+            dataset_id=dataset.id,
+            workspace_id=workspace_id,
+            name="order_id",
+            data_type="integer",
+            nullable=False,
+            ordinal_position=0,
+            description=None,
+            is_allowed=True,
+            is_computed=False,
+            expression=None,
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    policy = DatasetPolicyRecord(
+        id=uuid.uuid4(),
+        dataset_id=dataset.id,
+        workspace_id=workspace_id,
+        max_rows_preview=10,
+        max_export_rows=5000,
+        redaction_rules_json={},
+        row_filters_json=[],
+        allow_dml=False,
+        created_at=now,
+        updated_at=now,
+    )
+    federated_tool = _FakeFederatedQueryTool(
+        responses=[{"rows": [{"order_id": 1}], "execution": {"total_runtime_ms": 7, "stage_metrics": []}}]
+    )
+    job_record = _build_job_record(workspace_id=workspace_id, job_type=JobType.DATASET_PREVIEW)
+    handler = DatasetJobRequestHandler(
+        job_repository=_FakeJobRepository(job_record),
+        dataset_repository=_FakeDatasetRepository(dataset),
+        dataset_column_repository=_FakeDatasetColumnRepository(columns),
+        dataset_policy_repository=_FakeDatasetPolicyRepository(policy),
+        federated_query_tool=federated_tool,
+    )
+
+    message = DatasetJobRequestMessage(
+        job_id=job_record.id,
+        job_type=JobType.DATASET_PREVIEW,
+        job_request=CreateDatasetPreviewJobRequest(
+            dataset_id=dataset.id,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            enforced_limit=10,
+        ).model_dump(mode="json"),
+    )
+
+    await handler.handle(message)
+
+    assert job_record.status == JobStatus.succeeded
+    workflow = federated_tool.calls[0]["workflow"]
+    binding = workflow["dataset"]["tables"]["orders_file"]
+    assert binding["metadata"]["source_kind"] == "file"
+    assert binding["metadata"]["storage_uri"] == dataset.storage_uri
+
+
+@pytest.mark.anyio
+async def test_csv_ingest_job_converts_file_dataset_to_parquet(tmp_path, monkeypatch) -> None:
+    workspace_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    source_file = tmp_path / "orders.csv"
+    source_file.write_text("order_id,amount\n1,12.5\n2,18.0\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "DATASET_FILE_LOCAL_DIR", str(tmp_path / "datasets"))
+
+    dataset = DatasetRecord(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        project_id=None,
+        connection_id=None,
+        created_by=user_id,
+        updated_by=user_id,
+        name="orders_csv",
+        description=None,
+        tags_json=[],
+        dataset_type="FILE",
+        dialect="duckdb",
+        catalog_name=None,
+        schema_name=None,
+        table_name="orders_csv",
+        storage_uri=source_file.resolve().as_uri(),
+        sql_text=None,
+        referenced_dataset_ids_json=[],
+        federated_plan_json=None,
+        file_config_json={"format": "csv"},
+        status="draft",
+        revision_id=None,
+        row_count_estimate=None,
+        bytes_estimate=None,
+        last_profiled_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    dataset_repository = _FakeDatasetRepository(dataset)
+    column_repository = _FakeDatasetColumnRepository([])
+    job_record = _build_job_record(workspace_id=workspace_id, job_type=JobType.DATASET_CSV_INGEST)
+    handler = DatasetJobRequestHandler(
+        job_repository=_FakeJobRepository(job_record),
+        dataset_repository=dataset_repository,
+        dataset_column_repository=column_repository,
+        dataset_policy_repository=_FakeDatasetPolicyRepository(policy=None),
+        federated_query_tool=_FakeFederatedQueryTool(responses=[]),
+    )
+    message = DatasetJobRequestMessage(
+        job_id=job_record.id,
+        job_type=JobType.DATASET_CSV_INGEST,
+        job_request={
+            "dataset_id": str(dataset.id),
+            "workspace_id": str(workspace_id),
+            "user_id": str(user_id),
+            "storage_uri": source_file.resolve().as_uri(),
+        },
+    )
+
+    await handler.handle(message)
+
+    assert job_record.status == JobStatus.succeeded
+    assert dataset.status == "published"
+    assert dataset.storage_uri is not None and dataset.storage_uri.endswith(".parquet")
+    columns = await column_repository.list_for_dataset(dataset_id=dataset.id)
+    assert [column.name for column in columns] == ["order_id", "amount"]
 
 
 @pytest.mark.anyio

@@ -10,5 +10,6 @@ STREAM_MAPPING = {
     MessageType.COPILOT_DASHBOARD_REQUEST: RedisStreams.WORKER,
     MessageType.SQL_JOB_REQUEST: RedisStreams.WORKER,
     MessageType.DATASET_JOB_REQUEST: RedisStreams.WORKER,
+    MessageType.CONNECTOR_SYNC_JOB_REQUEST: RedisStreams.WORKER,
     MessageType.JOB_EVENT: RedisStreams.API
 }

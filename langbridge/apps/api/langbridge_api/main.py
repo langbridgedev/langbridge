@@ -79,7 +79,12 @@ def _ensure_local_sqlite_schema() -> None:
     config = Config(str(ALEMBIC_CONFIG_PATH))
     config.set_main_option("sqlalchemy.url", settings.SQLALCHEMY_DATABASE_URI)
     logger.info("Running Alembic upgrade for local SQLite (%s)", settings.SQLALCHEMY_DATABASE_URI)
-    command.upgrade(config, "head")
+    try:
+        command.upgrade(config, "head")
+        logger.info("Alembic upgrade successful for local SQLite")
+    except Exception as e:
+        logger.error("Alembic upgrade failed for local SQLite: %s", e)
+        raise
 
 def custom_generate_unique_id(route: APIRoute) -> str:
     if len(route.tags) == 0:

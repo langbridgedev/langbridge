@@ -1,6 +1,22 @@
 export type DatasetType = 'TABLE' | 'SQL' | 'FEDERATED' | 'FILE';
 export type DatasetStatus = 'draft' | 'published';
 export type DatasetSortDirection = 'asc' | 'desc';
+export type DatasetLineageNodeType =
+  | 'connection'
+  | 'source_table'
+  | 'api_resource'
+  | 'file_resource'
+  | 'dataset'
+  | 'semantic_model'
+  | 'unified_semantic_model'
+  | 'saved_query'
+  | 'dashboard';
+export type DatasetLineageEdgeType =
+  | 'DERIVES_FROM'
+  | 'REFERENCES'
+  | 'GENERATED_BY'
+  | 'FEEDS'
+  | 'MATERIALIZES_FROM';
 
 export interface DatasetColumn {
   id?: string;
@@ -41,11 +57,13 @@ export interface DatasetRecord {
   workspaceId: string;
   projectId?: string | null;
   connectionId?: string | null;
+  ownerId?: string | null;
   name: string;
   description?: string | null;
   tags: string[];
   datasetType: DatasetType;
   dialect?: string | null;
+  storageUri?: string | null;
   catalogName?: string | null;
   schemaName?: string | null;
   tableName?: string | null;
@@ -83,8 +101,114 @@ export interface DatasetCatalogResponse {
 
 export interface DatasetUsageResponse {
   semanticModels: Array<Record<string, unknown>>;
+  unifiedSemanticModels: Array<Record<string, unknown>>;
+  dependentDatasets: Array<Record<string, unknown>>;
   dashboards: Array<Record<string, unknown>>;
   savedQueries: Array<Record<string, unknown>>;
+}
+
+export interface DatasetVersionSummary {
+  id: string;
+  datasetId: string;
+  revisionNumber: number;
+  revisionHash?: string | null;
+  createdAt: string;
+  createdBy?: string | null;
+  changeSummary?: string | null;
+  status?: DatasetStatus | null;
+  isCurrent: boolean;
+}
+
+export interface DatasetVersion extends DatasetVersionSummary {
+  definitionSnapshot: Record<string, unknown>;
+  schemaSnapshot: Array<Record<string, unknown>>;
+  policySnapshot: Record<string, unknown>;
+  sourceBindingsSnapshot: Array<Record<string, unknown>>;
+  executionCharacteristicsSnapshot?: Record<string, unknown> | null;
+  legacySnapshot?: Record<string, unknown> | null;
+}
+
+export interface DatasetVersionListResponse {
+  items: DatasetVersionSummary[];
+}
+
+export interface DatasetVersionFieldDiff {
+  field: string;
+  changeType: string;
+  before?: unknown;
+  after?: unknown;
+}
+
+export interface DatasetSchemaColumnDiff {
+  columnName: string;
+  changeType: string;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+}
+
+export interface DatasetVersionDiffResponse {
+  datasetId: string;
+  fromRevisionId: string;
+  toRevisionId: string;
+  fromRevisionNumber: number;
+  toRevisionNumber: number;
+  summary: string[];
+  definitionChanges: DatasetVersionFieldDiff[];
+  policyChanges: DatasetVersionFieldDiff[];
+  sourceBindingChanges: DatasetVersionFieldDiff[];
+  executionChanges: DatasetVersionFieldDiff[];
+  schemaChanges: DatasetSchemaColumnDiff[];
+}
+
+export interface DatasetRestorePayload {
+  workspaceId: string;
+  projectId?: string | null;
+  revisionId: string;
+  changeSummary?: string | null;
+}
+
+export interface DatasetLineageNode {
+  nodeType: DatasetLineageNodeType;
+  nodeId: string;
+  label: string;
+  direction: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface DatasetLineageEdge {
+  sourceType: DatasetLineageNodeType;
+  sourceId: string;
+  targetType: DatasetLineageNodeType;
+  targetId: string;
+  edgeType: DatasetLineageEdgeType;
+  metadata: Record<string, unknown>;
+}
+
+export interface DatasetLineageResponse {
+  datasetId: string;
+  nodes: DatasetLineageNode[];
+  edges: DatasetLineageEdge[];
+  upstreamCount: number;
+  downstreamCount: number;
+}
+
+export interface DatasetImpactItem {
+  nodeType: DatasetLineageNodeType;
+  nodeId: string;
+  label: string;
+  direct: boolean;
+  metadata: Record<string, unknown>;
+}
+
+export interface DatasetImpactResponse {
+  datasetId: string;
+  totalDownstreamAssets: number;
+  directDependents: DatasetImpactItem[];
+  dependentDatasets: DatasetImpactItem[];
+  semanticModels: DatasetImpactItem[];
+  unifiedSemanticModels: DatasetImpactItem[];
+  savedQueries: DatasetImpactItem[];
+  dashboards: DatasetImpactItem[];
 }
 
 export interface DatasetPreviewSortItem {
@@ -150,6 +274,7 @@ export interface DatasetCreatePayload {
   catalogName?: string | null;
   schemaName?: string | null;
   tableName?: string | null;
+  storageUri?: string | null;
   sqlText?: string | null;
   referencedDatasetIds?: string[];
   federatedPlan?: Record<string, unknown> | null;
@@ -157,6 +282,7 @@ export interface DatasetCreatePayload {
   columns?: DatasetColumn[];
   policy?: Partial<DatasetPolicy>;
   status?: DatasetStatus;
+  changeSummary?: string | null;
 }
 
 export interface DatasetSelectionColumnPayload {
@@ -206,9 +332,17 @@ export interface DatasetBulkCreateStartResponse {
   jobStatus: string;
 }
 
+export interface DatasetCsvIngestResponse {
+  datasetId: string;
+  jobId: string;
+  jobStatus: string;
+  storageUri: string;
+}
+
 export interface DatasetUpdatePayload {
   workspaceId: string;
   projectId?: string | null;
+  connectionId?: string | null;
   name?: string;
   description?: string | null;
   tags?: string[];
@@ -223,4 +357,5 @@ export interface DatasetUpdatePayload {
   columns?: DatasetColumn[];
   policy?: Partial<DatasetPolicy>;
   status?: DatasetStatus;
+  changeSummary?: string | null;
 }

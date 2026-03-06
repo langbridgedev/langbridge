@@ -15,7 +15,7 @@ class TableStatistics(BaseModel):
 class VirtualTableBinding(BaseModel):
     table_key: str
     source_id: str
-    connector_id: UUID
+    connector_id: UUID | None = None
     schema: str | None = None
     table: str
     catalog: str | None = None

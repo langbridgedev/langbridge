@@ -19,11 +19,12 @@ from langbridge.packages.common.langbridge_common.db import associations as _ass
 from langbridge.packages.common.langbridge_common.db import auth as _auth  # noqa: F401
 from langbridge.packages.common.langbridge_common.db import bi as _bi  # noqa: F401
 from langbridge.packages.common.langbridge_common.db import connector as _connector  # noqa: F401
+from langbridge.packages.common.langbridge_common.db import connector_sync as _connector_sync  # noqa: F401
 from langbridge.packages.common.langbridge_common.db import dataset as _dataset  # noqa: F401
-from langbridge.packages.common.langbridge_common.db import environment as _environment  # noqa: F401
 from langbridge.packages.common.langbridge_common.db import semantic as _semantic  # noqa: F401
 from langbridge.packages.common.langbridge_common.db import threads as _threads  # noqa: F401
 from langbridge.packages.common.langbridge_common.db import job as _job  # noqa: F401
+from langbridge.packages.common.langbridge_common.db import lineage as _lineage  # noqa: F401
 from langbridge.packages.common.langbridge_common.db import messages as _messages  # noqa: F401
 from langbridge.packages.common.langbridge_common.db import runtime as _runtime  # noqa: F401
 from langbridge.packages.common.langbridge_common.db import sql as _sql  # noqa: F401

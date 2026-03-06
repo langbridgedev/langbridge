@@ -363,7 +363,7 @@ def _table_ref(*, alias: str, binding: VirtualTableBinding) -> TableRef:
         alias=alias,
         table_key=binding.table_key,
         source_id=binding.source_id,
-        connector_id=str(binding.connector_id),
+        connector_id=(str(binding.connector_id) if binding.connector_id is not None else None),
         schema=binding.schema,
         table=binding.table,
         catalog=binding.catalog,

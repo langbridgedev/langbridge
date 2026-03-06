@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, Literal, Optional, cast
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from langbridge.packages.common.langbridge_common.db.connector import Connector
 
@@ -41,6 +43,51 @@ class ConnectionMetadata(_Base):
     account: str | None = None
     user: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConnectorFamily(str, Enum):
+    DATABASE = "DATABASE"
+    API = "API"
+    VECTOR_DB = "VECTOR_DB"
+
+
+class ConnectorSyncStrategy(str, Enum):
+    FULL_REFRESH = "FULL_REFRESH"
+    INCREMENTAL = "INCREMENTAL"
+    WINDOWED_INCREMENTAL = "WINDOWED_INCREMENTAL"
+    MANUAL = "MANUAL"
+
+
+class ConnectorSyncMode(str, Enum):
+    FULL_REFRESH = "FULL_REFRESH"
+    INCREMENTAL = "INCREMENTAL"
+    WEBHOOK_ASSISTED = "WEBHOOK_ASSISTED"
+
+
+class ConnectorSyncStatus(str, Enum):
+    NEVER_SYNCED = "never_synced"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class ConnectorAuthSchemaField(_Base):
+    field: str
+    label: str | None = None
+    required: bool = True
+    description: str
+    type: str
+    secret: bool = False
+    default: str | None = None
+    value_list: list[str] = Field(default_factory=list)
+
+
+class ConnectorPluginMetadata(_Base):
+    connector_type: str
+    connector_family: ConnectorFamily
+    supported_resources: list[str] = Field(default_factory=list)
+    auth_schema: list[ConnectorAuthSchemaField] = Field(default_factory=list)
+    sync_strategy: ConnectorSyncStrategy | None = None
 
 
 class ConnectorDTO(_Base):
@@ -88,12 +135,14 @@ class ConnectorResponse(_Base):
     secret_references: dict[str, SecretReference] = Field(default_factory=dict)
     connection_policy: ConnectionPolicy | None = None
     catalog_summary: "ConnectorCatalogSummary | None" = None
+    plugin_metadata: "ConnectorPluginMetadata | None" = None
 
     @staticmethod
     def from_connector(
         connector: Connector,
         organization_id: Optional[UUID] = None,
         project_id: Optional[UUID] = None,
+        plugin_metadata: "ConnectorPluginMetadata | None" = None,
     ) -> "ConnectorResponse":
         config = _parse_connector_config(connector.config_json)
 
@@ -136,6 +185,7 @@ class ConnectorResponse(_Base):
                 if isinstance(raw_policy, dict)
                 else None
             ),
+            plugin_metadata=plugin_metadata,
         )
 
 
@@ -233,3 +283,90 @@ class ConnectorCatalogResponse(_Base):
     offset: int = 0
     limit: int = 200
     has_more: bool = False
+
+
+class ConnectorSyncRequest(_Base):
+    resources: list[str] = Field(default_factory=list)
+    sync_mode: ConnectorSyncMode = ConnectorSyncMode.INCREMENTAL
+    force_full_refresh: bool = False
+
+    @model_validator(mode="after")
+    def _validate_resources(self) -> "ConnectorSyncRequest":
+        normalized = [str(resource or "").strip() for resource in self.resources if str(resource or "").strip()]
+        if not normalized:
+            raise ValueError("At least one resource must be selected for sync.")
+        self.resources = normalized
+        return self
+
+
+class ConnectorSyncStartResponse(_Base):
+    job_id: UUID
+    job_status: str
+
+
+class ConnectorTestResponse(_Base):
+    status: str
+    message: str
+
+
+class ConnectorResourceResponse(_Base):
+    name: str
+    label: str | None = None
+    primary_key: str | None = None
+    parent_resource: str | None = None
+    cursor_field: str | None = None
+    incremental_cursor_field: str | None = None
+    supports_incremental: bool = False
+    default_sync_mode: ConnectorSyncMode = ConnectorSyncMode.FULL_REFRESH
+    status: ConnectorSyncStatus = ConnectorSyncStatus.NEVER_SYNCED
+    last_cursor: str | None = None
+    last_sync_at: datetime | None = None
+    dataset_ids: list[UUID] = Field(default_factory=list)
+    dataset_names: list[str] = Field(default_factory=list)
+    records_synced: int | None = None
+
+
+class ConnectorResourceListResponse(_Base):
+    connector_id: UUID
+    items: list[ConnectorResourceResponse] = Field(default_factory=list)
+
+
+class ConnectorSyncStateResponse(_Base):
+    id: UUID
+    workspace_id: UUID
+    connection_id: UUID
+    connector_type: str
+    resource_name: str
+    sync_mode: ConnectorSyncMode
+    last_cursor: str | None = None
+    last_sync_at: datetime | None = None
+    state: dict[str, Any] = Field(default_factory=dict)
+    status: ConnectorSyncStatus = ConnectorSyncStatus.NEVER_SYNCED
+    error_message: str | None = None
+    records_synced: int = 0
+    bytes_synced: int | None = None
+    created_at: datetime
+    updated_at: datetime
+    dataset_ids: list[UUID] = Field(default_factory=list)
+
+
+class ConnectorSyncStateListResponse(_Base):
+    connection_id: UUID
+    items: list[ConnectorSyncStateResponse] = Field(default_factory=list)
+
+
+class ConnectorSyncHistoryItemResponse(_Base):
+    job_id: UUID
+    status: str
+    progress: int = 0
+    status_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error: dict[str, Any] | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConnectorSyncHistoryResponse(_Base):
+    connection_id: UUID
+    items: list[ConnectorSyncHistoryItemResponse] = Field(default_factory=list)

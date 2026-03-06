@@ -10,3 +10,5 @@ class JobType(str, Enum):
     DATASET_PREVIEW = "dataset_preview"
     DATASET_PROFILE = "dataset_profile"
     DATASET_BULK_CREATE = "dataset_bulk_create"
+    DATASET_CSV_INGEST = "dataset_csv_ingest"
+    CONNECTOR_SYNC = "connector_sync"

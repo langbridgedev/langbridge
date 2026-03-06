@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     SQLALCHEMY_POOL_SIZE: int = 5
     SQLALCHEMY_MAX_OVERFLOW: int = 10
     SQLALCHEMY_POOL_TIMEOUT: int = 30
+
+    SHOPIFY_APP_CLIENT_ID: str = ""
+    SHOPIFY_APP_CLIENT_SECRET: str = ""
     
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
@@ -92,6 +95,8 @@ class Settings(BaseSettings):
     STORAGE_SETTING: Literal["local", "azure"] = "local"
     DASHBOARD_SNAPSHOT_STORAGE_BACKEND: Literal["local", "azure_blob", "s3"] = "local"
     DASHBOARD_SNAPSHOT_LOCAL_DIR: str = ".cache/dashboard_snapshots"
+    DATASET_FILE_ENABLED: bool = True
+    DATASET_LOCAL_STORAGE_DIR: str = ".cache/datasets"
     SQL_FEATURE_ENABLED: bool = True
     SQL_AI_HELPER_ENABLED: bool = True
     SQL_FEDERATION_ENABLED: bool = True
@@ -106,6 +111,8 @@ class Settings(BaseSettings):
     SQL_POLICY_MAX_RUNTIME_SECONDS_UPPER_BOUND: int = 600
     SQL_POLICY_MAX_CONCURRENCY_UPPER_BOUND: int = 20
     SQL_ARTIFACT_LOCAL_DIR: str = ".cache/sql_artifacts"
+    DATASET_FILE_ENABLED: bool = True
+    DATASET_FILE_LOCAL_DIR: str = ".cache/datasets"
 
     BACKEND_URL: str = "http://localhost:8000"
     FRONTEND_URL: str = "http://localhost:3000"

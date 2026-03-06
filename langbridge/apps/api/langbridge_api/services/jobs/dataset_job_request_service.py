@@ -6,6 +6,7 @@ import uuid
 from langbridge.apps.api.langbridge_api.services.task_dispatch_service import TaskDispatchService
 from langbridge.packages.common.langbridge_common.contracts.jobs.dataset_job import (
     CreateDatasetBulkCreateJobRequest,
+    CreateDatasetCsvIngestJobRequest,
     CreateDatasetPreviewJobRequest,
     CreateDatasetProfileJobRequest,
 )
@@ -61,6 +62,16 @@ class DatasetJobRequestService:
             status_message="Bulk dataset creation queued.",
             event_type="DatasetBulkCreateQueued",
             event_message="Bulk dataset creation queued.",
+        )
+
+    async def create_csv_ingest_job(self, request: CreateDatasetCsvIngestJobRequest) -> JobRecord:
+        return await self._create_job(
+            job_type=JobType.DATASET_CSV_INGEST,
+            workspace_id=request.workspace_id,
+            payload=request.model_dump(mode="json"),
+            status_message="CSV dataset ingestion queued.",
+            event_type="DatasetCsvIngestQueued",
+            event_message="CSV dataset ingestion queued.",
         )
 
     async def _create_job(

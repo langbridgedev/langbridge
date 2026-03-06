@@ -25,6 +25,7 @@ from langbridge.packages.common.langbridge_common.repositories.organization_repo
     ProjectRepository,
 )
 from langbridge.packages.common.langbridge_common.repositories.semantic_model_repository import SemanticModelRepository
+from langbridge.packages.common.langbridge_common.utils.lineage import LineageNodeType
 from langbridge.packages.common.langbridge_common.contracts.semantic import (
     SemanticModelCatalogColumnResponse,
     SemanticModelCatalogResponse,
@@ -40,6 +41,7 @@ from langbridge.packages.semantic.langbridge_semantic.model import SemanticModel
 from langbridge.packages.semantic.langbridge_semantic.semantic_model_builder import SemanticModelBuilder
 from langbridge.apps.api.langbridge_api.services.agent_service import AgentService
 from langbridge.apps.api.langbridge_api.services.connector_service import ConnectorService
+from langbridge.apps.api.langbridge_api.services.lineage_service import LineageService
 from langbridge.packages.common.langbridge_common.utils.embedding_provider import EmbeddingProvider, EmbeddingProviderError
 
 VALUE_MAX_LENGTH = 256
@@ -58,7 +60,8 @@ class SemanticModelService:
         connector_service: ConnectorService,
         agent_service: AgentService,
         semantic_search_service: SemanticSearchService,
-        emvironment_service: EnvironmentService
+        emvironment_service: EnvironmentService,
+        lineage_service: LineageService | None = None,
     ) -> None:
         self._repository = repository
         self._builder = builder
@@ -68,6 +71,7 @@ class SemanticModelService:
         self._agent_service = agent_service
         self._semantic_search_service = semantic_search_service
         self._emvironment_service = emvironment_service
+        self._lineage_service = lineage_service
         
         self._vector_factory = VectorDBConnectorFactory()
 
@@ -183,6 +187,14 @@ class SemanticModelService:
 
     async def delete_model(self, model_id: UUID, organization_id: UUID) -> None:
         model = await self._get_model_entity(model_id=model_id, organization_id=organization_id)
+        if self._lineage_service is not None:
+            await self._lineage_service.delete_node_lineage(
+                workspace_id=organization_id,
+                node_type=(
+                    self._semantic_model_node_type(model)
+                ),
+                node_id=str(model.id),
+            )
         await self._repository.delete(model)
 
     async def create_model(
@@ -259,6 +271,8 @@ class SemanticModelService:
         )
 
         self._repository.add(entry)
+        if self._lineage_service is not None:
+            await self._lineage_service.register_semantic_model_lineage(model=entry)
         return SemanticModelRecordResponse.model_validate(entry)
 
     async def update_model(
@@ -359,6 +373,8 @@ class SemanticModelService:
         model.content_yaml = yaml.safe_dump(payload, sort_keys=False)
         model.content_json = json.dumps(payload)
         model.updated_at = datetime.now(timezone.utc)
+        if self._lineage_service is not None:
+            await self._lineage_service.register_semantic_model_lineage(model=model)
 
         return SemanticModelRecordResponse.model_validate(model)
 
@@ -659,6 +675,14 @@ class SemanticModelService:
             payload.get("source_models"), list
         )
         return "unified" if has_unified_shape else "standard"
+
+    @staticmethod
+    def _semantic_model_node_type(model: SemanticModelEntry) -> LineageNodeType:
+        return (
+            LineageNodeType.UNIFIED_SEMANTIC_MODEL
+            if SemanticModelService._resolve_model_kind(model) == "unified"
+            else LineageNodeType.SEMANTIC_MODEL
+        )
 
     @staticmethod
     def _parse_model_payload(model: SemanticModelEntry) -> Dict[str, Any] | None:

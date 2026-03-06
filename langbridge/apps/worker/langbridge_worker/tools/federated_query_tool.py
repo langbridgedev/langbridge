@@ -18,7 +18,7 @@ from langbridge.packages.connectors.langbridge_connectors.api import (
 )
 from langbridge.packages.connectors.langbridge_connectors.api.config import ConnectorRuntimeType
 from langbridge.packages.connectors.langbridge_connectors.api.connector import SqlConnector, SqlDialetcs
-from langbridge.packages.federation.connectors import SqlConnectorRemoteSource
+from langbridge.packages.federation.connectors import DuckDbFileRemoteSource, RemoteSource, SqlConnectorRemoteSource
 from langbridge.packages.federation.executor import ArtifactStore
 from langbridge.packages.federation.models import FederationWorkflow, SMQQuery
 from langbridge.packages.federation.service import FederatedQueryService
@@ -120,23 +120,37 @@ class FederatedQueryTool:
         return explain.model_dump(mode="json")
 
     async def _build_sources(self, workflow: FederationWorkflow):
-        sources: dict[str, SqlConnectorRemoteSource] = {}
-        source_to_connector: dict[str, UUID] = {}
+        sources: dict[str, RemoteSource] = {}
+        source_bindings: dict[str, list[Any]] = {}
         for binding in workflow.dataset.tables.values():
-            existing = source_to_connector.get(binding.source_id)
-            if existing is not None and existing != binding.connector_id:
-                raise ValueError(
-                    f"Source id '{binding.source_id}' maps to multiple connector ids in workflow '{workflow.id}'."
-                )
-            source_to_connector[binding.source_id] = binding.connector_id
+            source_bindings.setdefault(binding.source_id, []).append(binding)
 
-        for source_id, connector_id in source_to_connector.items():
+        for source_id, bindings in source_bindings.items():
+            binding = bindings[0]
+            metadata = binding.metadata if isinstance(binding.metadata, dict) else {}
+            source_kind = str(metadata.get("source_kind") or "connector").strip().lower()
+            if source_kind == "file":
+                sources[source_id] = DuckDbFileRemoteSource(
+                    source_id=source_id,
+                    bindings=bindings,
+                    logger=self._logger,
+                )
+                continue
+
+            connector_id = binding.connector_id
+            if connector_id is None:
+                raise ValueError(f"Connector source '{source_id}' is missing connector_id.")
+            for extra_binding in bindings[1:]:
+                if extra_binding.connector_id != connector_id:
+                    raise ValueError(
+                        f"Source id '{binding.source_id}' maps to multiple connector ids in workflow '{workflow.id}'."
+                    )
             connector = await self._connector_repository.get_by_id(connector_id)
             if connector is None:
-                raise ValueError(f"Connector '{connector_id}' not found for source '{source_id}'.") 
+                raise ValueError(f"Connector '{connector_id}' not found for source '{source_id}'.")
             if type(connector) is APIConnector:
                 raise ValueError(f"Connector '{connector_id}' for source '{source_id}' is an API connector, which is not supported for federation sources.")
-            
+
             connector_response = ConnectorResponse.from_connector(connector)
             resolved_config = self._resolve_connector_config(connector_response)
             runtime_type = ConnectorRuntimeType((connector_response.connector_type or "").upper())

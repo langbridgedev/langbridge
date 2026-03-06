@@ -1,13 +1,16 @@
-from enum import Enum
 from .config import (
     BaseConnectorConfig,
     BaseConnectorConfigFactory,
     BaseConnectorConfigSchemaFactory,
+    ConnectorAuthFieldSchema,
     ConnectorConfigEntrySchema,
     ConnectorConfigSchema,
+    ConnectorFamily,
+    ConnectorPluginMetadata,
     get_connector_config_factory,
     get_connector_config_schema_factory,
-    ConnectorRuntimeType
+    ConnectorRuntimeType,
+    ConnectorSyncStrategy,
 )
 from .metadata import (
     BaseMetadataExtractor,
@@ -20,6 +23,10 @@ from .metadata import (
 from .connector import (
     ConnectorError,
     AuthError,
+    ApiConnector,
+    ApiExtractResult,
+    ApiResource,
+    ApiSyncResult,
     SqlDialetcs,
     VectorDBType,
     Connector,
@@ -33,9 +40,15 @@ from .connector import (
     run_sync
 )
 from .registry import (
+    ApiConnectorFactory,
     ConnectorInstanceRegistry,
+    ConnectorPlugin,
     SqlConnectorFactory,
     VectorDBConnectorFactory,
+    ensure_builtin_plugins_loaded,
+    get_connector_plugin,
+    list_connector_plugins,
+    register_connector_plugin,
 )
 
 from .snowflake import *  # required for subclass registration
@@ -50,14 +63,23 @@ from .oracle import *  # required for subclass registration
 from .sqlite import *  # required for subclass registration
 from .faiss import *  # required for subclass registration
 from .qdrant import *  # required for subclass registration
+from .shopify import *  # required for plugin registration
+from .stripe import *  # required for plugin registration
+from .hubspot import *  # required for plugin registration
+from .google_analytics import *  # required for plugin registration
+from .salesforce import *  # required for plugin registration
 
 __all__ = [
     "BaseConnectorConfig",
     "BaseConnectorConfigFactory",
     "BaseConnectorConfigSchemaFactory",
+    "ConnectorAuthFieldSchema",
     "ConnectorConfigEntrySchema",
     "ConnectorConfigSchema",
+    "ConnectorFamily",
+    "ConnectorPluginMetadata",
     "ConnectorRuntimeType",
+    "ConnectorSyncStrategy",
     "ConnectorRuntimeTypeSqlDialectMap",
     "ConnectorRuntimeTypeVectorDBMap",
     "get_connector_config_factory",
@@ -71,6 +93,10 @@ __all__ = [
     "ConnectorError",
     "ConnectorType",
     "AuthError",
+    "ApiConnector",
+    "ApiExtractResult",
+    "ApiResource",
+    "ApiSyncResult",
     "SqlDialetcs",
     "VectorDBType",
     "Connector",
@@ -79,8 +105,13 @@ __all__ = [
     "ManagedVectorDB",
     "QueryResult",
     "run_sync",
+    "ApiConnectorFactory",
     "ConnectorInstanceRegistry",
+    "ConnectorPlugin",
     "SqlConnectorFactory",
-    "VectorDBConnectorFactory"
-    
+    "VectorDBConnectorFactory",
+    "ensure_builtin_plugins_loaded",
+    "get_connector_plugin",
+    "list_connector_plugins",
+    "register_connector_plugin",
 ]

@@ -27,13 +27,76 @@ Core records:
 - `dataset_columns`
 - `dataset_policies`
 - `dataset_revisions`
+- `lineage_edges`
 
 Indexes:
 
 - `datasets.workspace_id`
 - `datasets.name` (with workspace uniqueness)
 - `datasets.updated_at`
+- `dataset_revisions.dataset_id`
+- `dataset_revisions.created_at`
+- `lineage_edges.workspace_id`
+- `lineage_edges.source_type/source_id`
+- `lineage_edges.target_type/target_id`
 - composite indexes on `(workspace_id, name)` and `(workspace_id, updated_at)`
+
+## Versioning And Lineage
+
+Datasets are append-only from a governance perspective:
+
+- every create/update/restore writes a new `dataset_revisions` row
+- `datasets.revision_id` points at the active revision
+- restore is implemented as a new revision created from an older snapshot
+- change summaries and `created_by` preserve the audit trail
+
+Each revision stores:
+
+- dataset definition snapshot
+- schema snapshot
+- policy snapshot
+- source binding snapshot
+- optional execution characteristics
+
+Lineage is stored relationally in `lineage_edges` so it can be queried without a separate graph service.
+
+Tracked nodes currently include:
+
+- connections
+- source tables
+- file resources
+- datasets
+- semantic models
+- unified semantic models
+- saved queries
+- dashboards
+
+Tracked edge types currently include:
+
+- `FEEDS`
+- `DERIVES_FROM`
+- `REFERENCES`
+- `MATERIALIZES_FROM`
+- `GENERATED_BY`
+
+## API Surface
+
+Dataset governance extends the existing `/v1/datasets` surface without introducing `/v2`.
+
+- `GET /v1/datasets/{id}/versions`
+- `GET /v1/datasets/{id}/versions/{revision_id}`
+- `GET /v1/datasets/{id}/diff?from_revision=...&to_revision=...`
+- `POST /v1/datasets/{id}/restore`
+- `GET /v1/datasets/{id}/lineage`
+- `GET /v1/datasets/{id}/impact`
+
+The existing create and update endpoints now:
+
+- create dataset revisions automatically
+- update `datasets.revision_id`
+- refresh lineage edges for the dataset definition
+
+Semantic model, unified semantic model, saved query, and dashboard save flows also register lineage edges so downstream impact analysis stays current.
 
 ## Execution Architecture
 

@@ -96,6 +96,36 @@ class QueryResult:
         }
 
 
+@dataclass(slots=True)
+class ApiResource:
+    name: str
+    label: str | None = None
+    primary_key: str | None = None
+    parent_resource: str | None = None
+    cursor_field: str | None = None
+    incremental_cursor_field: str | None = None
+    supports_incremental: bool = False
+    default_sync_mode: str = "FULL_REFRESH"
+
+
+@dataclass(slots=True)
+class ApiExtractResult:
+    resource: str
+    records: List[Dict[str, Any]]
+    status: str = "success"
+    next_cursor: str | None = None
+    checkpoint_cursor: str | None = None
+    child_records: Dict[str, List[Dict[str, Any]]] | None = None
+
+
+@dataclass(slots=True)
+class ApiSyncResult:
+    resource: str
+    status: str
+    records_synced: int = 0
+    datasets_created: List[str] | None = None
+
+
 def _json_safe(value: Any) -> Any:
     if value is None:
         return None
@@ -179,6 +209,7 @@ class ApiConnector(Connector):
     """
     
     CONNECTOR_TYPE: ConnectorType = ConnectorType.NO_SQL
+    RUNTIME_TYPE: ConnectorRuntimeType | None = None
     
     def __init__(
         self,
@@ -193,6 +224,41 @@ class ApiConnector(Connector):
         """
         Test the API connection.
         Raises ConnectorError if the connection fails.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def discover_resources(self) -> List[ApiResource]:
+        """
+        Return the top-level resources available from the API source.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def extract_resource(
+        self,
+        resource_name: str,
+        *,
+        since: str | None = None,
+        cursor: str | None = None,
+        limit: int | None = None,
+    ) -> ApiExtractResult:
+        """
+        Extract one logical resource payload from the API source.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def sync_resource(
+        self,
+        resource_name: str,
+        *,
+        since: str | None = None,
+        cursor: str | None = None,
+        limit: int | None = None,
+    ) -> ApiSyncResult:
+        """
+        Sync one logical resource into the dataset layer.
         """
         raise NotImplementedError
     

@@ -89,6 +89,44 @@ class DatasetRepository(AsyncBaseRepository[DatasetRecord]):
         )
         return int(count or 0)
 
+    async def find_file_dataset_for_connection(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        connection_id: uuid.UUID,
+        table_name: str,
+    ) -> DatasetRecord | None:
+        result = await self._session.scalars(
+            select(DatasetRecord).where(
+                DatasetRecord.workspace_id == workspace_id,
+                DatasetRecord.connection_id == connection_id,
+                DatasetRecord.dataset_type == "FILE",
+                DatasetRecord.table_name == table_name,
+            )
+        )
+        return result.one_or_none()
+
+    async def list_for_connection(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        connection_id: uuid.UUID,
+        dataset_types: Iterable[str] | None = None,
+        limit: int = 500,
+    ) -> list[DatasetRecord]:
+        query = select(DatasetRecord).where(
+            DatasetRecord.workspace_id == workspace_id,
+            DatasetRecord.connection_id == connection_id,
+        )
+        if dataset_types:
+            normalized_types = [item.strip().upper() for item in dataset_types if item and item.strip()]
+            if normalized_types:
+                query = query.where(DatasetRecord.dataset_type.in_(normalized_types))
+        result = await self._session.scalars(
+            query.order_by(desc(DatasetRecord.updated_at)).limit(max(1, limit))
+        )
+        return list(result.all())
+
 
 class DatasetColumnRepository(AsyncBaseRepository[DatasetColumnRecord]):
     def __init__(self, session: AsyncSession):
@@ -148,6 +186,20 @@ class DatasetRevisionRepository(AsyncBaseRepository[DatasetRevisionRecord]):
             .limit(max(1, limit))
         )
         return list(result.all())
+
+    async def get_for_dataset(
+        self,
+        *,
+        dataset_id: uuid.UUID,
+        revision_id: uuid.UUID,
+    ) -> DatasetRevisionRecord | None:
+        result = await self._session.scalars(
+            select(DatasetRevisionRecord).where(
+                DatasetRevisionRecord.dataset_id == dataset_id,
+                DatasetRevisionRecord.id == revision_id,
+            )
+        )
+        return result.one_or_none()
 
     async def next_revision_number(self, *, dataset_id: uuid.UUID) -> int:
         max_number = await self._session.scalar(

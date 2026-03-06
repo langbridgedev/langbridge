@@ -4,6 +4,7 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -24,10 +25,16 @@ from langbridge.packages.common.langbridge_common.contracts.datasets import (
     DatasetCatalogResponse,
     DatasetColumnRequest,
     DatasetColumnResponse,
+    DatasetCsvIngestResponse,
     DatasetCreateRequest,
     DatasetEnsureRequest,
     DatasetEnsureResponse,
     DatasetListResponse,
+    DatasetLineageEdgeResponse,
+    DatasetLineageNodeResponse,
+    DatasetLineageResponse,
+    DatasetLineageNodeType,
+    DatasetLineageEdgeType,
     DatasetSelectionColumnRequest,
     DatasetPolicyDefaultsRequest,
     DatasetPolicyRequest,
@@ -38,14 +45,24 @@ from langbridge.packages.common.langbridge_common.contracts.datasets import (
     DatasetProfileRequest,
     DatasetProfileResponse,
     DatasetResponse,
+    DatasetRestoreRequest,
     DatasetStatsResponse,
     DatasetStatus,
     DatasetType,
     DatasetUpdateRequest,
+    DatasetImpactItemResponse,
+    DatasetImpactResponse,
     DatasetUsageResponse,
+    DatasetVersionDiffResponse,
+    DatasetVersionFieldDiff,
+    DatasetVersionListResponse,
+    DatasetVersionResponse,
+    DatasetVersionSummaryResponse,
+    DatasetSchemaColumnDiff,
 )
 from langbridge.packages.common.langbridge_common.contracts.jobs.dataset_job import (
     CreateDatasetBulkCreateJobRequest,
+    CreateDatasetCsvIngestJobRequest,
     CreateDatasetPreviewJobRequest,
     CreateDatasetProfileJobRequest,
 )
@@ -84,11 +101,19 @@ from langbridge.packages.common.langbridge_common.repositories.sql_repository im
 from langbridge.packages.common.langbridge_common.repositories.user_repository import (
     UserRepository,
 )
+from langbridge.packages.common.langbridge_common.utils.lineage import (
+    LineageNodeType,
+    stable_payload_hash,
+)
 from langbridge.packages.common.langbridge_common.utils.sql import (
     enforce_preview_limit,
     enforce_read_only_sql,
 )
+from langbridge.packages.common.langbridge_common.utils.storage_uri import (
+    path_to_storage_uri,
+)
 from langbridge.packages.connectors.langbridge_connectors.api.config import ConnectorRuntimeType
+from langbridge.apps.api.langbridge_api.services.lineage_service import LineageService
 
 _FORBIDDEN_SECRET_KEYS = {
     "password",
@@ -121,6 +146,7 @@ class DatasetService:
         dataset_job_request_service: DatasetJobRequestService,
         job_repository: JobRepository,
         request_context_provider: RequestContextProvider,
+        lineage_service: LineageService | None = None,
     ) -> None:
         self._dataset_repository = dataset_repository
         self._dataset_column_repository = dataset_column_repository
@@ -135,6 +161,7 @@ class DatasetService:
         self._dataset_job_request_service = dataset_job_request_service
         self._job_repository = job_repository
         self._request_context_provider = request_context_provider
+        self._lineage_service = lineage_service
         self._policy_cache_attr = "_dataset_policy_cache"
 
     async def list_datasets(
@@ -190,6 +217,7 @@ class DatasetService:
             tags_json=[tag.strip() for tag in request.tags if tag and tag.strip()],
             dataset_type=request.dataset_type.value,
             dialect=(request.dialect.strip().lower() if request.dialect else None),
+            storage_uri=(request.storage_uri.strip() if request.storage_uri else None),
             catalog_name=request.catalog_name,
             schema_name=request.schema_name,
             table_name=request.table_name,
@@ -218,11 +246,73 @@ class DatasetService:
             dataset=dataset,
             policy=policy,
             created_by=current_user.id,
-            note="Initial dataset revision.",
+            change_summary=request.change_summary or "Initial dataset revision.",
         )
         dataset.revision_id = revision_id
         dataset.updated_at = datetime.now(timezone.utc)
+        await self._register_dataset_lineage(dataset)
         return await self._to_dataset_response(dataset)
+
+    async def upload_csv_dataset(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        project_id: uuid.UUID | None,
+        name: str,
+        filename: str,
+        content: bytes,
+        description: str | None,
+        tags: list[str] | None,
+        current_user: UserResponse,
+    ) -> DatasetCsvIngestResponse:
+        await self._assert_workspace_access(workspace_id, current_user)
+        await self._assert_workspace_admin(workspace_id, current_user)
+        await self._validate_dataset_feature_flags(DatasetType.FILE)
+
+        safe_filename = Path(filename or "upload.csv").name or "upload.csv"
+        upload_root = Path(settings.DATASET_FILE_LOCAL_DIR) / "uploads" / str(workspace_id)
+        upload_root.mkdir(parents=True, exist_ok=True)
+        file_token = uuid.uuid4()
+        upload_path = upload_root / f"{file_token}_{safe_filename}"
+        upload_path.write_bytes(content)
+        storage_uri = path_to_storage_uri(upload_path)
+
+        dataset = await self.create_dataset(
+            request=DatasetCreateRequest(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                name=name.strip() or safe_filename,
+                description=description,
+                tags=list(tags or []),
+                dataset_type=DatasetType.FILE,
+                dialect="duckdb",
+                storage_uri=storage_uri,
+                file_config={
+                    "format": "csv",
+                    "filename": safe_filename,
+                    "source_storage_uri": storage_uri,
+                },
+                status=DatasetStatus.DRAFT,
+            ),
+            current_user=current_user,
+        )
+
+        job = await self._dataset_job_request_service.create_csv_ingest_job(
+            CreateDatasetCsvIngestJobRequest(
+                dataset_id=dataset.id,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                user_id=current_user.id,
+                storage_uri=storage_uri,
+                correlation_id=self._request_context_provider.correlation_id,
+            )
+        )
+        return DatasetCsvIngestResponse(
+            dataset_id=dataset.id,
+            job_id=job.id,
+            job_status=job.status.value,
+            storage_uri=storage_uri,
+        )
 
     async def ensure_dataset(
         self,
@@ -334,6 +424,112 @@ class DatasetService:
         dataset = await self._get_dataset(dataset_id=dataset_id, workspace_id=workspace_id)
         return await self._to_dataset_response(dataset)
 
+    async def list_dataset_versions(
+        self,
+        *,
+        dataset_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        current_user: UserResponse,
+    ) -> DatasetVersionListResponse:
+        await self._assert_workspace_access(workspace_id, current_user)
+        dataset = await self._get_dataset(dataset_id=dataset_id, workspace_id=workspace_id)
+        revisions = await self._dataset_revision_repository.list_for_dataset(dataset_id=dataset.id, limit=200)
+        return DatasetVersionListResponse(
+            items=[self._to_dataset_version_summary(dataset, revision) for revision in revisions]
+        )
+
+    async def get_dataset_version(
+        self,
+        *,
+        dataset_id: uuid.UUID,
+        revision_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        current_user: UserResponse,
+    ) -> DatasetVersionResponse:
+        await self._assert_workspace_access(workspace_id, current_user)
+        dataset = await self._get_dataset(dataset_id=dataset_id, workspace_id=workspace_id)
+        revision = await self._get_dataset_revision(dataset_id=dataset.id, revision_id=revision_id)
+        return self._to_dataset_version_response(dataset, revision)
+
+    async def diff_dataset_versions(
+        self,
+        *,
+        dataset_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        from_revision_id: uuid.UUID,
+        to_revision_id: uuid.UUID,
+        current_user: UserResponse,
+    ) -> DatasetVersionDiffResponse:
+        await self._assert_workspace_access(workspace_id, current_user)
+        dataset = await self._get_dataset(dataset_id=dataset_id, workspace_id=workspace_id)
+        from_revision = await self._get_dataset_revision(dataset_id=dataset.id, revision_id=from_revision_id)
+        to_revision = await self._get_dataset_revision(dataset_id=dataset.id, revision_id=to_revision_id)
+        return self._diff_dataset_revisions(dataset, from_revision, to_revision)
+
+    async def restore_dataset(
+        self,
+        *,
+        dataset_id: uuid.UUID,
+        request: DatasetRestoreRequest,
+        current_user: UserResponse,
+    ) -> DatasetResponse:
+        await self._assert_workspace_access(request.workspace_id, current_user)
+        await self._assert_workspace_admin(request.workspace_id, current_user)
+        dataset = await self._get_dataset(dataset_id=dataset_id, workspace_id=request.workspace_id)
+        revision = await self._get_dataset_revision(dataset_id=dataset.id, revision_id=request.revision_id)
+        snapshot = self._build_revision_snapshot_payload(revision)
+
+        definition = dict(snapshot["definition"])
+        schema_snapshot = list(snapshot["schema"])
+        policy_snapshot = dict(snapshot["policy"])
+
+        dataset.project_id = self._parse_optional_uuid(definition.get("project_id"))
+        dataset.connection_id = self._parse_optional_uuid(definition.get("connection_id"))
+        dataset.name = str(definition.get("name") or dataset.name)
+        dataset.description = definition.get("description")
+        dataset.tags_json = list(definition.get("tags") or [])
+        dataset.dialect = definition.get("dialect")
+        dataset.catalog_name = definition.get("catalog_name")
+        dataset.schema_name = definition.get("schema_name")
+        dataset.table_name = definition.get("table_name")
+        dataset.storage_uri = definition.get("storage_uri")
+        dataset.sql_text = definition.get("sql_text")
+        dataset.referenced_dataset_ids_json = list(definition.get("referenced_dataset_ids") or [])
+        dataset.federated_plan_json = definition.get("federated_plan")
+        dataset.file_config_json = definition.get("file_config")
+        if definition.get("status"):
+            dataset.status = str(definition["status"])
+
+        await self._replace_columns(
+            dataset=dataset,
+            workspace_id=request.workspace_id,
+            columns=[self._column_request_from_snapshot(item) for item in schema_snapshot],
+        )
+        policy = await self._upsert_policy(
+            dataset=dataset,
+            policy=DatasetPolicyRequest(
+                max_rows_preview=policy_snapshot.get("max_rows_preview"),
+                max_export_rows=policy_snapshot.get("max_export_rows"),
+                redaction_rules=policy_snapshot.get("redaction_rules"),
+                row_filters=policy_snapshot.get("row_filters"),
+                allow_dml=policy_snapshot.get("allow_dml"),
+            ),
+        )
+        revision_id = await self._create_revision(
+            dataset=dataset,
+            policy=policy,
+            created_by=current_user.id,
+            change_summary=(
+                request.change_summary
+                or f"Restored dataset from revision {revision.revision_number}."
+            ),
+        )
+        dataset.revision_id = revision_id
+        dataset.updated_by = current_user.id
+        dataset.updated_at = datetime.now(timezone.utc)
+        await self._register_dataset_lineage(dataset)
+        return await self._to_dataset_response(dataset)
+
     async def update_dataset(
         self,
         *,
@@ -345,8 +541,13 @@ class DatasetService:
         await self._assert_workspace_admin(request.workspace_id, current_user)
         self._assert_no_secret_payload(request.federated_plan, context="federated_plan")
         self._assert_no_secret_payload(request.file_config, context="file_config")
+        await self._validate_connection_scope(
+            workspace_id=request.workspace_id,
+            connection_id=request.connection_id,
+        )
 
         dataset = await self._get_dataset(dataset_id=dataset_id, workspace_id=request.workspace_id)
+        should_refresh_columns = False
 
         if request.name is not None:
             dataset.name = request.name.strip()
@@ -356,22 +557,35 @@ class DatasetService:
             dataset.tags_json = [tag.strip() for tag in request.tags if tag and tag.strip()]
         if request.project_id is not None or "project_id" in request.model_fields_set:
             dataset.project_id = request.project_id
+        if request.connection_id is not None or "connection_id" in request.model_fields_set:
+            dataset.connection_id = request.connection_id
+            should_refresh_columns = True
         if request.dialect is not None:
             dataset.dialect = request.dialect.strip().lower() if request.dialect.strip() else None
+        if request.storage_uri is not None or "storage_uri" in request.model_fields_set:
+            dataset.storage_uri = request.storage_uri.strip() if request.storage_uri else None
+            should_refresh_columns = True
         if request.catalog_name is not None:
             dataset.catalog_name = request.catalog_name
+            should_refresh_columns = True
         if request.schema_name is not None:
             dataset.schema_name = request.schema_name
+            should_refresh_columns = True
         if request.table_name is not None:
             dataset.table_name = request.table_name
+            should_refresh_columns = True
         if request.sql_text is not None:
             dataset.sql_text = request.sql_text
+            should_refresh_columns = True
         if request.referenced_dataset_ids is not None:
             dataset.referenced_dataset_ids_json = [str(item) for item in request.referenced_dataset_ids]
+            should_refresh_columns = True
         if request.federated_plan is not None or "federated_plan" in request.model_fields_set:
             dataset.federated_plan_json = request.federated_plan
+            should_refresh_columns = True
         if request.file_config is not None or "file_config" in request.model_fields_set:
             dataset.file_config_json = request.file_config
+            should_refresh_columns = True
         if request.status is not None:
             dataset.status = request.status.value
 
@@ -381,17 +595,26 @@ class DatasetService:
                 workspace_id=request.workspace_id,
                 columns=request.columns,
             )
+        elif should_refresh_columns:
+            refreshed_columns = await self._resolve_columns_for_dataset(dataset)
+            if refreshed_columns:
+                await self._replace_columns(
+                    dataset=dataset,
+                    workspace_id=request.workspace_id,
+                    columns=refreshed_columns,
+                )
 
         policy = await self._upsert_policy(dataset=dataset, policy=request.policy)
         revision_id = await self._create_revision(
             dataset=dataset,
             policy=policy,
             created_by=current_user.id,
-            note="Dataset updated.",
+            change_summary=request.change_summary or "Dataset updated.",
         )
         dataset.revision_id = revision_id
         dataset.updated_by = current_user.id
         dataset.updated_at = datetime.now(timezone.utc)
+        await self._register_dataset_lineage(dataset)
         return await self._to_dataset_response(dataset)
 
     async def delete_dataset(
@@ -404,6 +627,12 @@ class DatasetService:
         await self._assert_workspace_access(workspace_id, current_user)
         await self._assert_workspace_admin(workspace_id, current_user)
         dataset = await self._get_dataset(dataset_id=dataset_id, workspace_id=workspace_id)
+        if self._lineage_service is not None:
+            await self._lineage_service.delete_node_lineage(
+                workspace_id=workspace_id,
+                node_type=LineageNodeType.DATASET,
+                node_id=str(dataset.id),
+            )
         await self._dataset_repository.delete(dataset)
 
     async def get_catalog(
@@ -441,42 +670,91 @@ class DatasetService:
         workspace_id: uuid.UUID,
         current_user: UserResponse,
     ) -> DatasetUsageResponse:
-        await self._assert_workspace_access(workspace_id, current_user)
-        dataset = await self._get_dataset(dataset_id=dataset_id, workspace_id=workspace_id)
-
-        semantic_models = await self._semantic_model_repository.list_for_scope(
-            organization_id=workspace_id,
-            project_id=dataset.project_id,
+        impact = await self.get_impact(
+            dataset_id=dataset_id,
+            workspace_id=workspace_id,
+            current_user=current_user,
         )
-        used_by_models: list[dict[str, Any]] = []
-        for model in semantic_models:
-            payload = self._parse_json_or_yaml(model.content_json, model.content_yaml)
-            if not payload:
-                continue
-            tables = payload.get("tables")
-            if not isinstance(tables, dict):
-                continue
-            matched_tables = [
-                table_key
-                for table_key, table_payload in tables.items()
-                if isinstance(table_payload, dict)
-                and str(table_payload.get("dataset_id") or table_payload.get("datasetId") or "") == str(dataset.id)
-            ]
-            if not matched_tables:
-                continue
-            used_by_models.append(
-                {
-                    "id": str(model.id),
-                    "name": model.name,
-                    "project_id": str(model.project_id) if model.project_id else None,
-                    "matched_tables": matched_tables,
-                }
-            )
-
         return DatasetUsageResponse(
-            semantic_models=used_by_models,
-            dashboards=[],
-            saved_queries=[],
+            semantic_models=[self._impact_item_to_legacy_dict(item) for item in impact.semantic_models],
+            unified_semantic_models=[
+                self._impact_item_to_legacy_dict(item) for item in impact.unified_semantic_models
+            ],
+            dependent_datasets=[
+                self._impact_item_to_legacy_dict(item) for item in impact.dependent_datasets
+            ],
+            dashboards=[self._impact_item_to_legacy_dict(item) for item in impact.dashboards],
+            saved_queries=[self._impact_item_to_legacy_dict(item) for item in impact.saved_queries],
+        )
+
+    async def get_lineage(
+        self,
+        *,
+        dataset_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        current_user: UserResponse,
+    ) -> DatasetLineageResponse:
+        await self._assert_workspace_access(workspace_id, current_user)
+        await self._get_dataset(dataset_id=dataset_id, workspace_id=workspace_id)
+        if self._lineage_service is None:
+            return DatasetLineageResponse(dataset_id=dataset_id)
+        nodes, edges, upstream_count, downstream_count = await self._lineage_service.build_dataset_lineage_graph(
+            workspace_id=workspace_id,
+            dataset_id=dataset_id,
+        )
+        return DatasetLineageResponse(
+            dataset_id=dataset_id,
+            nodes=[
+                DatasetLineageNodeResponse(
+                    node_type=DatasetLineageNodeType(node["node_type"]),
+                    node_id=str(node["node_id"]),
+                    label=str(node["label"]),
+                    direction=str(node["direction"]),
+                    metadata=dict(node.get("metadata") or {}),
+                )
+                for node in nodes
+            ],
+            edges=[
+                DatasetLineageEdgeResponse(
+                    source_type=DatasetLineageNodeType(edge.source_type),
+                    source_id=edge.source_id,
+                    target_type=DatasetLineageNodeType(edge.target_type),
+                    target_id=edge.target_id,
+                    edge_type=DatasetLineageEdgeType(edge.edge_type),
+                    metadata=dict(edge.metadata_json or {}),
+                )
+                for edge in edges
+            ],
+            upstream_count=upstream_count,
+            downstream_count=downstream_count,
+        )
+
+    async def get_impact(
+        self,
+        *,
+        dataset_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        current_user: UserResponse,
+    ) -> DatasetImpactResponse:
+        await self._assert_workspace_access(workspace_id, current_user)
+        await self._get_dataset(dataset_id=dataset_id, workspace_id=workspace_id)
+        if self._lineage_service is None:
+            return DatasetImpactResponse(dataset_id=dataset_id)
+        impact = await self._lineage_service.build_dataset_impact(
+            workspace_id=workspace_id,
+            dataset_id=dataset_id,
+        )
+        return DatasetImpactResponse(
+            dataset_id=dataset_id,
+            total_downstream_assets=int(impact.get("total_downstream_assets") or 0),
+            direct_dependents=self._impact_items_from_payload(impact.get("direct_dependents")),
+            dependent_datasets=self._impact_items_from_payload(impact.get("dependent_datasets")),
+            semantic_models=self._impact_items_from_payload(impact.get("semantic_models")),
+            unified_semantic_models=self._impact_items_from_payload(
+                impact.get("unified_semantic_models")
+            ),
+            saved_queries=self._impact_items_from_payload(impact.get("saved_queries")),
+            dashboards=self._impact_items_from_payload(impact.get("dashboards")),
         )
 
     async def preview_dataset(
@@ -686,10 +964,11 @@ class DatasetService:
             dataset=dataset,
             policy=policy,
             created_by=current_user.id,
-            note="Auto-generated dataset created.",
+            change_summary="Auto-generated dataset created.",
         )
         dataset.revision_id = revision_id
         dataset.updated_at = datetime.now(timezone.utc)
+        await self._register_dataset_lineage(dataset)
         return dataset
 
     async def _find_existing_table_dataset(
@@ -872,7 +1151,38 @@ class DatasetService:
             )
             if inferred:
                 return inferred
+        elif request.dataset_type == DatasetType.FILE:
+            inferred = await self._infer_columns_from_file(
+                storage_uri=request.storage_uri,
+                file_config=request.file_config,
+            )
+            if inferred:
+                return inferred
 
+        return []
+
+    async def _resolve_columns_for_dataset(
+        self,
+        dataset: DatasetRecord,
+    ) -> list[DatasetColumnRequest]:
+        dataset_type = DatasetType(dataset.dataset_type.upper())
+        if dataset_type == DatasetType.TABLE:
+            return await self._infer_columns_from_table(
+                connection_id=dataset.connection_id,
+                schema_name=dataset.schema_name or "",
+                table_name=dataset.table_name or "",
+            )
+        if dataset_type == DatasetType.SQL:
+            return await self._infer_columns_from_sql(
+                connection_id=dataset.connection_id,
+                dataset_dialect=dataset.dialect or "tsql",
+                sql_text=dataset.sql_text or "",
+            )
+        if dataset_type == DatasetType.FILE:
+            return await self._infer_columns_from_file(
+                storage_uri=dataset.storage_uri,
+                file_config=dataset.file_config_json,
+            )
         return []
 
     async def _infer_columns_from_table(
@@ -961,6 +1271,75 @@ class DatasetService:
             )
         return inferred
 
+    async def _infer_columns_from_file(
+        self,
+        *,
+        storage_uri: str | None,
+        file_config: dict[str, Any] | None,
+    ) -> list[DatasetColumnRequest]:
+        config_payload = dict(file_config or {})
+        resolved_uri = (storage_uri or "").strip()
+        if not resolved_uri:
+            resolved_uri = str(
+                config_payload.get("storage_uri")
+                or config_payload.get("uri")
+                or config_payload.get("path")
+                or ""
+            ).strip()
+        if not resolved_uri:
+            return []
+
+        normalized_uri = self._normalize_local_storage_uri(resolved_uri)
+        file_format = self._infer_file_dataset_format(normalized_uri, config_payload)
+        if file_format is None:
+            return []
+
+        scan_sql = self._build_duckdb_file_scan_sql(
+            storage_uri=normalized_uri,
+            file_format=file_format,
+            file_config=config_payload,
+        )
+        if not scan_sql:
+            return []
+
+        try:
+            import duckdb
+        except Exception:
+            return []
+
+        connection = None
+        try:
+            connection = duckdb.connect(database=":memory:")
+            rows = connection.execute(f"DESCRIBE SELECT * FROM {scan_sql}").fetchall()
+        except Exception:
+            return []
+        finally:
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+
+        inferred: list[DatasetColumnRequest] = []
+        for index, row in enumerate(rows):
+            if not row:
+                continue
+            name = str(row[0] or "").strip()
+            if not name:
+                continue
+            data_type = str(row[1] or "string").strip() or "string"
+            nullable_flag = str(row[2] or "").strip().upper()
+            inferred.append(
+                DatasetColumnRequest(
+                    name=name,
+                    data_type=data_type.lower(),
+                    nullable=nullable_flag != "NO",
+                    is_allowed=True,
+                    ordinal_position=index,
+                )
+            )
+        return inferred
+
     async def _replace_columns(
         self,
         *,
@@ -1031,33 +1410,27 @@ class DatasetService:
         dataset: DatasetRecord,
         policy: DatasetPolicyRecord,
         created_by: uuid.UUID,
-        note: str,
+        change_summary: str,
     ) -> uuid.UUID:
         columns = await self._dataset_column_repository.list_for_dataset(dataset_id=dataset.id)
         next_revision = await self._dataset_revision_repository.next_revision_number(dataset_id=dataset.id)
-        snapshot = {
-            "dataset": {
-                "id": str(dataset.id),
-                "workspace_id": str(dataset.workspace_id),
-                "project_id": str(dataset.project_id) if dataset.project_id else None,
-                "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
-                "name": dataset.name,
-                "description": dataset.description,
-                "tags": list(dataset.tags_json or []),
-                "dataset_type": dataset.dataset_type,
-                "dialect": dataset.dialect,
-                "catalog_name": dataset.catalog_name,
-                "schema_name": dataset.schema_name,
-                "table_name": dataset.table_name,
-                "sql_text": dataset.sql_text,
-                "referenced_dataset_ids": list(dataset.referenced_dataset_ids_json or []),
-                "federated_plan": dataset.federated_plan_json,
-                "file_config": dataset.file_config_json,
-                "status": dataset.status,
-            },
-            "columns": [self._to_column_response(column).model_dump(mode="json") for column in columns],
-            "policy": self._to_policy_response(policy).model_dump(mode="json"),
+        definition = self._build_dataset_definition_snapshot(dataset)
+        schema_snapshot = [self._to_column_response(column).model_dump(mode="json") for column in columns]
+        policy_snapshot = self._to_policy_response(policy).model_dump(mode="json")
+        source_bindings = await self._build_dataset_source_bindings(dataset)
+        execution_characteristics = {
+            "row_count_estimate": dataset.row_count_estimate,
+            "bytes_estimate": dataset.bytes_estimate,
+            "last_profiled_at": dataset.last_profiled_at.isoformat() if dataset.last_profiled_at else None,
         }
+        snapshot = {
+            "dataset": definition,
+            "columns": schema_snapshot,
+            "policy": policy_snapshot,
+            "source_bindings": source_bindings,
+            "execution_characteristics": execution_characteristics,
+        }
+        revision_hash = stable_payload_hash(snapshot)
         revision_id = uuid.uuid4()
         self._dataset_revision_repository.add(
             DatasetRevisionRecord(
@@ -1065,13 +1438,433 @@ class DatasetService:
                 dataset_id=dataset.id,
                 workspace_id=dataset.workspace_id,
                 revision_number=next_revision,
+                revision_hash=revision_hash,
+                change_summary=change_summary,
+                definition_json=definition,
+                schema_json=schema_snapshot,
+                policy_json=policy_snapshot,
+                source_bindings_json=source_bindings,
+                execution_characteristics_json=execution_characteristics,
+                status=dataset.status,
                 snapshot_json=snapshot,
-                note=note,
+                note=change_summary,
                 created_by=created_by,
                 created_at=datetime.now(timezone.utc),
             )
         )
         return revision_id
+
+    def _build_dataset_definition_snapshot(self, dataset: DatasetRecord) -> dict[str, Any]:
+        return {
+            "id": str(dataset.id),
+            "workspace_id": str(dataset.workspace_id),
+            "project_id": str(dataset.project_id) if dataset.project_id else None,
+            "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
+            "name": dataset.name,
+            "description": dataset.description,
+            "tags": list(dataset.tags_json or []),
+            "dataset_type": dataset.dataset_type,
+            "dialect": dataset.dialect,
+            "storage_uri": dataset.storage_uri,
+            "catalog_name": dataset.catalog_name,
+            "schema_name": dataset.schema_name,
+            "table_name": dataset.table_name,
+            "sql_text": dataset.sql_text,
+            "referenced_dataset_ids": list(dataset.referenced_dataset_ids_json or []),
+            "federated_plan": dataset.federated_plan_json,
+            "file_config": dataset.file_config_json,
+            "status": dataset.status,
+        }
+
+    async def _build_dataset_source_bindings(self, dataset: DatasetRecord) -> list[dict[str, Any]]:
+        dataset_type = DatasetType(dataset.dataset_type.upper())
+        if dataset_type == DatasetType.TABLE:
+            return [
+                {
+                    "source_type": "connection",
+                    "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
+                },
+                {
+                    "source_type": "source_table",
+                    "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
+                    "catalog_name": dataset.catalog_name,
+                    "schema_name": dataset.schema_name,
+                    "table_name": dataset.table_name,
+                },
+            ]
+        if dataset_type == DatasetType.SQL:
+            bindings: list[dict[str, Any]] = []
+            if dataset.connection_id:
+                bindings.append(
+                    {
+                        "source_type": "connection",
+                        "connection_id": str(dataset.connection_id),
+                    }
+                )
+            if self._lineage_service is not None and (dataset.sql_text or "").strip():
+                dataset_refs, source_refs = await self._lineage_service._resolve_sql_references(
+                    workspace_id=dataset.workspace_id,
+                    project_id=dataset.project_id,
+                    connection_id=dataset.connection_id,
+                    query_text=dataset.sql_text or "",
+                    default_catalog=dataset.catalog_name,
+                )
+                bindings.extend(
+                    {
+                        "source_type": "dataset",
+                        "dataset_id": str(ref),
+                    }
+                    for ref in dataset_refs
+                    if ref != dataset.id
+                )
+                bindings.extend(
+                    {
+                        "source_type": "source_table",
+                        **dict(ref["metadata"]),
+                    }
+                    for ref in source_refs
+                )
+            return bindings
+        if dataset_type == DatasetType.FILE:
+            sync_meta = (
+                (dataset.file_config_json or {}).get("connector_sync")
+                if isinstance(dataset.file_config_json, dict)
+                else None
+            )
+            storage_uri = (
+                str((dataset.file_config_json or {}).get("source_storage_uri") or "").strip()
+                or str((dataset.file_config_json or {}).get("storage_uri") or "").strip()
+                or dataset.storage_uri
+            )
+            bindings = [
+                {
+                    "source_type": "file_resource",
+                    "storage_uri": storage_uri,
+                    "file_config": dict(dataset.file_config_json or {}),
+                }
+            ]
+            if isinstance(sync_meta, dict):
+                bindings.insert(
+                    0,
+                    {
+                        "source_type": "api_resource",
+                        "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
+                        "connector_type": sync_meta.get("connector_type"),
+                        "resource_name": sync_meta.get("resource_name"),
+                        "root_resource_name": sync_meta.get("root_resource_name"),
+                        "parent_resource_name": sync_meta.get("parent_resource_name"),
+                    },
+                )
+                if dataset.connection_id is not None:
+                    bindings.insert(
+                        0,
+                        {
+                            "source_type": "connection",
+                            "connection_id": str(dataset.connection_id),
+                        },
+                    )
+            return bindings
+        if dataset_type == DatasetType.FEDERATED:
+            return [
+                {
+                    "source_type": "dataset",
+                    "dataset_id": value,
+                }
+                for value in self._extract_federated_source_ids(dataset)
+            ]
+        return []
+
+    def _build_revision_snapshot_payload(self, revision: DatasetRevisionRecord) -> dict[str, Any]:
+        definition = dict(revision.definition_json or {})
+        schema_snapshot = list(revision.schema_json or [])
+        policy_snapshot = dict(revision.policy_json or {})
+        source_bindings = list(revision.source_bindings_json or [])
+        execution_characteristics = (
+            dict(revision.execution_characteristics_json or {})
+            if revision.execution_characteristics_json is not None
+            else None
+        )
+        legacy_snapshot = dict(revision.snapshot_json or {})
+
+        if not definition:
+            definition = dict(legacy_snapshot.get("dataset") or {})
+        if not schema_snapshot:
+            schema_snapshot = list(legacy_snapshot.get("columns") or [])
+        if not policy_snapshot:
+            policy_snapshot = dict(legacy_snapshot.get("policy") or {})
+        if not source_bindings:
+            source_bindings = list(legacy_snapshot.get("source_bindings") or [])
+        if execution_characteristics is None and isinstance(
+            legacy_snapshot.get("execution_characteristics"), dict
+        ):
+            execution_characteristics = dict(legacy_snapshot["execution_characteristics"])
+
+        return {
+            "definition": definition,
+            "schema": schema_snapshot,
+            "policy": policy_snapshot,
+            "source_bindings": source_bindings,
+            "execution_characteristics": execution_characteristics,
+            "legacy_snapshot": legacy_snapshot or None,
+        }
+
+    def _to_dataset_version_summary(
+        self,
+        dataset: DatasetRecord,
+        revision: DatasetRevisionRecord,
+    ) -> DatasetVersionSummaryResponse:
+        status_value = revision.status or self._build_revision_snapshot_payload(revision)["definition"].get("status")
+        return DatasetVersionSummaryResponse(
+            id=revision.id,
+            dataset_id=revision.dataset_id,
+            revision_number=revision.revision_number,
+            revision_hash=revision.revision_hash or stable_payload_hash(revision.snapshot_json or {}),
+            created_at=revision.created_at,
+            created_by=revision.created_by,
+            change_summary=revision.change_summary or revision.note,
+            status=(DatasetStatus(status_value) if status_value in DatasetStatus._value2member_map_ else None),
+            is_current=dataset.revision_id == revision.id,
+        )
+
+    def _to_dataset_version_response(
+        self,
+        dataset: DatasetRecord,
+        revision: DatasetRevisionRecord,
+    ) -> DatasetVersionResponse:
+        payload = self._build_revision_snapshot_payload(revision)
+        summary = self._to_dataset_version_summary(dataset, revision)
+        return DatasetVersionResponse(
+            id=summary.id,
+            dataset_id=summary.dataset_id,
+            revision_number=summary.revision_number,
+            revision_hash=summary.revision_hash,
+            created_at=summary.created_at,
+            created_by=summary.created_by,
+            change_summary=summary.change_summary,
+            status=summary.status,
+            is_current=summary.is_current,
+            definition_snapshot=payload["definition"],
+            schema_snapshot=payload["schema"],
+            policy_snapshot=payload["policy"],
+            source_bindings_snapshot=payload["source_bindings"],
+            execution_characteristics_snapshot=payload["execution_characteristics"],
+            legacy_snapshot=payload["legacy_snapshot"],
+        )
+
+    async def _get_dataset_revision(
+        self,
+        *,
+        dataset_id: uuid.UUID,
+        revision_id: uuid.UUID,
+    ) -> DatasetRevisionRecord:
+        revision = await self._dataset_revision_repository.get_for_dataset(
+            dataset_id=dataset_id,
+            revision_id=revision_id,
+        )
+        if revision is None:
+            raise ResourceNotFound("Dataset revision not found.")
+        return revision
+
+    def _diff_dataset_revisions(
+        self,
+        dataset: DatasetRecord,
+        from_revision: DatasetRevisionRecord,
+        to_revision: DatasetRevisionRecord,
+    ) -> DatasetVersionDiffResponse:
+        from_payload = self._build_revision_snapshot_payload(from_revision)
+        to_payload = self._build_revision_snapshot_payload(to_revision)
+        definition_changes = self._diff_object_fields(from_payload["definition"], to_payload["definition"])
+        policy_changes = self._diff_object_fields(from_payload["policy"], to_payload["policy"])
+        source_binding_changes = self._diff_list_payloads(
+            from_payload["source_bindings"],
+            to_payload["source_bindings"],
+            field_name="source_bindings",
+        )
+        execution_changes = self._diff_object_fields(
+            from_payload["execution_characteristics"] or {},
+            to_payload["execution_characteristics"] or {},
+        )
+        schema_changes = self._diff_schema_payloads(from_payload["schema"], to_payload["schema"])
+
+        summary: list[str] = []
+        if schema_changes:
+            summary.append(f"{len(schema_changes)} schema change(s)")
+        if definition_changes:
+            summary.append(f"{len(definition_changes)} definition change(s)")
+        if policy_changes:
+            summary.append(f"{len(policy_changes)} policy change(s)")
+        if source_binding_changes:
+            summary.append(f"{len(source_binding_changes)} source binding change(s)")
+        if execution_changes:
+            summary.append(f"{len(execution_changes)} execution metadata change(s)")
+
+        return DatasetVersionDiffResponse(
+            dataset_id=dataset.id,
+            from_revision_id=from_revision.id,
+            to_revision_id=to_revision.id,
+            from_revision_number=from_revision.revision_number,
+            to_revision_number=to_revision.revision_number,
+            summary=summary,
+            definition_changes=definition_changes,
+            policy_changes=policy_changes,
+            source_binding_changes=source_binding_changes,
+            execution_changes=execution_changes,
+            schema_changes=schema_changes,
+        )
+
+    def _diff_object_fields(
+        self,
+        before: dict[str, Any],
+        after: dict[str, Any],
+    ) -> list[DatasetVersionFieldDiff]:
+        changes: list[DatasetVersionFieldDiff] = []
+        keys = sorted(set(before.keys()) | set(after.keys()))
+        for key in keys:
+            if before.get(key) == after.get(key):
+                continue
+            change_type = "changed"
+            if key not in before:
+                change_type = "added"
+            elif key not in after:
+                change_type = "removed"
+            changes.append(
+                DatasetVersionFieldDiff(
+                    field=key,
+                    change_type=change_type,
+                    before=before.get(key),
+                    after=after.get(key),
+                )
+            )
+        return changes
+
+    def _diff_list_payloads(
+        self,
+        before: list[dict[str, Any]],
+        after: list[dict[str, Any]],
+        *,
+        field_name: str,
+    ) -> list[DatasetVersionFieldDiff]:
+        if before == after:
+            return []
+        return [
+            DatasetVersionFieldDiff(
+                field=field_name,
+                change_type="changed",
+                before=before,
+                after=after,
+            )
+        ]
+
+    def _diff_schema_payloads(
+        self,
+        before: list[dict[str, Any]],
+        after: list[dict[str, Any]],
+    ) -> list[DatasetSchemaColumnDiff]:
+        before_map = {str(item.get("name") or ""): item for item in before if item.get("name")}
+        after_map = {str(item.get("name") or ""): item for item in after if item.get("name")}
+        changes: list[DatasetSchemaColumnDiff] = []
+        for column_name in sorted(set(before_map.keys()) | set(after_map.keys())):
+            if column_name not in before_map:
+                changes.append(
+                    DatasetSchemaColumnDiff(
+                        column_name=column_name,
+                        change_type="added",
+                        before=None,
+                        after=after_map[column_name],
+                    )
+                )
+            elif column_name not in after_map:
+                changes.append(
+                    DatasetSchemaColumnDiff(
+                        column_name=column_name,
+                        change_type="removed",
+                        before=before_map[column_name],
+                        after=None,
+                    )
+                )
+            elif before_map[column_name] != after_map[column_name]:
+                changes.append(
+                    DatasetSchemaColumnDiff(
+                        column_name=column_name,
+                        change_type="changed",
+                        before=before_map[column_name],
+                        after=after_map[column_name],
+                    )
+                )
+        return changes
+
+    async def _register_dataset_lineage(self, dataset: DatasetRecord) -> None:
+        if self._lineage_service is None:
+            return
+        await self._lineage_service.register_dataset_lineage(dataset=dataset)
+
+    @staticmethod
+    def _parse_optional_uuid(value: Any) -> uuid.UUID | None:
+        if value in {None, ""}:
+            return None
+        try:
+            return uuid.UUID(str(value))
+        except (TypeError, ValueError):
+            return None
+
+    def _column_request_from_snapshot(self, value: dict[str, Any]) -> DatasetColumnRequest:
+        return DatasetColumnRequest(
+            name=str(value.get("name") or ""),
+            data_type=str(value.get("data_type") or value.get("dataType") or "unknown"),
+            nullable=bool(value.get("nullable", True)),
+            description=value.get("description"),
+            is_allowed=bool(value.get("is_allowed", value.get("isAllowed", True))),
+            is_computed=bool(value.get("is_computed", value.get("isComputed", False))),
+            expression=value.get("expression"),
+            ordinal_position=value.get("ordinal_position", value.get("ordinalPosition")),
+        )
+
+    @staticmethod
+    def _extract_federated_source_ids(dataset: DatasetRecord) -> list[str]:
+        ids: list[str] = []
+        for raw_id in dataset.referenced_dataset_ids_json or []:
+            if raw_id and raw_id not in ids:
+                ids.append(str(raw_id))
+        plan = dataset.federated_plan_json if isinstance(dataset.federated_plan_json, dict) else {}
+        tables_payload = plan.get("tables")
+        iterable = tables_payload.values() if isinstance(tables_payload, dict) else tables_payload or []
+        for item in iterable:
+            if not isinstance(item, dict):
+                continue
+            raw_id = item.get("dataset_id") or item.get("datasetId")
+            if raw_id and str(raw_id) not in ids:
+                ids.append(str(raw_id))
+        return ids
+
+    def _impact_items_from_payload(self, payload: Any) -> list[DatasetImpactItemResponse]:
+        items: list[DatasetImpactItemResponse] = []
+        if not isinstance(payload, list):
+            return items
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            node_type = str(item.get("node_type") or "")
+            if node_type not in DatasetLineageNodeType._value2member_map_:
+                continue
+            items.append(
+                DatasetImpactItemResponse(
+                    node_type=DatasetLineageNodeType(node_type),
+                    node_id=str(item.get("node_id") or ""),
+                    label=str(item.get("label") or item.get("node_id") or ""),
+                    direct=bool(item.get("direct")),
+                    metadata=dict(item.get("metadata") or {}),
+                )
+            )
+        return items
+
+    def _impact_item_to_legacy_dict(self, item: DatasetImpactItemResponse) -> dict[str, Any]:
+        return {
+            "id": item.node_id,
+            "name": item.label,
+            "node_type": item.node_type.value,
+            "direct": item.direct,
+            **dict(item.metadata or {}),
+        }
 
     async def _to_dataset_response(self, dataset: DatasetRecord) -> DatasetResponse:
         columns = await self._dataset_column_repository.list_for_dataset(dataset_id=dataset.id)
@@ -1081,11 +1874,13 @@ class DatasetService:
             workspace_id=dataset.workspace_id,
             project_id=dataset.project_id,
             connection_id=dataset.connection_id,
+            owner_id=dataset.created_by,
             name=dataset.name,
             description=dataset.description,
             tags=list(dataset.tags_json or []),
             dataset_type=DatasetType(dataset.dataset_type.upper()),
             dialect=dataset.dialect,
+            storage_uri=dataset.storage_uri,
             catalog_name=dataset.catalog_name,
             schema_name=dataset.schema_name,
             table_name=dataset.table_name,
@@ -1107,6 +1902,49 @@ class DatasetService:
             created_at=dataset.created_at,
             updated_at=dataset.updated_at,
         )
+
+    @staticmethod
+    def _normalize_local_storage_uri(storage_uri: str) -> str:
+        normalized = (storage_uri or "").strip()
+        if normalized.startswith("file://"):
+            return normalized[7:]
+        return normalized
+
+    @staticmethod
+    def _infer_file_dataset_format(storage_uri: str, file_config: dict[str, Any]) -> str | None:
+        configured = str(file_config.get("format") or file_config.get("file_format") or "").strip().lower()
+        if configured in {"csv", "parquet"}:
+            return configured
+        lowered_uri = storage_uri.lower()
+        if lowered_uri.endswith(".parquet"):
+            return "parquet"
+        if lowered_uri.endswith(".csv"):
+            return "csv"
+        return None
+
+    @staticmethod
+    def _build_duckdb_file_scan_sql(
+        *,
+        storage_uri: str,
+        file_format: str,
+        file_config: dict[str, Any],
+    ) -> str | None:
+        escaped_uri = storage_uri.replace("'", "''")
+        if file_format == "parquet":
+            return f"read_parquet('{escaped_uri}')"
+        if file_format == "csv":
+            header = "true" if bool(file_config.get("header", True)) else "false"
+            delimiter = str(file_config.get("delimiter") or ",").replace("'", "''")
+            quote = str(file_config.get("quote") or '\"').replace("'", "''")
+            return (
+                "read_csv_auto("
+                f"'{escaped_uri}', "
+                f"header={header}, "
+                f"delim='{delimiter}', "
+                f"quote='{quote}'"
+                ")"
+            )
+        return None
 
     async def _get_dataset(self, *, dataset_id: uuid.UUID, workspace_id: uuid.UUID) -> DatasetRecord:
         dataset = await self._dataset_repository.get_for_workspace(

@@ -30,6 +30,9 @@ from langbridge.packages.common.langbridge_common.repositories.agent_repository 
 from langbridge.packages.common.langbridge_common.repositories.connector_repository import (
     ConnectorRepository,
 )
+from langbridge.packages.common.langbridge_common.repositories.dataset_repository import (
+    DatasetRepository,
+)
 from langbridge.packages.common.langbridge_common.repositories.job_repository import JobRepository
 from langbridge.packages.common.langbridge_common.repositories.llm_connection_repository import (
     LLMConnectionRepository,
@@ -122,6 +125,7 @@ class CopilotDashboardRequestHandler(BaseMessageHandler):
         semantic_model_repository: SemanticModelRepository,
         connector_repository: ConnectorRepository,
         message_broker: MessageBroker,
+        dataset_repository: DatasetRepository | None = None,
         federated_query_tool: FederatedQueryTool | None = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
@@ -129,6 +133,7 @@ class CopilotDashboardRequestHandler(BaseMessageHandler):
         self._agent_definition_repository = agent_definition_repository
         self._llm_repository = llm_repository
         self._semantic_model_repository = semantic_model_repository
+        self._dataset_repository = dataset_repository
         self._connector_repository = connector_repository
         self._message_broker = message_broker
         self._federated_query_tool = federated_query_tool
@@ -136,6 +141,7 @@ class CopilotDashboardRequestHandler(BaseMessageHandler):
         self._sql_connector_factory = SqlConnectorFactory()
         self._query_execution_service = SemanticQueryExecutionService(
             semantic_model_repository=self._semantic_model_repository,
+            dataset_repository=self._dataset_repository,
             federated_query_tool=self._federated_query_tool,
             logger=self._logger,
         )

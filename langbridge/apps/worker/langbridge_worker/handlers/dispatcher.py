@@ -49,6 +49,7 @@ class WorkerMessageDispatcher:
         #TODO: create a more robust plugin system for handlers to avoid hardcoding imports here.
         from .jobs.agentic_semantic_model_job_request_handler import AgenticSemanticModelJobRequestHandler  # noqa: F401
         from .jobs.agent_job_request_handler import AgentJobRequestHandler  # noqa: F401
+        from .jobs.connector_sync_job_request_handler import ConnectorSyncJobRequestHandler  # noqa: F401
         from .copilot.copilot_dashboard_request_handler import CopilotDashboardRequestHandler  # noqa: F401
         from .query.dataset_job_request_handler import DatasetJobRequestHandler  # noqa: F401
         from .query.semantic_query_request_handler import SemanticQueryRequestHandler  # noqa: F401

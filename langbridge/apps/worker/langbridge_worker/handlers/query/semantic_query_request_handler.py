@@ -12,6 +12,9 @@ from pydantic import ValidationError
 from langbridge.apps.worker.langbridge_worker.handlers.jobs.job_event_emitter import (
     BrokerJobEventEmitter,
 )
+from langbridge.apps.worker.langbridge_worker.dataset_execution import (
+    DatasetExecutionResolver,
+)
 from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.packages.common.langbridge_common.contracts.connectors import ConnectorResponse
 from langbridge.packages.common.langbridge_common.contracts.jobs.semantic_query_job import (
@@ -40,7 +43,6 @@ from langbridge.packages.common.langbridge_common.repositories.semantic_model_re
     SemanticModelRepository,
 )
 from langbridge.packages.common.langbridge_common.utils.sql import (
-    enforce_read_only_sql,
     normalize_sql_dialect,
     transpile_sql,
 )
@@ -69,7 +71,6 @@ from langbridge.packages.semantic.langbridge_semantic.loader import (
 from langbridge.apps.worker.langbridge_worker.secrets import SecretProviderRegistry
 from langbridge.packages.semantic.langbridge_semantic.model import SemanticModel
 from langbridge.packages.semantic.langbridge_semantic.query import SemanticQuery, SemanticQueryEngine
-from langbridge.packages.federation.models import FederationWorkflow, VirtualDataset, VirtualTableBinding
 from langbridge.apps.worker.langbridge_worker.semantic_query_execution_service import SemanticQueryExecutionService
 
 
@@ -98,8 +99,12 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         self._federated_query_tool = federated_query_tool
         self._engine = SemanticQueryEngine()
         self._sql_connector_factory = SqlConnectorFactory()
+        self._dataset_execution_resolver = DatasetExecutionResolver(
+            dataset_repository=self._dataset_repository,
+        )
         self._query_execution_service = SemanticQueryExecutionService(
             semantic_model_repository=self._semantic_model_repository,
+            dataset_repository=self._dataset_repository,
             federated_query_tool=self._federated_query_tool,
             logger=self._logger,
         )
@@ -398,93 +403,18 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         semantic_model = self._load_model_payload(semantic_model_record.content_yaml)
         semantic_model_id = request.semantic_model_id
 
-        if self._has_dataset_table_refs(raw_model_payload):
-            return await self._run_dataset_backed_semantic_query(
-                semantic_query=semantic_query,
-                semantic_model=semantic_model,
-                semantic_model_id=semantic_model_id,
-                organization_id=request.organisation_id,
-                project_id=request.project_id,
-                legacy_connector_id=semantic_model_record.connector_id,
-                raw_model_payload=raw_model_payload,
-                event_emitter=event_emitter,
-            )
-
-        connector = await self._connector_repository.get_by_id(semantic_model_record.connector_id)
-        if connector is None:
-            raise BusinessValidationError("Connector not found for semantic query.")
-        connector_response = ConnectorResponse.from_connector(
-            connector,
-            organization_id=request.organisation_id,
-            project_id=request.project_id,
-        )
-        if connector_response.connector_type is None:
-            raise BusinessValidationError("Connector type is required for semantic query execution.")
-
-        connector_type = ConnectorRuntimeType(connector_response.connector_type.upper())
-        resolved_connector_config = self._resolve_connector_config(connector_response)
-        sql_connector = await self._create_sql_connector(
-            connector_type=connector_type,
-            connector_config=resolved_connector_config,
-        )
-        if not isinstance(sql_connector, SqlConnector):
-            raise BusinessValidationError("Only SQL connectors are supported for semantic queries.")
-
-        job_record.progress = 45
-        job_record.status_message = "Compiling semantic query."
-        await event_emitter.emit(
-            event_type="SemanticQueryCompiling",
-            message="Compiling semantic query.",
-            visibility=AgentEventVisibility.public,
-            source="worker",
-        )
-
-        rewrite_expression = None
-        if getattr(sql_connector, "EXPRESSION_REWRITE", False):
-            rewrite_expression = getattr(sql_connector, "rewrite_expression", None)
-            if rewrite_expression is None:
-                raise BusinessValidationError(
-                    "Semantic query translation failed: connector expression rewriter missing."
-                )
-
-        try:
-            plan = self._engine.compile(
-                semantic_query,
-                semantic_model,
-                dialect=sql_connector.DIALECT.value.lower(),
-                rewrite_expression=rewrite_expression,
-            )
-        except Exception as exc:
-            raise BusinessValidationError(f"Semantic query translation failed: {exc}") from exc
-
-        target_dialect = normalize_sql_dialect(sql_connector.DIALECT.value.lower(), default="tsql")
-        source_dialect = self._extract_source_dialect(request.query, fallback=target_dialect)
-        execution_sql = self._transpile_sql_if_needed(
-            plan.sql,
-            source_dialect=source_dialect,
-            target_dialect=target_dialect,
-        )
-
-        job_record.progress = 70
-        job_record.status_message = "Executing SQL."
-        await event_emitter.emit(
-            event_type="SemanticQueryExecuting",
-            message="Executing semantic query SQL.",
-            visibility=AgentEventVisibility.public,
-            source="worker",
-            details={"sql": execution_sql, "query_scope": request.query_scope},
-        )
-
-        query_result = await sql_connector.execute(execution_sql)
-        data = self._engine.format_rows(query_result.columns, query_result.rows)
-        return SemanticQueryResponse(
-            id=uuid.uuid4(),
-            organization_id=request.organisation_id,
-            project_id=request.project_id,
+        return await self._run_dataset_backed_semantic_query(
+            semantic_query=semantic_query,
+            semantic_model=semantic_model,
             semantic_model_id=semantic_model_id,
-            data=data,
-            annotations=plan.annotations,
-            metadata=plan.metadata,
+            organization_id=request.organisation_id,
+            project_id=request.project_id,
+            connector_fallbacks={
+                table_key: semantic_model_record.connector_id
+                for table_key in semantic_model.tables.keys()
+            },
+            raw_model_payload=raw_model_payload,
+            event_emitter=event_emitter,
         )
 
     async def _run_dataset_backed_semantic_query(
@@ -495,7 +425,7 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         semantic_model_id: uuid.UUID,
         organization_id: uuid.UUID,
         project_id: uuid.UUID | None,
-        legacy_connector_id: uuid.UUID,
+        connector_fallbacks: Mapping[str, uuid.UUID],
         raw_model_payload: Mapping[str, Any],
         event_emitter: BrokerJobEventEmitter,
     ) -> SemanticQueryResponse:
@@ -504,19 +434,24 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         if self._federated_query_tool is None:
             raise BusinessValidationError("Federated query tool is required for dataset-backed semantic queries.")
 
-        workflow = await self._build_dataset_workflow_payload_from_semantic(
+        workflow, workflow_dialect = await self._dataset_execution_resolver.build_semantic_workflow(
             organization_id=organization_id,
-            semantic_model_id=semantic_model_id,
+            workflow_id=f"workflow_semantic_dataset_{semantic_model_id.hex[:12]}",
+            dataset_name=f"semantic_dataset_{semantic_model_id.hex[:12]}",
             semantic_model=semantic_model,
-            raw_model_payload=raw_model_payload,
-            legacy_connector_id=legacy_connector_id,
+            connector_fallbacks=connector_fallbacks,
+            raw_tables_payload=(
+                raw_model_payload.get("tables")
+                if isinstance(raw_model_payload.get("tables"), Mapping)
+                else None
+            ),
         )
 
         try:
             plan = self._engine.compile(
                 semantic_query,
                 semantic_model,
-                dialect="tsql",
+                dialect=workflow_dialect,
             )
         except Exception as exc:
             raise BusinessValidationError(f"Semantic query translation failed: {exc}") from exc
@@ -532,8 +467,8 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
             {
                 "workspace_id": str(organization_id),
                 "query": semantic_query.model_dump(by_alias=True, exclude_none=True),
-                "dialect": "tsql",
-                "workflow": workflow,
+                "dialect": workflow_dialect,
+                "workflow": workflow.model_dump(mode="json"),
                 "semantic_model": semantic_model.model_dump(by_alias=True, exclude_none=True),
             }
         )
@@ -550,117 +485,6 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
             annotations=plan.annotations,
             metadata=plan.metadata,
         )
-
-    async def _build_dataset_workflow_payload_from_semantic(
-        self,
-        *,
-        organization_id: uuid.UUID,
-        semantic_model_id: uuid.UUID,
-        semantic_model: SemanticModel,
-        raw_model_payload: Mapping[str, Any],
-        legacy_connector_id: uuid.UUID,
-    ) -> dict[str, Any]:
-        if self._dataset_repository is None:
-            raise BusinessValidationError("Dataset repository is required for dataset-backed semantic queries.")
-
-        tables_payload = raw_model_payload.get("tables")
-        if not isinstance(tables_payload, Mapping):
-            raise BusinessValidationError("Semantic model tables payload is invalid.")
-
-        tables: dict[str, dict[str, Any]] = {}
-        for table_key, table in semantic_model.tables.items():
-            raw_table = tables_payload.get(table_key)
-            table_payload = raw_table if isinstance(raw_table, Mapping) else {}
-            dataset_ref = table_payload.get("dataset_id") or table_payload.get("datasetId")
-            if dataset_ref:
-                dataset_id = self._parse_dataset_id(dataset_ref, table_key=table_key)
-                dataset = await self._dataset_repository.get_for_workspace(
-                    dataset_id=dataset_id,
-                    workspace_id=organization_id,
-                )
-                if dataset is None:
-                    raise BusinessValidationError(
-                        f"Dataset '{dataset_id}' referenced by table '{table_key}' was not found."
-                    )
-                if dataset.connection_id is None:
-                    raise BusinessValidationError(
-                        f"Dataset '{dataset.id}' referenced by table '{table_key}' has no connection binding."
-                    )
-                dataset_type = str(dataset.dataset_type or "").upper()
-                metadata: dict[str, Any]
-                if dataset_type == "TABLE":
-                    metadata = {
-                        "physical_catalog": dataset.catalog_name,
-                        "physical_schema": dataset.schema_name,
-                        "physical_table": dataset.table_name,
-                    }
-                elif dataset_type == "SQL":
-                    sql_text = (dataset.sql_text or "").strip()
-                    if not sql_text:
-                        raise BusinessValidationError(
-                            f"Dataset '{dataset.id}' referenced by table '{table_key}' has empty sql_text."
-                        )
-                    enforce_read_only_sql(
-                        sql_text,
-                        allow_dml=False,
-                        dialect=(dataset.dialect or "tsql"),
-                    )
-                    metadata = {
-                        "physical_sql": sql_text,
-                        "sql_dialect": dataset.dialect or "tsql",
-                    }
-                else:
-                    raise BusinessValidationError(
-                        f"Dataset type '{dataset.dataset_type}' is not executable for semantic queries."
-                    )
-
-                source_connector_id = dataset.connection_id
-            else:
-                metadata = {
-                    "physical_catalog": table.catalog,
-                    "physical_schema": table.schema,
-                    "physical_table": table.name,
-                }
-                source_connector_id = legacy_connector_id
-
-            tables[table_key] = {
-                "table_key": table_key,
-                "source_id": f"source_{source_connector_id.hex[:12]}",
-                "connector_id": str(source_connector_id),
-                "schema": table.schema,
-                "table": table.name,
-                "catalog": table.catalog,
-                "metadata": metadata,
-            }
-
-        relationships = [
-            {
-                "name": relationship.name,
-                "left_table": relationship.from_,
-                "right_table": relationship.to,
-                "join_type": relationship.type,
-                "condition": relationship.join_on,
-            }
-            for relationship in (semantic_model.relationships or [])
-        ]
-        workflow = FederationWorkflow(
-            id=f"workflow_semantic_dataset_{semantic_model_id.hex[:12]}",
-            workspace_id=str(organization_id),
-            dataset=VirtualDataset(
-                id=f"semantic_dataset_{semantic_model_id.hex[:12]}",
-                name=f"semantic_dataset_{semantic_model_id.hex[:12]}",
-                workspace_id=str(organization_id),
-                tables={table_key: VirtualTableBinding.model_validate(binding) for table_key, binding in tables.items()},
-                relationships=[],
-            ),
-            broadcast_threshold_bytes=settings.FEDERATION_BROADCAST_THRESHOLD_BYTES,
-            partition_count=settings.FEDERATION_PARTITION_COUNT,
-            max_stage_retries=settings.FEDERATION_STAGE_MAX_RETRIES,
-            stage_parallelism=settings.FEDERATION_STAGE_PARALLELISM,
-        )
-        payload = workflow.model_dump(mode="json")
-        payload["dataset"]["relationships"] = relationships
-        return payload
 
     @staticmethod
     def _parse_semantic_model_payload(semantic_model_record) -> dict[str, Any]:
@@ -684,27 +508,6 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
                 return {}
         return {}
 
-    @staticmethod
-    def _has_dataset_table_refs(payload: Mapping[str, Any]) -> bool:
-        tables = payload.get("tables")
-        if not isinstance(tables, Mapping):
-            return False
-        for table in tables.values():
-            if not isinstance(table, Mapping):
-                continue
-            if table.get("dataset_id") or table.get("datasetId"):
-                return True
-        return False
-
-    @staticmethod
-    def _parse_dataset_id(value: Any, *, table_key: str) -> uuid.UUID:
-        try:
-            return uuid.UUID(str(value))
-        except (TypeError, ValueError) as exc:
-            raise BusinessValidationError(
-                f"Table '{table_key}' has an invalid dataset_id reference."
-            ) from exc
-        
     async def _run_federated_query(
         self,
         semantic_query: SemanticQuery,

@@ -9,6 +9,10 @@ from typing import Any
 
 import yaml
 
+from langbridge.apps.worker.langbridge_worker.dataset_execution import (
+    build_binding_for_dataset,
+    synthetic_file_connector_id,
+)
 from langbridge.apps.worker.langbridge_worker.tools.federated_query_tool import FederatedQueryTool
 from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.packages.common.langbridge_common.contracts.semantic import (
@@ -19,6 +23,9 @@ from langbridge.packages.common.langbridge_common.errors.application_errors impo
 )
 from langbridge.packages.common.langbridge_common.repositories.semantic_model_repository import (
     SemanticModelRepository,
+)
+from langbridge.packages.common.langbridge_common.repositories.dataset_repository import (
+    DatasetRepository,
 )
 from langbridge.packages.connectors.langbridge_connectors.api import (
     ConnectorRuntimeTypeSqlDialectMap,
@@ -75,10 +82,12 @@ class SemanticQueryExecutionService:
         self,
         *,
         semantic_model_repository: SemanticModelRepository | None,
+        dataset_repository: DatasetRepository | None,
         federated_query_tool: FederatedQueryTool | None,
         logger: logging.Logger,
     ) -> None:
         self._semantic_model_repository = semantic_model_repository
+        self._dataset_repository = dataset_repository
         self._federated_query_tool = federated_query_tool
         self._logger = logger
         self._engine = SemanticQueryEngine()
@@ -312,7 +321,7 @@ class SemanticQueryExecutionService:
         except Exception as exc:
             raise BusinessValidationError(f"Semantic query translation failed: {exc}") from exc
 
-        workflow_payload = self._build_federation_workflow_payload(
+        workflow_payload = await self._build_federation_workflow_payload(
             organization_id=organization_id,
             semantic_model=execution_model,
             source_semantic_model=semantic_model,
@@ -353,9 +362,12 @@ class SemanticQueryExecutionService:
     ) -> tuple[SemanticModel, dict[str, uuid.UUID]]:
         if self._semantic_model_repository is None:
             raise BusinessValidationError("Semantic model repository is required for unified query execution.")
+        if self._dataset_repository is None:
+            raise BusinessValidationError("Dataset repository is required for unified query execution.")
 
         normalized_model_ids = self._normalize_model_ids(semantic_model_ids)
         source_models: list[UnifiedSourceModel] = []
+        table_connector_map: dict[str, uuid.UUID] = {}
         for semantic_model_id in normalized_model_ids:
             semantic_model_record = await self._semantic_model_repository.get_for_scope(
                 model_id=semantic_model_id,
@@ -365,12 +377,45 @@ class SemanticQueryExecutionService:
                 raise BusinessValidationError(
                     f"Semantic model '{semantic_model_id}' not found for unified query."
                 )
+            semantic_model = self.load_model_payload(semantic_model_record.content_yaml)
+            raw_payload = self._parse_model_payload_from_record(semantic_model_record) or {}
+            raw_tables = raw_payload.get("tables") if isinstance(raw_payload, dict) else {}
             source_models.append(
                 UnifiedSourceModel(
-                    model=self.load_model_payload(semantic_model_record.content_yaml),
+                    model=semantic_model,
                     connector_id=semantic_model_record.connector_id,
                 )
             )
+            for table_key, table in semantic_model.tables.items():
+                raw_table = raw_tables.get(table_key) if isinstance(raw_tables, Mapping) else None
+                table_payload = raw_table if isinstance(raw_table, Mapping) else {}
+                dataset_ref = table_payload.get("dataset_id") or table_payload.get("datasetId") or table.dataset_id
+                if dataset_ref:
+                    try:
+                        dataset_id = uuid.UUID(str(dataset_ref))
+                    except (TypeError, ValueError) as exc:
+                        raise BusinessValidationError(
+                            f"Unified semantic model table '{table_key}' contains an invalid dataset_id."
+                        ) from exc
+                    dataset = await self._dataset_repository.get_for_workspace(
+                        dataset_id=dataset_id,
+                        workspace_id=organization_id,
+                    )
+                    if dataset is None:
+                        raise BusinessValidationError(
+                            f"Dataset '{dataset_id}' referenced by unified table '{table_key}' was not found."
+                        )
+                    dataset_type = str(dataset.dataset_type or "").upper()
+                    if dataset_type == "FILE":
+                        table_connector_map[table_key] = synthetic_file_connector_id(dataset.id)
+                    elif dataset.connection_id is not None:
+                        table_connector_map[table_key] = dataset.connection_id
+                    else:
+                        raise BusinessValidationError(
+                            f"Dataset '{dataset.id}' referenced by unified table '{table_key}' has no execution binding."
+                        )
+                else:
+                    table_connector_map[table_key] = semantic_model_record.connector_id
 
         joins_payload = [
             join.model_dump(by_alias=True, exclude_none=True)
@@ -390,17 +435,18 @@ class SemanticQueryExecutionService:
                 metrics_payload[metric_name] = metric_value
 
         try:
-            return build_unified_semantic_model(
+            semantic_model, _ = build_unified_semantic_model(
                 source_models=source_models,
                 joins=joins_payload,
                 metrics=metrics_payload or None,
             )
+            return semantic_model, table_connector_map
         except (SemanticModelError, ValueError) as exc:
             raise BusinessValidationError(
                 f"Unified semantic model failed validation: {exc}"
             ) from exc
 
-    def _build_federation_workflow_payload(
+    async def _build_federation_workflow_payload(
         self,
         *,
         organization_id: uuid.UUID,
@@ -408,6 +454,8 @@ class SemanticQueryExecutionService:
         source_semantic_model: SemanticModel,
         table_connector_map: Mapping[str, uuid.UUID],
     ) -> dict[str, Any]:
+        if self._dataset_repository is None:
+            raise BusinessValidationError("Dataset repository is required for unified query execution.")
         from langbridge.packages.federation.models import (
             FederationWorkflow,
             VirtualDataset,
@@ -416,20 +464,43 @@ class SemanticQueryExecutionService:
 
         workspace_id = str(organization_id)
         semantic_model_id = str(uuid.uuid4())
-        dataset_id = f"unified_semantic_{organization_id.hex[:12]}_{semantic_model_id[:12]}"
+        workflow_dataset_id = f"unified_semantic_{organization_id.hex[:12]}_{semantic_model_id[:12]}"
         tables: dict[str, dict[str, Any]] = {}
         for table_key, table in semantic_model.tables.items():
             source_table = source_semantic_model.tables.get(table_key, table)
+            dataset_ref = source_table.dataset_id
+            if dataset_ref:
+                try:
+                    referenced_dataset_id = uuid.UUID(str(dataset_ref))
+                except (TypeError, ValueError) as exc:
+                    raise BusinessValidationError(
+                        f"Unified semantic model table '{table_key}' has an invalid dataset_id."
+                    ) from exc
+                dataset = await self._dataset_repository.get_for_workspace(
+                    dataset_id=referenced_dataset_id,
+                    workspace_id=organization_id,
+                )
+                if dataset is None:
+                    raise BusinessValidationError(
+                        f"Dataset '{referenced_dataset_id}' referenced by unified table '{table_key}' was not found."
+                    )
+                binding, _ = build_binding_for_dataset(
+                    dataset,
+                    table_key=table_key,
+                    logical_schema=table.schema,
+                    logical_table=table.name,
+                    logical_catalog=table.catalog,
+                )
+                tables[table_key] = binding
+                continue
+
             connector_id = table_connector_map.get(table_key)
             if connector_id is None:
                 raise BusinessValidationError(
                     f"Missing connector binding for unified table '{table_key}'."
                 )
             source_catalog = source_table.catalog
-            uses_synthetic_catalog = (
-                source_catalog is None
-                and table.catalog is not None
-            )
+            uses_synthetic_catalog = source_catalog is None and table.catalog is not None
             tables[table_key] = {
                 "table_key": table_key,
                 "source_id": f"source_{connector_id.hex[:12]}",
@@ -456,10 +527,10 @@ class SemanticQueryExecutionService:
             for relationship in (semantic_model.relationships or [])
         ]
         workflow = FederationWorkflow(
-            id=f"workflow_{dataset_id}",
+            id=f"workflow_{workflow_dataset_id}",
             workspace_id=workspace_id,
             dataset=VirtualDataset(
-                id=dataset_id,
+                id=workflow_dataset_id,
                 name="Unified Semantic Dataset",
                 workspace_id=workspace_id,
                 tables={table_key: VirtualTableBinding.model_validate(binding) for table_key, binding in tables.items()},

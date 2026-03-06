@@ -5,10 +5,14 @@ from copy import deepcopy
 from typing import Any, Dict, Optional, Type
 
 from langbridge.packages.connectors.langbridge_connectors.api import (
+    ApiConnector,
+    ApiConnectorFactory,
     BaseConnectorConfig,
     BaseConnectorConfigFactory,
     BaseConnectorConfigSchemaFactory,
     ConnectorConfigSchema,
+    ConnectorFamily as RegistryConnectorFamily,
+    ConnectorPluginMetadata as RegistryConnectorPluginMetadata,
     ConnectorRuntimeType,
     ConnectorRuntimeTypeSqlDialectMap,
     ConnectorRuntimeTypeVectorDBMap,
@@ -16,13 +20,25 @@ from langbridge.packages.connectors.langbridge_connectors.api import (
     SqlConnectorFactory,
     VecotorDBConnector,
     VectorDBConnectorFactory,
+    get_connector_plugin,
     get_connector_config_factory,
     get_connector_config_schema_factory,
 )
 from langbridge.packages.common.langbridge_common.db.auth import Organization
-from langbridge.packages.common.langbridge_common.db.connector import DatabaseConnector
+from langbridge.packages.common.langbridge_common.db.connector import (
+    APIConnector as ApiConnectorRecord,
+    DatabaseConnector,
+)
 from langbridge.packages.common.langbridge_common.errors.application_errors import BusinessValidationError
-from langbridge.packages.common.langbridge_common.contracts.connectors import ConnectorResponse, CreateConnectorRequest, UpdateConnectorRequest
+from langbridge.packages.common.langbridge_common.contracts.connectors import (
+    ConnectorAuthSchemaField,
+    ConnectorFamily,
+    ConnectorPluginMetadata,
+    ConnectorResponse,
+    ConnectorSyncStrategy,
+    CreateConnectorRequest,
+    UpdateConnectorRequest,
+)
 from langbridge.packages.common.langbridge_common.repositories.connector_repository import ConnectorRepository
 from langbridge.packages.common.langbridge_common.repositories.organization_repository import (
     OrganizationRepository,
@@ -43,8 +59,131 @@ class ConnectorService:
         self._organization_repository = organization_repository
         self._project_repository = project_repository
         self._sql_connector_factory = SqlConnectorFactory()
+        self._api_connector_factory = ApiConnectorFactory()
         self._vector_connector_factory = VectorDBConnectorFactory()
         self._logger = logging.getLogger(__name__)
+
+    @staticmethod
+    def _normalize_runtime_type(
+        connector_type: str | ConnectorRuntimeType | None,
+    ) -> ConnectorRuntimeType | None:
+        if connector_type is None:
+            return None
+        if isinstance(connector_type, ConnectorRuntimeType):
+            return connector_type
+        try:
+            return ConnectorRuntimeType(str(connector_type).upper())
+        except ValueError:
+            return None
+
+    def _build_response_plugin_metadata(
+        self,
+        connector_type: str | ConnectorRuntimeType | None,
+    ) -> ConnectorPluginMetadata | None:
+        runtime_type = self._normalize_runtime_type(connector_type)
+        if runtime_type is None:
+            return None
+
+        plugin = get_connector_plugin(runtime_type)
+        if plugin is not None:
+            return ConnectorPluginMetadata(
+                connector_type=runtime_type.value,
+                connector_family=ConnectorFamily(plugin.connector_family.value),
+                supported_resources=list(plugin.supported_resources),
+                auth_schema=[
+                    ConnectorAuthSchemaField(
+                        field=field.field,
+                        label=field.label,
+                        required=field.required,
+                        description=field.description,
+                        type=field.type,
+                        secret=field.secret,
+                        default=field.default,
+                        value_list=list(field.value_list or []),
+                    )
+                    for field in plugin.auth_schema
+                ],
+                sync_strategy=(
+                    ConnectorSyncStrategy(plugin.sync_strategy.value)
+                    if plugin.sync_strategy is not None
+                    else None
+                ),
+            )
+
+        if runtime_type in ConnectorRuntimeTypeSqlDialectMap:
+            return ConnectorPluginMetadata(
+                connector_type=runtime_type.value,
+                connector_family=ConnectorFamily.DATABASE,
+            )
+        if runtime_type in ConnectorRuntimeTypeVectorDBMap:
+            return ConnectorPluginMetadata(
+                connector_type=runtime_type.value,
+                connector_family=ConnectorFamily.VECTOR_DB,
+            )
+        return None
+
+    def _build_schema_plugin_metadata(
+        self,
+        connector_type: ConnectorRuntimeType,
+    ) -> RegistryConnectorPluginMetadata | None:
+        plugin = get_connector_plugin(connector_type)
+        if plugin is not None:
+            return RegistryConnectorPluginMetadata(
+                connector_type=connector_type.value,
+                connector_family=plugin.connector_family,
+                supported_resources=list(plugin.supported_resources),
+                auth_schema=list(plugin.auth_schema),
+                sync_strategy=plugin.sync_strategy,
+            )
+
+        if connector_type in ConnectorRuntimeTypeSqlDialectMap:
+            return RegistryConnectorPluginMetadata(
+                connector_type=connector_type.value,
+                connector_family=RegistryConnectorFamily.DATABASE,
+            )
+        if connector_type in ConnectorRuntimeTypeVectorDBMap:
+            return RegistryConnectorPluginMetadata(
+                connector_type=connector_type.value,
+                connector_family=RegistryConnectorFamily.VECTOR_DB,
+            )
+        return None
+
+    def _to_connector_response(
+        self,
+        connector: Any,
+        *,
+        organization_id: uuid.UUID | None = None,
+        project_id: uuid.UUID | None = None,
+    ) -> ConnectorResponse:
+        return ConnectorResponse.from_connector(
+            connector,
+            organization_id=organization_id,
+            project_id=project_id,
+            plugin_metadata=self._build_response_plugin_metadata(
+                getattr(connector, "connector_type", None)
+            ),
+        )
+
+    def _connector_family(
+        self,
+        connector_type: ConnectorRuntimeType,
+    ) -> RegistryConnectorFamily | None:
+        plugin = get_connector_plugin(connector_type)
+        if plugin is not None:
+            return plugin.connector_family
+        if connector_type in ConnectorRuntimeTypeSqlDialectMap:
+            return RegistryConnectorFamily.DATABASE
+        if connector_type in ConnectorRuntimeTypeVectorDBMap:
+            return RegistryConnectorFamily.VECTOR_DB
+        return None
+
+    def list_connector_plugins(self) -> list[ConnectorPluginMetadata]:
+        metadata: list[ConnectorPluginMetadata] = []
+        for connector_type in ConnectorRuntimeType:
+            plugin_metadata = self._build_response_plugin_metadata(connector_type)
+            if plugin_metadata is not None:
+                metadata.append(plugin_metadata)
+        return metadata
 
     async def list_organization_connectors(
         self,
@@ -54,20 +193,20 @@ class ConnectorService:
         if not organization:
             raise BusinessValidationError("Organization not found")
         return [
-            ConnectorResponse.from_connector(connector, organization_id=organization_id)
+            self._to_connector_response(connector, organization_id=organization_id)
             for connector in organization.connectors
         ]
 
     async def list_all_connectors(self) -> list[ConnectorResponse]:
         connectors = await self._connector_repository.get_all()
-        return [ConnectorResponse.from_connector(connector) for connector in connectors]
+        return [self._to_connector_response(connector) for connector in connectors]
 
     async def list_project_connectors(self, project_id: uuid.UUID) -> list[ConnectorResponse]:
         project = await self._project_repository.get_by_id(project_id)
         if not project:
             raise BusinessValidationError("Project not found")
         return [
-            ConnectorResponse.from_connector(
+            self._to_connector_response(
                 connector,
                 organization_id=project.organization_id,
                 project_id=project_id,
@@ -84,7 +223,12 @@ class ConnectorService:
             factory: Type[BaseConnectorConfigSchemaFactory] = (
                 get_connector_config_schema_factory(connector_type_enum)
             )
-            return factory.create({})
+            schema = factory.create({})
+            if schema.plugin_metadata is None:
+                schema.plugin_metadata = self._build_schema_plugin_metadata(
+                    connector_type_enum
+                )
+            return schema
         except ValueError as exc:
             raise BusinessValidationError(str(exc)) from exc
 
@@ -103,6 +247,10 @@ class ConnectorService:
         connector_type: ConnectorRuntimeType,
         connector_config: Dict[str, Any],
     ) -> None:
+        connector_family = self._connector_family(connector_type)
+        if connector_family == RegistryConnectorFamily.API:
+            await self.async_create_api_connector(connector_type, connector_config)
+            return
         if connector_type in ConnectorRuntimeTypeSqlDialectMap:
             await self.async_create_sql_connector(connector_type, connector_config)
             return
@@ -113,6 +261,7 @@ class ConnectorService:
 
     async def create_connector(self, create_request: CreateConnectorRequest) -> ConnectorResponse:
         connector_type = ConnectorRuntimeType(create_request.connector_type.upper())
+        connector_family = self._connector_family(connector_type)
 
         if not getattr(create_request, "config", None):
             raise BusinessValidationError("Connector config must be provided")
@@ -130,10 +279,17 @@ class ConnectorService:
             except Exception as exc:
                 raise BusinessValidationError(str(exc)) from exc
 
-        connector = DatabaseConnector(
+        connector_record_class: Type[DatabaseConnector] | Type[ApiConnectorRecord]
+        connector_record_class = DatabaseConnector
+        connector_record_type = "database_connector"
+        if connector_family == RegistryConnectorFamily.API:
+            connector_record_class = ApiConnectorRecord
+            connector_record_type = "api_connector"
+
+        connector = connector_record_class(
             id=uuid.uuid4(),
             name=create_request.name,
-            type="database_connector",
+            type=connector_record_type,
             connector_type=connector_type.value,
             config_json=config_json,
             description=create_request.description,
@@ -195,13 +351,17 @@ class ConnectorService:
                 organization.connectors.append(connector)
                 # await self._organization_repository.commit()
 
-        return ConnectorResponse.from_connector(connector)
+        return self._to_connector_response(
+            connector,
+            organization_id=create_request.organization_id,
+            project_id=create_request.project_id,
+        )
 
     async def get_connector(self, connector_id: uuid.UUID) -> ConnectorResponse:
         connector = await self._connector_repository.get_by_id(connector_id)
         if not connector:
             raise BusinessValidationError("Connector not found")
-        return ConnectorResponse.from_connector(connector)
+        return self._to_connector_response(connector)
 
     async def update_connector(
         self,
@@ -232,7 +392,11 @@ class ConnectorService:
             connector_entity.access_policy_json = update_request.connection_policy.model_dump(
                 mode="json"
             )
-        return ConnectorResponse.from_connector(connector_entity)
+        return self._to_connector_response(
+            connector_entity,
+            organization_id=update_request.organization_id,
+            project_id=update_request.project_id,
+        )
 
     async def delete_connector(self, connector_id: uuid.UUID) -> None:
         connector = await self._connector_repository.get_by_id(connector_id)
@@ -277,6 +441,32 @@ class ConnectorService:
         )
         await sql_connector.test_connection()
         return sql_connector
+
+    async def create_api_connector(
+        self,
+        connector_type: ConnectorRuntimeType,
+        connector_config: Dict[str, Any],
+    ) -> ApiConnector:
+        return await self.async_create_api_connector(connector_type, connector_config)
+
+    async def async_create_api_connector(
+        self,
+        connector_type: ConnectorRuntimeType,
+        connector_config: Dict[str, Any],
+    ) -> ApiConnector:
+        plugin = get_connector_plugin(connector_type)
+        if plugin is None or plugin.connector_family != RegistryConnectorFamily.API:
+            raise BusinessValidationError(
+                f"Connector type {connector_type.value} is not configured as an API connector."
+            )
+        config_instance = self._build_config_instance(connector_type, connector_config)
+        api_connector = self._api_connector_factory.create_api_connector(
+            connector_type,
+            config_instance,
+            logger=self._logger,
+        )
+        await api_connector.test_connection()
+        return api_connector
 
     async def create_vector_connector(
         self,

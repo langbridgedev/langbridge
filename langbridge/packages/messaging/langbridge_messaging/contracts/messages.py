@@ -48,6 +48,8 @@ class MessageEnvelope(BaseModel):
             return value
         if isinstance(value, model):
             return value
+        if isinstance(value, BaseMessagePayload):
+            return model.model_validate(value.model_dump(mode="json"))
         return model.model_validate(value)
 
     def increment_attempt(self) -> None:

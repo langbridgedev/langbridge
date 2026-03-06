@@ -27,7 +27,7 @@ class TableRef(BaseModel):
     alias: str
     table_key: str
     source_id: str
-    connector_id: str
+    connector_id: str | None = None
     schema: str | None = None
     table: str
     catalog: str | None = None

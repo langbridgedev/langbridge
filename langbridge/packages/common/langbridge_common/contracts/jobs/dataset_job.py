@@ -46,6 +46,17 @@ class CreateDatasetProfileJobRequest(_Base):
     operation: Literal["profile"] = "profile"
 
 
+class CreateDatasetCsvIngestJobRequest(_Base):
+    job_type: JobType = JobType.DATASET_CSV_INGEST
+    dataset_id: uuid.UUID
+    workspace_id: uuid.UUID
+    project_id: uuid.UUID | None = None
+    user_id: uuid.UUID
+    storage_uri: str | None = None
+    correlation_id: str | None = None
+    operation: Literal["csv_ingest"] = "csv_ingest"
+
+
 class CreateDatasetBulkCreateJobRequest(_Base):
     job_type: JobType = JobType.DATASET_BULK_CREATE
     workspace_id: uuid.UUID

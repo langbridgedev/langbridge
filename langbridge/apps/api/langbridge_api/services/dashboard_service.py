@@ -26,8 +26,10 @@ from langbridge.packages.common.langbridge_common.repositories.organization_repo
     OrganizationRepository,
     ProjectRepository,
 )
+from langbridge.packages.common.langbridge_common.utils.lineage import LineageNodeType
 
 if TYPE_CHECKING:
+    from langbridge.apps.api.langbridge_api.services.lineage_service import LineageService
     from langbridge.apps.api.langbridge_api.services.semantic.semantic_model_service import (
         SemanticModelService,
     )
@@ -41,12 +43,14 @@ class DashboardService:
         project_repository: ProjectRepository,
         semantic_model_service: "SemanticModelService",
         snapshot_storage: IDashboardSnapshotStorage,
+        lineage_service: "LineageService | None" = None,
     ) -> None:
         self._repository = repository
         self._organization_repository = organization_repository
         self._project_repository = project_repository
         self._semantic_model_service = semantic_model_service
         self._snapshot_storage = snapshot_storage
+        self._lineage_service = lineage_service
 
     async def list_dashboards(
         self,
@@ -108,6 +112,8 @@ class DashboardService:
         )
 
         self._repository.add(entry)
+        if self._lineage_service is not None:
+            await self._lineage_service.register_dashboard_lineage(dashboard=entry)
         return DashboardResponse.model_validate(entry)
 
     async def update_dashboard(
@@ -161,6 +167,8 @@ class DashboardService:
             dashboard.widgets = request.widgets or []
 
         dashboard.updated_at = datetime.now(timezone.utc)
+        if self._lineage_service is not None:
+            await self._lineage_service.register_dashboard_lineage(dashboard=dashboard)
         return DashboardResponse.model_validate(dashboard)
 
     async def get_dashboard_snapshot(
@@ -239,6 +247,12 @@ class DashboardService:
                 organization_id=organization_id,
                 dashboard_id=dashboard.id,
                 snapshot_reference=dashboard.data_snapshot_reference,
+            )
+        if self._lineage_service is not None:
+            await self._lineage_service.delete_node_lineage(
+                workspace_id=organization_id,
+                node_type=LineageNodeType.DASHBOARD,
+                node_id=str(dashboard.id),
             )
         await self._repository.delete(dashboard)
 

@@ -4,6 +4,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -14,6 +15,7 @@ from langbridge.apps.worker.langbridge_worker.semantic_query_execution_service i
 from langbridge.packages.common.langbridge_common.errors.application_errors import (
     BusinessValidationError,
 )
+from langbridge.packages.common.langbridge_common.db.dataset import DatasetRecord
 from langbridge.packages.semantic.langbridge_semantic.model import Dimension, SemanticModel, Table
 from langbridge.packages.semantic.langbridge_semantic.query import SemanticQuery
 
@@ -166,6 +168,17 @@ class _FakeFederatedQueryTool:
         return {"rows": self._rows}
 
 
+class _FakeDatasetRepository:
+    def __init__(self, datasets: dict[uuid.UUID, DatasetRecord]) -> None:
+        self._datasets = datasets
+
+    async def get_for_workspace(self, *, dataset_id: uuid.UUID, workspace_id: uuid.UUID) -> DatasetRecord | None:
+        dataset = self._datasets.get(dataset_id)
+        if dataset is None or dataset.workspace_id != workspace_id:
+            return None
+        return dataset
+
+
 @pytest.mark.anyio
 async def test_execute_unified_query_routes_through_federated_tool() -> None:
     pytest.importorskip("pyarrow")
@@ -195,6 +208,7 @@ async def test_execute_unified_query_routes_through_federated_tool() -> None:
     tool = _FakeFederatedQueryTool(rows=[{"orders__id": 1}])
     service = SemanticQueryExecutionService(
         semantic_model_repository=repo,
+        dataset_repository=_FakeDatasetRepository({}),
         federated_query_tool=tool,
         logger=logging.getLogger(__name__),
     )
@@ -212,3 +226,125 @@ async def test_execute_unified_query_routes_through_federated_tool() -> None:
     assert result.response.data == [{"orders__id": 1}]
     assert result.compiled_sql
     assert len(tool.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() -> None:
+    pytest.importorskip("pyarrow")
+
+    organization_id = uuid.uuid4()
+    model_id = uuid.uuid4()
+    legacy_connector_id = uuid.uuid4()
+    warehouse_connector_id = uuid.uuid4()
+    file_dataset_id = uuid.uuid4()
+    table_dataset_id = uuid.uuid4()
+
+    source_model = SemanticModel(
+        version="1.0",
+        tables={
+            "orders": Table(
+                dataset_id=str(file_dataset_id),
+                schema="analytics",
+                name="orders",
+                dimensions=[Dimension(name="id", type="integer", primary_key=True)],
+            ),
+            "inventory": Table(
+                dataset_id=str(table_dataset_id),
+                schema="warehouse",
+                name="inventory",
+                dimensions=[Dimension(name="sku", type="string", primary_key=True)],
+            ),
+        },
+    )
+    repo = _FakeSemanticModelRepository(
+        {
+            model_id: _ModelRecord(
+                content_yaml=source_model.yml_dump(),
+                content_json=source_model.model_dump_json(exclude_none=True),
+                connector_id=legacy_connector_id,
+            )
+        }
+    )
+    dataset_repo = _FakeDatasetRepository(
+        {
+            file_dataset_id: DatasetRecord(
+                id=file_dataset_id,
+                workspace_id=organization_id,
+                project_id=None,
+                connection_id=None,
+                created_by=None,
+                updated_by=None,
+                name="orders_file",
+                description=None,
+                tags_json=[],
+                dataset_type="FILE",
+                dialect="duckdb",
+                catalog_name=None,
+                schema_name=None,
+                table_name="orders",
+                storage_uri="file:///tmp/orders.parquet",
+                sql_text=None,
+                referenced_dataset_ids_json=[],
+                federated_plan_json=None,
+                file_config_json={"format": "parquet"},
+                status="published",
+                revision_id=None,
+                row_count_estimate=None,
+                bytes_estimate=None,
+                last_profiled_at=None,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            ),
+            table_dataset_id: DatasetRecord(
+                id=table_dataset_id,
+                workspace_id=organization_id,
+                project_id=None,
+                connection_id=warehouse_connector_id,
+                created_by=None,
+                updated_by=None,
+                name="inventory_table",
+                description=None,
+                tags_json=[],
+                dataset_type="TABLE",
+                dialect="postgres",
+                catalog_name=None,
+                schema_name="warehouse",
+                table_name="inventory",
+                storage_uri=None,
+                sql_text=None,
+                referenced_dataset_ids_json=[],
+                federated_plan_json=None,
+                file_config_json=None,
+                status="published",
+                revision_id=None,
+                row_count_estimate=None,
+                bytes_estimate=None,
+                last_profiled_at=None,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            ),
+        }
+    )
+    tool = _FakeFederatedQueryTool(rows=[{"orders__id": 1}])
+    service = SemanticQueryExecutionService(
+        semantic_model_repository=repo,
+        dataset_repository=dataset_repo,
+        federated_query_tool=tool,
+        logger=logging.getLogger(__name__),
+    )
+
+    result = await service.execute_unified_query(
+        organization_id=organization_id,
+        project_id=None,
+        semantic_query=SemanticQuery(dimensions=["orders.id"], limit=10),
+        semantic_model_ids=[model_id],
+        joins=None,
+        metrics=None,
+    )
+
+    assert result.response.data == [{"orders__id": 1}]
+    workflow = tool.calls[0]["workflow"]
+    orders_binding = workflow["dataset"]["tables"]["orders"]
+    inventory_binding = workflow["dataset"]["tables"]["inventory"]
+    assert orders_binding["metadata"]["source_kind"] == "file"
+    assert inventory_binding["connector_id"] == str(warehouse_connector_id)

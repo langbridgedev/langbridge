@@ -2,7 +2,13 @@ import { apiFetch } from '../http';
 import type {
   ConnectorCatalogResponse,
   ConnectorConfigSchema,
+  ConnectorResourceListResponse,
   ConnectorResponse,
+  ConnectorSyncHistoryResponse,
+  ConnectorSyncRequestPayload,
+  ConnectorSyncStartResponse,
+  ConnectorSyncStateListResponse,
+  ConnectorTestResponse,
   CreateConnectorPayload,
   UpdateConnectorPayload,
 } from './types';
@@ -59,6 +65,78 @@ export async function fetchConnector(
     throw new Error('Connector id is required.');
   }
   return apiFetch<ConnectorResponse>(`${basePath(organizationId)}/${encodeURIComponent(connectorId)}`);
+}
+
+export async function testConnector(
+  organizationId: string,
+  connectorId: string,
+): Promise<ConnectorTestResponse> {
+  if (!connectorId) {
+    throw new Error('Connector id is required.');
+  }
+  return apiFetch<ConnectorTestResponse>(
+    `${basePath(organizationId)}/${encodeURIComponent(connectorId)}/test`,
+    {
+      method: 'POST',
+    },
+  );
+}
+
+export async function fetchConnectorResources(
+  organizationId: string,
+  connectorId: string,
+): Promise<ConnectorResourceListResponse> {
+  if (!connectorId) {
+    throw new Error('Connector id is required.');
+  }
+  return apiFetch<ConnectorResourceListResponse>(
+    `${basePath(organizationId)}/${encodeURIComponent(connectorId)}/resources`,
+  );
+}
+
+export async function syncConnector(
+  organizationId: string,
+  connectorId: string,
+  payload: ConnectorSyncRequestPayload,
+): Promise<ConnectorSyncStartResponse> {
+  if (!connectorId) {
+    throw new Error('Connector id is required.');
+  }
+  return apiFetch<ConnectorSyncStartResponse>(
+    `${basePath(organizationId)}/${encodeURIComponent(connectorId)}/sync`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function fetchConnectorSyncState(
+  organizationId: string,
+  connectorId: string,
+): Promise<ConnectorSyncStateListResponse> {
+  if (!connectorId) {
+    throw new Error('Connector id is required.');
+  }
+  return apiFetch<ConnectorSyncStateListResponse>(
+    `${basePath(organizationId)}/${encodeURIComponent(connectorId)}/sync-state`,
+  );
+}
+
+export async function fetchConnectorSyncHistory(
+  organizationId: string,
+  connectorId: string,
+  limit = 20,
+): Promise<ConnectorSyncHistoryResponse> {
+  if (!connectorId) {
+    throw new Error('Connector id is required.');
+  }
+  const params = new URLSearchParams({
+    limit: String(Math.max(1, Math.min(100, Math.floor(limit)))),
+  });
+  return apiFetch<ConnectorSyncHistoryResponse>(
+    `${basePath(organizationId)}/${encodeURIComponent(connectorId)}/sync-history?${params.toString()}`,
+  );
 }
 
 export async function updateConnector(
@@ -141,6 +219,17 @@ export type {
   ConnectorCatalogResponse,
   ConnectorCatalogSchema,
   ConnectorCatalogTable,
+  ConnectorResource,
+  ConnectorResourceListResponse,
+  ConnectorSyncHistoryItem,
+  ConnectorSyncHistoryResponse,
+  ConnectorSyncMode,
+  ConnectorSyncRequestPayload,
+  ConnectorSyncStartResponse,
+  ConnectorSyncState,
+  ConnectorSyncStateListResponse,
+  ConnectorSyncStatus,
+  ConnectorTestResponse,
   ConnectorConfigEntry,
   ConnectorConfigSchema,
   ConnectorResponse,

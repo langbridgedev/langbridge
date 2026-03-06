@@ -50,6 +50,11 @@ class MessageService:
             consumer_group=settings.REDIS_WORKER_CONSUMER_GROUP,
             consumer_name=settings.REDIS_CONSUMER_NAME or None,
         ),
+        MessageType.CONNECTOR_SYNC_JOB_REQUEST: _MessageRoute(
+            stream=settings.REDIS_WORKER_STREAM,
+            consumer_group=settings.REDIS_WORKER_CONSUMER_GROUP,
+            consumer_name=settings.REDIS_CONSUMER_NAME or None,
+        ),
     }
 
     def __init__(
