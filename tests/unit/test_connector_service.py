@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from langbridge.apps.api.langbridge_api.services.connector_service import ConnectorService
+from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.packages.connectors.langbridge_connectors.api.config import (
     ConnectorRuntimeType,
 )
@@ -65,7 +66,7 @@ def test_connector_service_lists_api_plugins_and_schema_metadata() -> None:
     )
     assert shopify_plugin.connector_family.value == "API"
     assert shopify_plugin.supported_resources == ["orders", "customers", "products"]
-    assert any(field.field == "access_token" and field.secret for field in shopify_plugin.auth_schema)
+    assert [field.field for field in shopify_plugin.auth_schema] == ["shop_domain"]
     assert shopify_plugin.sync_strategy is not None
 
     schema = service.get_connector_config_schema("shopify")
@@ -76,12 +77,18 @@ def test_connector_service_lists_api_plugins_and_schema_metadata() -> None:
 
 
 @pytest.mark.anyio
-async def test_connector_service_can_instantiate_api_connector() -> None:
+async def test_connector_service_can_instantiate_api_connector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "SHOPIFY_APP_CLIENT_ID", "client-id")
+    monkeypatch.setattr(settings, "SHOPIFY_APP_CLIENT_SECRET", "client-secret")
     service = _service()
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path.endswith("/oauth/access_token"):
+            return httpx.Response(200, json={"access_token": "oauth-token"})
         return httpx.Response(200, json={"shop": {"id": 1, "name": "Acme"}})
 
     service._api_connector_factory.create_api_connector = (
@@ -97,7 +104,6 @@ async def test_connector_service_can_instantiate_api_connector() -> None:
         {
             "config": {
                 "shop_domain": "acme.myshopify.com",
-                "access_token": "test-token",
             }
         },
     )
@@ -105,5 +111,5 @@ async def test_connector_service_can_instantiate_api_connector() -> None:
     resources = await connector.discover_resources()
     assert connector.RUNTIME_TYPE == ConnectorRuntimeType.SHOPIFY
     assert [resource.name for resource in resources] == ["orders", "customers", "products"]
-    assert len(requests) == 1
-    assert requests[0].headers["X-Shopify-Access-Token"] == "test-token"
+    assert len(requests) == 2
+    assert requests[1].headers["X-Shopify-Access-Token"] == "oauth-token"

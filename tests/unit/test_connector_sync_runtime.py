@@ -605,6 +605,8 @@ async def test_shopify_connector_sync_runtime_full_then_incremental_with_mocked_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "DATASET_FILE_LOCAL_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "SHOPIFY_APP_CLIENT_ID", "client-id")
+    monkeypatch.setattr(settings, "SHOPIFY_APP_CLIENT_SECRET", "client-secret")
     runtime, _, dataset_repository, _, _ = _build_runtime()
 
     workspace_id = uuid.uuid4()
@@ -621,10 +623,14 @@ async def test_shopify_connector_sync_runtime_full_then_incremental_with_mocked_
     order_requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/oauth/access_token"):
+            return httpx.Response(200, json={"access_token": "oauth-token"})
         if request.url.path.endswith("/shop.json"):
+            assert request.headers["X-Shopify-Access-Token"] == "oauth-token"
             return httpx.Response(200, json={"shop": {"id": 1}})
         if request.url.path.endswith("/orders.json"):
             order_requests.append(request)
+            assert request.headers["X-Shopify-Access-Token"] == "oauth-token"
             if request.url.params.get("updated_at_min"):
                 assert request.url.params["updated_at_min"] == "2026-03-01T00:00:00Z"
                 return httpx.Response(
@@ -656,7 +662,6 @@ async def test_shopify_connector_sync_runtime_full_then_incremental_with_mocked_
     connector = ShopifyApiConnector(
         ShopifyConnectorConfig(
             shop_domain="acme.myshopify.com",
-            access_token="shpat_test",
         ),
         transport=httpx.MockTransport(handler),
     )

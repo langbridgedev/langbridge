@@ -46,7 +46,10 @@ async def test_file_remote_source_executes_schema_qualified_query(tmp_path) -> N
         )
     )
 
-    assert result.table.to_pylist() == [
+    assert sorted(
+        result.table.to_pylist(),
+        key=lambda row: row["entity_1__SOURCE"],
+    ) == [
         {"entity_1__SOURCE": "google"},
         {"entity_1__SOURCE": "meta"},
     ]

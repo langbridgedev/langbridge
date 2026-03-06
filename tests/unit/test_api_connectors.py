@@ -9,6 +9,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.packages.connectors.langbridge_connectors.api.google_analytics.config import (
     GoogleAnalyticsConnectorConfig,
 )
@@ -47,15 +48,26 @@ def anyio_backend():
 
 
 @pytest.mark.anyio
-async def test_shopify_connector_uses_rest_auth_and_link_pagination() -> None:
+async def test_shopify_connector_uses_rest_auth_and_link_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "SHOPIFY_APP_CLIENT_ID", "client-id")
+    monkeypatch.setattr(settings, "SHOPIFY_APP_CLIENT_SECRET", "client-secret")
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path.endswith("/oauth/access_token"):
+            body = parse_qs(request.content.decode("utf-8"))
+            assert body["client_id"] == ["client-id"]
+            assert body["client_secret"] == ["client-secret"]
+            assert body["grant_type"] == ["client_credentials"]
+            return httpx.Response(200, json={"access_token": "oauth-token"})
         if request.url.path.endswith("/shop.json"):
+            assert request.headers["X-Shopify-Access-Token"] == "oauth-token"
             return httpx.Response(200, json={"shop": {"id": 1}})
         if request.url.path.endswith("/orders.json"):
-            assert request.headers["X-Shopify-Access-Token"] == "shpat_test"
+            assert request.headers["X-Shopify-Access-Token"] == "oauth-token"
             assert request.url.params["status"] == "any"
             return httpx.Response(
                 200,
@@ -80,7 +92,6 @@ async def test_shopify_connector_uses_rest_auth_and_link_pagination() -> None:
     connector = ShopifyApiConnector(
         ShopifyConnectorConfig(
             shop_domain="acme.myshopify.com",
-            access_token="shpat_test",
         ),
         transport=httpx.MockTransport(handler),
     )
@@ -88,7 +99,7 @@ async def test_shopify_connector_uses_rest_auth_and_link_pagination() -> None:
     await connector.test_connection()
     result = await connector.extract_resource("orders", limit=2)
 
-    assert len(requests) == 2
+    assert len(requests) == 4
     assert result.records[0]["customer__email"] == "ada@example.com"
     assert result.child_records["orders__line_items"][0]["_parent_id"] == 101
     assert result.next_cursor == "cursor-2"
