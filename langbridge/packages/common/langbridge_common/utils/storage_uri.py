@@ -12,5 +12,11 @@ def resolve_local_storage_path(storage_uri: str) -> Path:
     parsed = urlparse(storage_uri)
     if parsed.scheme in {"", "file"}:
         raw_path = parsed.path or storage_uri
+        # Windows file URIs are commonly rendered as file:///C:/path/to/file.
+        # pathlib expects C:/path..., not /C:/path....
+        if len(raw_path) >= 3 and raw_path[0] == "/" and raw_path[2] == ":":
+            raw_path = raw_path[1:]
+        if parsed.netloc and parsed.netloc not in {"", "localhost"}:
+            raw_path = f"//{parsed.netloc}{raw_path}"
         return Path(unquote(raw_path)).resolve()
     raise ValueError(f"Unsupported storage URI scheme '{parsed.scheme}'.")

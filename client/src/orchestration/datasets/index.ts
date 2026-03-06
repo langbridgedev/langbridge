@@ -8,14 +8,20 @@ import type {
   DatasetCreatePayload,
   DatasetEnsurePayload,
   DatasetEnsureResponse,
+  DatasetImpactResponse,
+  DatasetLineageResponse,
   DatasetListResponse,
   DatasetPreviewRequestPayload,
   DatasetPreviewResponse,
   DatasetProfileRequestPayload,
   DatasetProfileResponse,
   DatasetRecord,
+  DatasetRestorePayload,
   DatasetUpdatePayload,
   DatasetUsageResponse,
+  DatasetVersion,
+  DatasetVersionDiffResponse,
+  DatasetVersionListResponse,
 } from './types';
 
 const DATASET_BASE_PATH = '/api/v1/datasets';
@@ -217,6 +223,97 @@ export async function fetchDatasetUsage(
   return apiFetch<DatasetUsageResponse>(`${DATASET_BASE_PATH}/${encodeURIComponent(datasetId)}/used-by?${params.toString()}`);
 }
 
+export async function fetchDatasetVersions(
+  datasetId: string,
+  workspaceId: string,
+): Promise<DatasetVersionListResponse> {
+  if (!datasetId) {
+    throw new Error('Dataset id is required.');
+  }
+  const params = new URLSearchParams({ workspace_id: requiredWorkspaceId(workspaceId) });
+  return apiFetch<DatasetVersionListResponse>(
+    `${DATASET_BASE_PATH}/${encodeURIComponent(datasetId)}/versions?${params.toString()}`,
+  );
+}
+
+export async function fetchDatasetVersion(
+  datasetId: string,
+  revisionId: string,
+  workspaceId: string,
+): Promise<DatasetVersion> {
+  if (!datasetId) {
+    throw new Error('Dataset id is required.');
+  }
+  if (!revisionId) {
+    throw new Error('Revision id is required.');
+  }
+  const params = new URLSearchParams({ workspace_id: requiredWorkspaceId(workspaceId) });
+  return apiFetch<DatasetVersion>(
+    `${DATASET_BASE_PATH}/${encodeURIComponent(datasetId)}/versions/${encodeURIComponent(revisionId)}?${params.toString()}`,
+  );
+}
+
+export async function fetchDatasetDiff(
+  datasetId: string,
+  workspaceId: string,
+  fromRevision: string,
+  toRevision: string,
+): Promise<DatasetVersionDiffResponse> {
+  if (!datasetId) {
+    throw new Error('Dataset id is required.');
+  }
+  if (!fromRevision || !toRevision) {
+    throw new Error('Both revision ids are required.');
+  }
+  const params = new URLSearchParams({
+    workspace_id: requiredWorkspaceId(workspaceId),
+    from_revision: fromRevision,
+    to_revision: toRevision,
+  });
+  return apiFetch<DatasetVersionDiffResponse>(
+    `${DATASET_BASE_PATH}/${encodeURIComponent(datasetId)}/diff?${params.toString()}`,
+  );
+}
+
+export async function restoreDataset(
+  datasetId: string,
+  payload: DatasetRestorePayload,
+): Promise<DatasetRecord> {
+  if (!datasetId) {
+    throw new Error('Dataset id is required.');
+  }
+  return apiFetch<DatasetRecord>(`${DATASET_BASE_PATH}/${encodeURIComponent(datasetId)}/restore`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchDatasetLineage(
+  datasetId: string,
+  workspaceId: string,
+): Promise<DatasetLineageResponse> {
+  if (!datasetId) {
+    throw new Error('Dataset id is required.');
+  }
+  const params = new URLSearchParams({ workspace_id: requiredWorkspaceId(workspaceId) });
+  return apiFetch<DatasetLineageResponse>(
+    `${DATASET_BASE_PATH}/${encodeURIComponent(datasetId)}/lineage?${params.toString()}`,
+  );
+}
+
+export async function fetchDatasetImpact(
+  datasetId: string,
+  workspaceId: string,
+): Promise<DatasetImpactResponse> {
+  if (!datasetId) {
+    throw new Error('Dataset id is required.');
+  }
+  const params = new URLSearchParams({ workspace_id: requiredWorkspaceId(workspaceId) });
+  return apiFetch<DatasetImpactResponse>(
+    `${DATASET_BASE_PATH}/${encodeURIComponent(datasetId)}/impact?${params.toString()}`,
+  );
+}
+
 export type {
   DatasetBulkCreatePayload,
   DatasetBulkCreateStartResponse,
@@ -227,6 +324,13 @@ export type {
   DatasetCreatePayload,
   DatasetEnsurePayload,
   DatasetEnsureResponse,
+  DatasetImpactItem,
+  DatasetImpactResponse,
+  DatasetLineageEdge,
+  DatasetLineageEdgeType,
+  DatasetLineageNode,
+  DatasetLineageNodeType,
+  DatasetLineageResponse,
   DatasetListResponse,
   DatasetPolicy,
   DatasetPreviewRequestPayload,
@@ -234,8 +338,15 @@ export type {
   DatasetProfileRequestPayload,
   DatasetProfileResponse,
   DatasetRecord,
+  DatasetRestorePayload,
+  DatasetSchemaColumnDiff,
   DatasetStatus,
   DatasetType,
   DatasetUpdatePayload,
   DatasetUsageResponse,
+  DatasetVersion,
+  DatasetVersionDiffResponse,
+  DatasetVersionFieldDiff,
+  DatasetVersionListResponse,
+  DatasetVersionSummary,
 } from './types';

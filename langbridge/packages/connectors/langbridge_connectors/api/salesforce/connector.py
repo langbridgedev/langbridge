@@ -91,6 +91,9 @@ class SalesforceApiConnector(HttpApiConnector):
                 label="Accounts",
                 primary_key="Id",
                 cursor_field="nextRecordsUrl",
+                incremental_cursor_field="SystemModstamp",
+                supports_incremental=True,
+                default_sync_mode="INCREMENTAL",
             ),
             path="",
         ),
@@ -100,6 +103,9 @@ class SalesforceApiConnector(HttpApiConnector):
                 label="Contacts",
                 primary_key="Id",
                 cursor_field="nextRecordsUrl",
+                incremental_cursor_field="SystemModstamp",
+                supports_incremental=True,
+                default_sync_mode="INCREMENTAL",
             ),
             path="",
         ),
@@ -109,6 +115,9 @@ class SalesforceApiConnector(HttpApiConnector):
                 label="Leads",
                 primary_key="Id",
                 cursor_field="nextRecordsUrl",
+                incremental_cursor_field="SystemModstamp",
+                supports_incremental=True,
+                default_sync_mode="INCREMENTAL",
             ),
             path="",
         ),
@@ -118,6 +127,9 @@ class SalesforceApiConnector(HttpApiConnector):
                 label="Opportunities",
                 primary_key="Id",
                 cursor_field="nextRecordsUrl",
+                incremental_cursor_field="SystemModstamp",
+                supports_incremental=True,
+                default_sync_mode="INCREMENTAL",
             ),
             path="",
         ),
@@ -141,6 +153,7 @@ class SalesforceApiConnector(HttpApiConnector):
         self,
         resource_name: str,
         *,
+        since: str | None = None,
         cursor: str | None = None,
         limit: int | None = None,
     ) -> ApiExtractResult:
@@ -178,6 +191,7 @@ class SalesforceApiConnector(HttpApiConnector):
             status="success",
             records=flattened_records,
             next_cursor=next_cursor,
+            checkpoint_cursor=_max_salesforce_cursor(flattened_records, "SystemModstamp"),
             child_records=child_records,
         )
 
@@ -260,3 +274,10 @@ def _remove_attributes(value: Any) -> Any:
             if str(key) != "attributes"
         }
     return value
+
+
+def _max_salesforce_cursor(rows: list[dict[str, Any]], field_name: str) -> str | None:
+    values = [str(row.get(field_name) or "").strip() for row in rows if str(row.get(field_name) or "").strip()]
+    if not values:
+        return None
+    return max(values)

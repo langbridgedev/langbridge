@@ -95,3 +95,85 @@ export interface ConnectorCatalogResponse {
   limit: number;
   hasMore: boolean;
 }
+
+export type ConnectorSyncMode = 'FULL_REFRESH' | 'INCREMENTAL' | 'WEBHOOK_ASSISTED';
+export type ConnectorSyncStatus = 'never_synced' | 'running' | 'succeeded' | 'failed';
+
+export interface ConnectorTestResponse {
+  status: string;
+  message: string;
+}
+
+export interface ConnectorResource {
+  name: string;
+  label?: string | null;
+  primaryKey?: string | null;
+  parentResource?: string | null;
+  cursorField?: string | null;
+  incrementalCursorField?: string | null;
+  supportsIncremental: boolean;
+  defaultSyncMode: ConnectorSyncMode;
+  status: ConnectorSyncStatus;
+  lastCursor?: string | null;
+  lastSyncAt?: string | null;
+  datasetIds: string[];
+  datasetNames: string[];
+  recordsSynced?: number | null;
+}
+
+export interface ConnectorResourceListResponse {
+  connectorId: string;
+  items: ConnectorResource[];
+}
+
+export interface ConnectorSyncRequestPayload {
+  resources: string[];
+  syncMode: ConnectorSyncMode;
+  forceFullRefresh?: boolean;
+}
+
+export interface ConnectorSyncStartResponse {
+  jobId: string;
+  jobStatus: string;
+}
+
+export interface ConnectorSyncState {
+  id: string;
+  workspaceId: string;
+  connectionId: string;
+  connectorType: string;
+  resourceName: string;
+  syncMode: ConnectorSyncMode;
+  lastCursor?: string | null;
+  lastSyncAt?: string | null;
+  state: Record<string, unknown>;
+  status: ConnectorSyncStatus;
+  errorMessage?: string | null;
+  recordsSynced: number;
+  bytesSynced?: number | null;
+  createdAt: string;
+  updatedAt: string;
+  datasetIds: string[];
+}
+
+export interface ConnectorSyncStateListResponse {
+  connectionId: string;
+  items: ConnectorSyncState[];
+}
+
+export interface ConnectorSyncHistoryItem {
+  jobId: string;
+  status: string;
+  progress: number;
+  statusMessage?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  error?: Record<string, unknown> | null;
+  payload: Record<string, unknown>;
+}
+
+export interface ConnectorSyncHistoryResponse {
+  connectionId: string;
+  items: ConnectorSyncHistoryItem[];
+}

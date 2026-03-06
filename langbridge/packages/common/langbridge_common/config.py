@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     SQLALCHEMY_POOL_SIZE: int = 5
     SQLALCHEMY_MAX_OVERFLOW: int = 10
     SQLALCHEMY_POOL_TIMEOUT: int = 30
+
+    SHOPIFY_APP_CLIENT_ID: str = ""
+    SHOPIFY_APP_CLIENT_SECRET: str = ""
     
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379

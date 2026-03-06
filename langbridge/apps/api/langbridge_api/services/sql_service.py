@@ -15,6 +15,7 @@ from langbridge.apps.api.langbridge_api.services.jobs.sql_job_request_service im
 from langbridge.apps.api.langbridge_api.services.request_context_provider import (
     RequestContextProvider,
 )
+from langbridge.apps.api.langbridge_api.services.lineage_service import LineageService
 from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.packages.common.langbridge_common.contracts.auth import UserResponse
 from langbridge.packages.common.langbridge_common.contracts.connectors import ConnectorResponse
@@ -78,6 +79,7 @@ from langbridge.packages.common.langbridge_common.utils.sql import (
     fingerprint_query,
     sanitize_sql_error_message,
 )
+from langbridge.packages.common.langbridge_common.utils.lineage import LineageNodeType
 
 
 class SqlService:
@@ -93,6 +95,7 @@ class SqlService:
         user_repository: UserRepository,
         sql_job_request_service: SqlJobRequestService,
         request_context_provider: RequestContextProvider,
+        lineage_service: LineageService | None = None,
     ) -> None:
         self._sql_job_repository = sql_job_repository
         self._sql_job_result_artifact_repository = sql_job_result_artifact_repository
@@ -103,6 +106,7 @@ class SqlService:
         self._user_repository = user_repository
         self._sql_job_request_service = sql_job_request_service
         self._request_context_provider = request_context_provider
+        self._lineage_service = lineage_service
 
     async def execute_sql(
         self,
@@ -509,6 +513,8 @@ class SqlService:
                 record.last_result_artifact_id = artifacts[0].id
 
         self._sql_saved_query_repository.add(record)
+        if self._lineage_service is not None:
+            await self._lineage_service.register_saved_query_lineage(record=record)
         return self._to_saved_query_response(record)
 
     async def list_saved_queries(
@@ -600,6 +606,8 @@ class SqlService:
 
         record.updated_by = current_user.id
         record.updated_at = datetime.now(timezone.utc)
+        if self._lineage_service is not None:
+            await self._lineage_service.register_saved_query_lineage(record=record)
         return self._to_saved_query_response(record)
 
     async def delete_saved_query(
@@ -618,6 +626,12 @@ class SqlService:
             raise ResourceNotFound("Saved SQL query not found.")
         if not await self._can_manage_saved_query(record, current_user):
             raise PermissionDeniedBusinessValidationError("You cannot delete this saved SQL query.")
+        if self._lineage_service is not None:
+            await self._lineage_service.delete_node_lineage(
+                workspace_id=workspace_id,
+                node_type=LineageNodeType.SAVED_QUERY,
+                node_id=str(record.id),
+            )
         await self._sql_saved_query_repository.delete(record)
 
     async def get_workspace_policy(

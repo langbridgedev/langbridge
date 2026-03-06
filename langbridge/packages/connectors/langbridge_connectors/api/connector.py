@@ -103,6 +103,9 @@ class ApiResource:
     primary_key: str | None = None
     parent_resource: str | None = None
     cursor_field: str | None = None
+    incremental_cursor_field: str | None = None
+    supports_incremental: bool = False
+    default_sync_mode: str = "FULL_REFRESH"
 
 
 @dataclass(slots=True)
@@ -111,6 +114,7 @@ class ApiExtractResult:
     records: List[Dict[str, Any]]
     status: str = "success"
     next_cursor: str | None = None
+    checkpoint_cursor: str | None = None
     child_records: Dict[str, List[Dict[str, Any]]] | None = None
 
 
@@ -235,6 +239,7 @@ class ApiConnector(Connector):
         self,
         resource_name: str,
         *,
+        since: str | None = None,
         cursor: str | None = None,
         limit: int | None = None,
     ) -> ApiExtractResult:

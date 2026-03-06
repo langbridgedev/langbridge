@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, Literal, Optional, cast
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from langbridge.packages.common.langbridge_common.db.connector import Connector
 
@@ -55,6 +56,19 @@ class ConnectorSyncStrategy(str, Enum):
     INCREMENTAL = "INCREMENTAL"
     WINDOWED_INCREMENTAL = "WINDOWED_INCREMENTAL"
     MANUAL = "MANUAL"
+
+
+class ConnectorSyncMode(str, Enum):
+    FULL_REFRESH = "FULL_REFRESH"
+    INCREMENTAL = "INCREMENTAL"
+    WEBHOOK_ASSISTED = "WEBHOOK_ASSISTED"
+
+
+class ConnectorSyncStatus(str, Enum):
+    NEVER_SYNCED = "never_synced"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
 
 
 class ConnectorAuthSchemaField(_Base):
@@ -269,3 +283,90 @@ class ConnectorCatalogResponse(_Base):
     offset: int = 0
     limit: int = 200
     has_more: bool = False
+
+
+class ConnectorSyncRequest(_Base):
+    resources: list[str] = Field(default_factory=list)
+    sync_mode: ConnectorSyncMode = ConnectorSyncMode.INCREMENTAL
+    force_full_refresh: bool = False
+
+    @model_validator(mode="after")
+    def _validate_resources(self) -> "ConnectorSyncRequest":
+        normalized = [str(resource or "").strip() for resource in self.resources if str(resource or "").strip()]
+        if not normalized:
+            raise ValueError("At least one resource must be selected for sync.")
+        self.resources = normalized
+        return self
+
+
+class ConnectorSyncStartResponse(_Base):
+    job_id: UUID
+    job_status: str
+
+
+class ConnectorTestResponse(_Base):
+    status: str
+    message: str
+
+
+class ConnectorResourceResponse(_Base):
+    name: str
+    label: str | None = None
+    primary_key: str | None = None
+    parent_resource: str | None = None
+    cursor_field: str | None = None
+    incremental_cursor_field: str | None = None
+    supports_incremental: bool = False
+    default_sync_mode: ConnectorSyncMode = ConnectorSyncMode.FULL_REFRESH
+    status: ConnectorSyncStatus = ConnectorSyncStatus.NEVER_SYNCED
+    last_cursor: str | None = None
+    last_sync_at: datetime | None = None
+    dataset_ids: list[UUID] = Field(default_factory=list)
+    dataset_names: list[str] = Field(default_factory=list)
+    records_synced: int | None = None
+
+
+class ConnectorResourceListResponse(_Base):
+    connector_id: UUID
+    items: list[ConnectorResourceResponse] = Field(default_factory=list)
+
+
+class ConnectorSyncStateResponse(_Base):
+    id: UUID
+    workspace_id: UUID
+    connection_id: UUID
+    connector_type: str
+    resource_name: str
+    sync_mode: ConnectorSyncMode
+    last_cursor: str | None = None
+    last_sync_at: datetime | None = None
+    state: dict[str, Any] = Field(default_factory=dict)
+    status: ConnectorSyncStatus = ConnectorSyncStatus.NEVER_SYNCED
+    error_message: str | None = None
+    records_synced: int = 0
+    bytes_synced: int | None = None
+    created_at: datetime
+    updated_at: datetime
+    dataset_ids: list[UUID] = Field(default_factory=list)
+
+
+class ConnectorSyncStateListResponse(_Base):
+    connection_id: UUID
+    items: list[ConnectorSyncStateResponse] = Field(default_factory=list)
+
+
+class ConnectorSyncHistoryItemResponse(_Base):
+    job_id: UUID
+    status: str
+    progress: int = 0
+    status_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error: dict[str, Any] | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConnectorSyncHistoryResponse(_Base):
+    connection_id: UUID
+    items: list[ConnectorSyncHistoryItemResponse] = Field(default_factory=list)

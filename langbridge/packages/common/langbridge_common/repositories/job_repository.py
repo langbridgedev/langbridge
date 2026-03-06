@@ -1,5 +1,5 @@
 from uuid import UUID
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -33,3 +33,25 @@ class JobRepository(AsyncBaseRepository[JobRecord]):
     def add_job_event(self, event: JobEventRecord) -> JobEventRecord:
         self._session.add(event)
         return event
+
+    async def list_for_organisation_and_type(
+        self,
+        *,
+        organisation_id: str,
+        job_type: str | None = None,
+        limit: int = 50,
+    ) -> list[JobRecord]:
+        stmt = (
+            select(JobRecord)
+            .options(
+                selectinload(JobRecord.job_events),
+                selectinload(JobRecord.job_tasks),
+            )
+            .where(JobRecord.organisation_id == organisation_id)
+            .order_by(desc(JobRecord.created_at))
+            .limit(max(1, limit))
+        )
+        if job_type:
+            stmt = stmt.where(JobRecord.job_type == job_type)
+        result = await self._session.scalars(stmt)
+        return list(result.all())

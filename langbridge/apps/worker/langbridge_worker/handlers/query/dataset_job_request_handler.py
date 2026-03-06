@@ -30,7 +30,9 @@ from langbridge.packages.common.langbridge_common.db.dataset import (
     DatasetColumnRecord,
     DatasetPolicyRecord,
     DatasetRecord,
+    DatasetRevisionRecord,
 )
+from langbridge.packages.common.langbridge_common.db.lineage import LineageEdgeRecord
 from langbridge.packages.common.langbridge_common.db.job import JobRecord, JobStatus
 from langbridge.packages.common.langbridge_common.errors.application_errors import (
     BusinessValidationError,
@@ -39,8 +41,19 @@ from langbridge.packages.common.langbridge_common.repositories.dataset_repositor
     DatasetColumnRepository,
     DatasetPolicyRepository,
     DatasetRepository,
+    DatasetRevisionRepository,
 )
 from langbridge.packages.common.langbridge_common.repositories.job_repository import JobRepository
+from langbridge.packages.common.langbridge_common.repositories.lineage_repository import (
+    LineageEdgeRepository,
+)
+from langbridge.packages.common.langbridge_common.utils.lineage import (
+    LineageEdgeType,
+    LineageNodeType,
+    build_file_resource_id,
+    build_source_table_resource_id,
+    stable_payload_hash,
+)
 from langbridge.packages.common.langbridge_common.utils.sql import (
     apply_result_redaction,
     render_sql_with_params,
@@ -65,6 +78,8 @@ class DatasetJobRequestHandler(BaseMessageHandler):
         dataset_repository: DatasetRepository,
         dataset_column_repository: DatasetColumnRepository,
         dataset_policy_repository: DatasetPolicyRepository,
+        dataset_revision_repository: DatasetRevisionRepository | None = None,
+        lineage_edge_repository: LineageEdgeRepository | None = None,
         federated_query_tool: FederatedQueryTool | None = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
@@ -72,6 +87,8 @@ class DatasetJobRequestHandler(BaseMessageHandler):
         self._dataset_repository = dataset_repository
         self._dataset_column_repository = dataset_column_repository
         self._dataset_policy_repository = dataset_policy_repository
+        self._dataset_revision_repository = dataset_revision_repository
+        self._lineage_edge_repository = lineage_edge_repository
         self._federated_query_tool = federated_query_tool
         self._dataset_execution_resolver = DatasetExecutionResolver(
             dataset_repository=dataset_repository,
@@ -383,6 +400,14 @@ class DatasetJobRequestHandler(BaseMessageHandler):
             )
             self._dataset_column_repository.add(column)
 
+        await self._create_dataset_revision(
+            dataset=dataset,
+            policy=await self._get_or_create_policy(dataset),
+            created_by=dataset.updated_by or request.user_id,
+            change_summary="CSV ingest converted dataset to parquet.",
+        )
+        await self._replace_dataset_lineage(dataset)
+
         return {
             "dataset_id": str(dataset.id),
             "storage_uri": dataset.storage_uri,
@@ -618,6 +643,14 @@ class DatasetJobRequestHandler(BaseMessageHandler):
                 updated_at=now,
             )
         )
+        policy = await self._get_or_create_policy(dataset)
+        await self._create_dataset_revision(
+            dataset=dataset,
+            policy=policy,
+            created_by=request.user_id,
+            change_summary="Auto-generated dataset created.",
+        )
+        await self._replace_dataset_lineage(dataset)
         return dataset
 
     async def _ensure_unique_dataset_name(
@@ -708,6 +741,275 @@ class DatasetJobRequestHandler(BaseMessageHandler):
             )
             self._dataset_policy_repository.add(policy)
         return dataset, columns, policy
+
+    async def _get_or_create_policy(self, dataset: DatasetRecord) -> DatasetPolicyRecord:
+        policy = await self._dataset_policy_repository.get_for_dataset(dataset_id=dataset.id)
+        if policy is not None:
+            return policy
+
+        policy = DatasetPolicyRecord(
+            id=uuid.uuid4(),
+            dataset_id=dataset.id,
+            workspace_id=dataset.workspace_id,
+            max_rows_preview=settings.SQL_DEFAULT_MAX_PREVIEW_ROWS,
+            max_export_rows=settings.SQL_DEFAULT_MAX_EXPORT_ROWS,
+            redaction_rules_json={},
+            row_filters_json=[],
+            allow_dml=False,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        self._dataset_policy_repository.add(policy)
+        return policy
+
+    async def _create_dataset_revision(
+        self,
+        *,
+        dataset: DatasetRecord,
+        policy: DatasetPolicyRecord,
+        created_by: uuid.UUID | None,
+        change_summary: str,
+    ) -> None:
+        if self._dataset_revision_repository is None:
+            return
+
+        columns = await self._dataset_column_repository.list_for_dataset(dataset_id=dataset.id)
+        next_revision = await self._dataset_revision_repository.next_revision_number(dataset_id=dataset.id)
+        definition = self._build_dataset_definition_snapshot(dataset)
+        schema_snapshot = [
+            {
+                "name": column.name,
+                "data_type": column.data_type,
+                "nullable": column.nullable,
+                "description": column.description,
+                "is_allowed": column.is_allowed,
+                "is_computed": column.is_computed,
+                "expression": column.expression,
+                "ordinal_position": column.ordinal_position,
+            }
+            for column in columns
+        ]
+        policy_snapshot = {
+            "max_rows_preview": policy.max_rows_preview,
+            "max_export_rows": policy.max_export_rows,
+            "redaction_rules": dict(policy.redaction_rules_json or {}),
+            "row_filters": list(policy.row_filters_json or []),
+            "allow_dml": policy.allow_dml,
+        }
+        source_bindings = self._build_dataset_source_bindings(dataset)
+        execution_characteristics = {
+            "row_count_estimate": dataset.row_count_estimate,
+            "bytes_estimate": dataset.bytes_estimate,
+            "last_profiled_at": dataset.last_profiled_at.isoformat() if dataset.last_profiled_at else None,
+        }
+        snapshot = {
+            "dataset": definition,
+            "columns": schema_snapshot,
+            "policy": policy_snapshot,
+            "source_bindings": source_bindings,
+            "execution_characteristics": execution_characteristics,
+        }
+        revision_id = uuid.uuid4()
+        self._dataset_revision_repository.add(
+            DatasetRevisionRecord(
+                id=revision_id,
+                dataset_id=dataset.id,
+                workspace_id=dataset.workspace_id,
+                revision_number=next_revision,
+                revision_hash=stable_payload_hash(snapshot),
+                change_summary=change_summary,
+                definition_json=definition,
+                schema_json=schema_snapshot,
+                policy_json=policy_snapshot,
+                source_bindings_json=source_bindings,
+                execution_characteristics_json=execution_characteristics,
+                status=dataset.status,
+                snapshot_json=snapshot,
+                note=change_summary,
+                created_by=created_by,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        dataset.revision_id = revision_id
+
+    @staticmethod
+    def _build_dataset_definition_snapshot(dataset: DatasetRecord) -> dict[str, Any]:
+        return {
+            "id": str(dataset.id),
+            "workspace_id": str(dataset.workspace_id),
+            "project_id": str(dataset.project_id) if dataset.project_id else None,
+            "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
+            "name": dataset.name,
+            "description": dataset.description,
+            "tags": list(dataset.tags_json or []),
+            "dataset_type": dataset.dataset_type,
+            "dialect": dataset.dialect,
+            "storage_uri": dataset.storage_uri,
+            "catalog_name": dataset.catalog_name,
+            "schema_name": dataset.schema_name,
+            "table_name": dataset.table_name,
+            "sql_text": dataset.sql_text,
+            "referenced_dataset_ids": list(dataset.referenced_dataset_ids_json or []),
+            "federated_plan": dataset.federated_plan_json,
+            "file_config": dataset.file_config_json,
+            "status": dataset.status,
+        }
+
+    def _build_dataset_source_bindings(self, dataset: DatasetRecord) -> list[dict[str, Any]]:
+        dataset_type = str(dataset.dataset_type or "").upper()
+        if dataset_type == "TABLE":
+            return [
+                {
+                    "source_type": "connection",
+                    "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
+                },
+                {
+                    "source_type": "source_table",
+                    "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
+                    "catalog_name": dataset.catalog_name,
+                    "schema_name": dataset.schema_name,
+                    "table_name": dataset.table_name,
+                },
+            ]
+        if dataset_type == "FILE":
+            storage_uri = (
+                str((dataset.file_config_json or {}).get("source_storage_uri") or "").strip()
+                or str((dataset.file_config_json or {}).get("storage_uri") or "").strip()
+                or dataset.storage_uri
+            )
+            return [
+                {
+                    "source_type": "file_resource",
+                    "storage_uri": storage_uri,
+                    "file_config": dict(dataset.file_config_json or {}),
+                }
+            ]
+        if dataset_type == "FEDERATED":
+            bindings: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for raw_value in dataset.referenced_dataset_ids_json or []:
+                value = str(raw_value)
+                if not value or value in seen:
+                    continue
+                seen.add(value)
+                bindings.append({"source_type": "dataset", "dataset_id": value})
+            plan = dataset.federated_plan_json if isinstance(dataset.federated_plan_json, dict) else {}
+            tables_payload = plan.get("tables")
+            iterable = tables_payload.values() if isinstance(tables_payload, dict) else tables_payload or []
+            for item in iterable:
+                if not isinstance(item, dict):
+                    continue
+                raw_id = item.get("dataset_id") or item.get("datasetId")
+                if raw_id is None:
+                    continue
+                value = str(raw_id)
+                if not value or value in seen:
+                    continue
+                seen.add(value)
+                bindings.append({"source_type": "dataset", "dataset_id": value})
+            return bindings
+        return []
+
+    async def _replace_dataset_lineage(self, dataset: DatasetRecord) -> None:
+        if self._lineage_edge_repository is None:
+            return
+
+        await self._lineage_edge_repository.delete_for_target(
+            workspace_id=dataset.workspace_id,
+            target_type=LineageNodeType.DATASET.value,
+            target_id=str(dataset.id),
+        )
+
+        edges: list[LineageEdgeRecord] = []
+        if dataset.connection_id is not None:
+            edges.append(
+                LineageEdgeRecord(
+                    workspace_id=dataset.workspace_id,
+                    source_type=LineageNodeType.CONNECTION.value,
+                    source_id=str(dataset.connection_id),
+                    target_type=LineageNodeType.DATASET.value,
+                    target_id=str(dataset.id),
+                    edge_type=LineageEdgeType.FEEDS.value,
+                    metadata_json={"connection_id": str(dataset.connection_id)},
+                )
+            )
+
+        dataset_type = str(dataset.dataset_type or "").upper()
+        if dataset_type == "TABLE" and dataset.connection_id is not None and dataset.table_name:
+            edges.append(
+                LineageEdgeRecord(
+                    workspace_id=dataset.workspace_id,
+                    source_type=LineageNodeType.SOURCE_TABLE.value,
+                    source_id=build_source_table_resource_id(
+                        connection_id=dataset.connection_id,
+                        catalog_name=dataset.catalog_name,
+                        schema_name=dataset.schema_name,
+                        table_name=dataset.table_name,
+                    ),
+                    target_type=LineageNodeType.DATASET.value,
+                    target_id=str(dataset.id),
+                    edge_type=LineageEdgeType.MATERIALIZES_FROM.value,
+                    metadata_json={
+                        "connection_id": str(dataset.connection_id),
+                        "catalog_name": dataset.catalog_name,
+                        "schema_name": dataset.schema_name,
+                        "table_name": dataset.table_name,
+                        "qualified_name": ".".join(
+                            [
+                                part
+                                for part in (dataset.catalog_name, dataset.schema_name, dataset.table_name)
+                                if part and str(part).strip()
+                            ]
+                        )
+                        or str(dataset.table_name),
+                    },
+                )
+            )
+        elif dataset_type == "FILE":
+            storage_uri = (
+                str((dataset.file_config_json or {}).get("source_storage_uri") or "").strip()
+                or str((dataset.file_config_json or {}).get("storage_uri") or "").strip()
+                or dataset.storage_uri
+            )
+            if storage_uri:
+                edges.append(
+                    LineageEdgeRecord(
+                        workspace_id=dataset.workspace_id,
+                        source_type=LineageNodeType.FILE_RESOURCE.value,
+                        source_id=build_file_resource_id(storage_uri),
+                        target_type=LineageNodeType.DATASET.value,
+                        target_id=str(dataset.id),
+                        edge_type=LineageEdgeType.MATERIALIZES_FROM.value,
+                        metadata_json={
+                            "storage_uri": storage_uri,
+                            "file_config": dict(dataset.file_config_json or {}),
+                        },
+                    )
+                )
+        elif dataset_type == "FEDERATED":
+            seen_ids: set[str] = set()
+            for item in self._build_dataset_source_bindings(dataset):
+                raw_id = item.get("dataset_id")
+                if raw_id is None:
+                    continue
+                source_id = str(raw_id)
+                if not source_id or source_id == str(dataset.id) or source_id in seen_ids:
+                    continue
+                seen_ids.add(source_id)
+                edges.append(
+                    LineageEdgeRecord(
+                        workspace_id=dataset.workspace_id,
+                        source_type=LineageNodeType.DATASET.value,
+                        source_id=source_id,
+                        target_type=LineageNodeType.DATASET.value,
+                        target_id=str(dataset.id),
+                        edge_type=LineageEdgeType.DERIVES_FROM.value,
+                        metadata_json={"match_type": "federated_child"},
+                    )
+                )
+
+        for edge in edges:
+            self._lineage_edge_repository.add(edge)
 
     async def _build_workflow(self, *, dataset: DatasetRecord):
         return await self._dataset_execution_resolver.build_workflow_for_dataset(dataset=dataset)

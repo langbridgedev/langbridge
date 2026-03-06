@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from langbridge.packages.connectors.langbridge_connectors.api._http_api_connector import (
@@ -28,6 +29,9 @@ class StripeApiConnector(HttpApiConnector):
                 label="Customers",
                 primary_key="id",
                 cursor_field="starting_after",
+                incremental_cursor_field="created",
+                supports_incremental=True,
+                default_sync_mode="INCREMENTAL",
             ),
             path="/v1/customers",
         ),
@@ -37,6 +41,9 @@ class StripeApiConnector(HttpApiConnector):
                 label="Charges",
                 primary_key="id",
                 cursor_field="starting_after",
+                incremental_cursor_field="created",
+                supports_incremental=True,
+                default_sync_mode="INCREMENTAL",
             ),
             path="/v1/charges",
         ),
@@ -46,6 +53,9 @@ class StripeApiConnector(HttpApiConnector):
                 label="Invoices",
                 primary_key="id",
                 cursor_field="starting_after",
+                incremental_cursor_field="created",
+                supports_incremental=True,
+                default_sync_mode="INCREMENTAL",
             ),
             path="/v1/invoices",
         ),
@@ -55,6 +65,9 @@ class StripeApiConnector(HttpApiConnector):
                 label="Subscriptions",
                 primary_key="id",
                 cursor_field="starting_after",
+                incremental_cursor_field="created",
+                supports_incremental=True,
+                default_sync_mode="INCREMENTAL",
             ),
             path="/v1/subscriptions",
         ),
@@ -81,6 +94,7 @@ class StripeApiConnector(HttpApiConnector):
         self,
         resource_name: str,
         *,
+        since: str | None = None,
         cursor: str | None = None,
         limit: int | None = None,
     ) -> ApiExtractResult:
@@ -89,6 +103,8 @@ class StripeApiConnector(HttpApiConnector):
         params: dict[str, Any] = {"limit": page_size}
         if cursor:
             params["starting_after"] = cursor
+        elif since:
+            params["created[gte]"] = _coerce_unix_timestamp(since)
 
         payload, _ = await self._request_json(
             "GET",
@@ -117,5 +133,35 @@ class StripeApiConnector(HttpApiConnector):
             status="success",
             records=flattened_records,
             next_cursor=next_cursor,
+            checkpoint_cursor=_max_numeric_cursor(flattened_records, "created"),
             child_records=child_records,
         )
+
+
+def _coerce_unix_timestamp(raw_value: str) -> str:
+    normalized = str(raw_value or "").strip()
+    if normalized.isdigit():
+        return normalized
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return normalized
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return str(int(parsed.timestamp()))
+
+
+def _max_numeric_cursor(rows: list[dict[str, Any]], field_name: str) -> str | None:
+    values: list[int] = []
+    for row in rows:
+        value = row.get(field_name)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            values.append(int(value))
+            continue
+        if isinstance(value, str) and value.strip().isdigit():
+            values.append(int(value.strip()))
+    if not values:
+        return None
+    return str(max(values))

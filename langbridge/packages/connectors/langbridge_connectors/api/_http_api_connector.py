@@ -54,6 +54,7 @@ class HttpApiConnector(ApiConnector):
     ) -> ApiSyncResult:
         result = await self.extract_resource(
             resource_name,
+            since=since,
             cursor=cursor,
             limit=limit,
         )
@@ -180,7 +181,6 @@ class HttpApiConnector(ApiConnector):
                         if isinstance(value, str) and value.strip():
                             return value.strip()
         return fallback
-
 
 def flatten_api_records(
     *,

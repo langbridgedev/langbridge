@@ -243,6 +243,7 @@ class CustomerRuntimeBroker(MessageBroker):
                     "agentic_semantic_model_job_request",
                     "copilot_dashboard_request",
                     "dataset_job_request",
+                    "connector_sync_job_request",
                 ]
             }
         try:

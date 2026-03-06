@@ -203,6 +203,14 @@ class DatasetRevisionRecord(Base):
         index=True,
     )
     revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    revision_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    change_summary: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    definition_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    schema_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    policy_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    source_bindings_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    execution_characteristics_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     note: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
@@ -219,4 +227,6 @@ class DatasetRevisionRecord(Base):
 
     __table_args__ = (
         UniqueConstraint("dataset_id", "revision_number", name="uq_dataset_revisions_number"),
+        Index("ix_dataset_revisions_dataset_created_at", "dataset_id", "created_at"),
+        Index("ix_dataset_revisions_workspace_created_at", "workspace_id", "created_at"),
     )

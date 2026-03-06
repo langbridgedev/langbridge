@@ -10,6 +10,9 @@ from langbridge.apps.api.langbridge_api.services.jobs.agent_job_request_service 
 from langbridge.apps.api.langbridge_api.services.jobs.agentic_semantic_model_job_request_service import (
     AgenticSemanticModelJobRequestService,
 )
+from langbridge.apps.api.langbridge_api.services.jobs.connector_sync_job_request_service import (
+    ConnectorSyncJobRequestService,
+)
 from langbridge.apps.api.langbridge_api.services.jobs.copilot_dashboard_job_request_service import (
     CopilotDashboardJobRequestService,
 )
@@ -34,6 +37,9 @@ from langbridge.packages.common.langbridge_common.db import (
 from langbridge.packages.common.langbridge_common.db.session_context import get_session
 from langbridge.packages.common.langbridge_common.repositories.agent_repository import AgentRepository
 from langbridge.packages.common.langbridge_common.repositories.connector_repository import ConnectorRepository
+from langbridge.packages.common.langbridge_common.repositories.connector_sync_repository import (
+    ConnectorSyncStateRepository,
+)
 from langbridge.packages.common.langbridge_common.repositories.conversation_memory_repository import (
     ConversationMemoryRepository,
 )
@@ -50,6 +56,9 @@ from langbridge.packages.common.langbridge_common.repositories.edge_task_reposit
 )
 from langbridge.packages.common.langbridge_common.repositories.environment_repository import OrganizationEnvironmentSettingRepository
 from langbridge.packages.common.langbridge_common.repositories.job_repository import JobRepository
+from langbridge.packages.common.langbridge_common.repositories.lineage_repository import (
+    LineageEdgeRepository,
+)
 from langbridge.packages.common.langbridge_common.repositories.sql_repository import (
     SqlJobRepository,
     SqlJobResultArtifactRepository,
@@ -80,6 +89,7 @@ from langbridge.apps.api.langbridge_api.services.auth.auth_service import AuthSe
 from langbridge.apps.api.langbridge_api.services.auth.token_service import TokenService
 from langbridge.apps.api.langbridge_api.services.connector_schema_service import ConnectorSchemaService
 from langbridge.apps.api.langbridge_api.services.connector_service import ConnectorService
+from langbridge.apps.api.langbridge_api.services.connector_sync_service import ConnectorSyncService
 from langbridge.apps.api.langbridge_api.services.dataset_service import DatasetService
 from langbridge.apps.api.langbridge_api.services.dashboard_service import DashboardService
 from langbridge.apps.api.langbridge_api.services.environment_service import EnvironmentService
@@ -101,6 +111,7 @@ from langbridge.apps.api.langbridge_api.services.runtime_registry_service import
     RuntimeRegistryService,
 )
 from langbridge.apps.api.langbridge_api.services.request_context_provider import RequestContextProvider
+from langbridge.apps.api.langbridge_api.services.lineage_service import LineageService
 from langbridge.apps.api.langbridge_api.services.semantic import (
     SemanticModelService,
     SemanticQueryService,
@@ -172,11 +183,16 @@ class Container(containers.DeclarativeContainer):
     organization_invite_repository = providers.Factory(OrganizationInviteRepository, session=async_session)
     project_invite_repository = providers.Factory(ProjectInviteRepository, session=async_session)
     connector_repository = providers.Factory(ConnectorRepository, session=async_session)
+    connector_sync_state_repository = providers.Factory(
+        ConnectorSyncStateRepository,
+        session=async_session,
+    )
     dashboard_repository = providers.Factory(DashboardRepository, session=async_session)
     dataset_repository = providers.Factory(DatasetRepository, session=async_session)
     dataset_column_repository = providers.Factory(DatasetColumnRepository, session=async_session)
     dataset_policy_repository = providers.Factory(DatasetPolicyRepository, session=async_session)
     dataset_revision_repository = providers.Factory(DatasetRevisionRepository, session=async_session)
+    lineage_edge_repository = providers.Factory(LineageEdgeRepository, session=async_session)
     environment_repository = providers.Factory(OrganizationEnvironmentSettingRepository, session=async_session)
     llm_connection_repository = providers.Factory(LLMConnectionRepository, session=async_session)
     semantic_model_repository = providers.Factory(SemanticModelRepository, session=async_session)
@@ -256,7 +272,6 @@ class Container(containers.DeclarativeContainer):
         ConnectorSchemaService,
         connector_repository=connector_repository
     )
-
     agent_service = providers.Factory(
         AgentService,
         agent_definition_repository=agent_definition_repository,
@@ -273,6 +288,16 @@ class Container(containers.DeclarativeContainer):
     semantic_search_service = providers.Factory(
         SemanticSearchService,
         vector_store_entry_repository=semantic_vector_store_repository,
+    )
+
+    lineage_service = providers.Factory(
+        LineageService,
+        lineage_edge_repository=lineage_edge_repository,
+        dataset_repository=dataset_repository,
+        semantic_model_repository=semantic_model_repository,
+        sql_saved_query_repository=sql_saved_query_repository,
+        dashboard_repository=dashboard_repository,
+        connector_repository=connector_repository,
     )
 
     runtime_auth_service = providers.Singleton(RuntimeAuthService)
@@ -316,7 +341,8 @@ class Container(containers.DeclarativeContainer):
         connector_service=connector_service,
         agent_service=agent_service,
         semantic_search_service=semantic_search_service,
-        emvironment_service=environment_service
+        emvironment_service=environment_service,
+        lineage_service=lineage_service,
     )
 
     semantic_query_service = providers.Factory(
@@ -334,6 +360,7 @@ class Container(containers.DeclarativeContainer):
         project_repository=project_repository,
         semantic_model_service=semantic_model_service,
         snapshot_storage=dashboard_snapshot_storage,
+        lineage_service=lineage_service,
     )
     
     agent_job_request_service = providers.Factory(
@@ -370,6 +397,20 @@ class Container(containers.DeclarativeContainer):
         job_repository=job_repository,
         task_dispatch_service=task_dispatch_service,
     )
+    connector_sync_job_request_service = providers.Factory(
+        ConnectorSyncJobRequestService,
+        job_repository=job_repository,
+        task_dispatch_service=task_dispatch_service,
+    )
+    connector_sync_service = providers.Factory(
+        ConnectorSyncService,
+        connector_repository=connector_repository,
+        connector_sync_state_repository=connector_sync_state_repository,
+        dataset_repository=dataset_repository,
+        job_repository=job_repository,
+        connector_service=connector_service,
+        connector_sync_job_request_service=connector_sync_job_request_service,
+    )
     job_service = providers.Factory(
         JobService,
         job_repository=job_repository,
@@ -385,6 +426,7 @@ class Container(containers.DeclarativeContainer):
         user_repository=user_repository,
         sql_job_request_service=sql_job_request_service,
         request_context_provider=request_context_provider,
+        lineage_service=lineage_service,
     )
     dataset_service = providers.Factory(
         DatasetService,
@@ -401,6 +443,7 @@ class Container(containers.DeclarativeContainer):
         dataset_job_request_service=dataset_job_request_service,
         job_repository=job_repository,
         request_context_provider=request_context_provider,
+        lineage_service=lineage_service,
     )
 
     thread_service = providers.Factory(

@@ -16,13 +16,19 @@ from langbridge.packages.common.langbridge_common.contracts.datasets import (
     DatasetEnsureRequest,
     DatasetEnsureResponse,
     DatasetListResponse,
+    DatasetLineageResponse,
     DatasetPreviewRequest,
     DatasetPreviewResponse,
     DatasetProfileRequest,
     DatasetProfileResponse,
     DatasetResponse,
+    DatasetRestoreRequest,
+    DatasetImpactResponse,
     DatasetUpdateRequest,
     DatasetUsageResponse,
+    DatasetVersionDiffResponse,
+    DatasetVersionListResponse,
+    DatasetVersionResponse,
 )
 from langbridge.packages.common.langbridge_common.errors.application_errors import (
     BusinessValidationError,
@@ -131,6 +137,100 @@ async def get_dataset(
     service: DatasetService = Depends(Provide[Container.dataset_service]),
 ) -> DatasetResponse:
     return await service.get_dataset(
+        dataset_id=dataset_id,
+        workspace_id=workspace_id,
+        current_user=current_user,
+    )
+
+@router.get("/{dataset_id}/versions", response_model=DatasetVersionListResponse, status_code=status.HTTP_200_OK)
+@inject
+async def list_dataset_versions(
+    dataset_id: UUID,
+    workspace_id: UUID = Query(..., description="Workspace (organization) scope id."),
+    current_user: UserResponse = Depends(get_current_user),
+    service: DatasetService = Depends(Provide[Container.dataset_service]),
+) -> DatasetVersionListResponse:
+    return await service.list_dataset_versions(
+        dataset_id=dataset_id,
+        workspace_id=workspace_id,
+        current_user=current_user,
+    )
+
+@router.get(
+    "/{dataset_id}/versions/{revision_id}",
+    response_model=DatasetVersionResponse,
+    status_code=status.HTTP_200_OK,
+)
+@inject
+async def get_dataset_version(
+    dataset_id: UUID,
+    revision_id: UUID,
+    workspace_id: UUID = Query(..., description="Workspace (organization) scope id."),
+    current_user: UserResponse = Depends(get_current_user),
+    service: DatasetService = Depends(Provide[Container.dataset_service]),
+) -> DatasetVersionResponse:
+    return await service.get_dataset_version(
+        dataset_id=dataset_id,
+        revision_id=revision_id,
+        workspace_id=workspace_id,
+        current_user=current_user,
+    )
+
+@router.get("/{dataset_id}/diff", response_model=DatasetVersionDiffResponse, status_code=status.HTTP_200_OK)
+@inject
+async def diff_dataset_versions(
+    dataset_id: UUID,
+    from_revision: UUID = Query(...),
+    to_revision: UUID = Query(...),
+    workspace_id: UUID = Query(..., description="Workspace (organization) scope id."),
+    current_user: UserResponse = Depends(get_current_user),
+    service: DatasetService = Depends(Provide[Container.dataset_service]),
+) -> DatasetVersionDiffResponse:
+    return await service.diff_dataset_versions(
+        dataset_id=dataset_id,
+        workspace_id=workspace_id,
+        from_revision_id=from_revision,
+        to_revision_id=to_revision,
+        current_user=current_user,
+    )
+
+@router.post("/{dataset_id}/restore", response_model=DatasetResponse, status_code=status.HTTP_200_OK)
+@inject
+async def restore_dataset(
+    dataset_id: UUID,
+    request: DatasetRestoreRequest = Body(...),
+    current_user: UserResponse = Depends(get_current_user),
+    service: DatasetService = Depends(Provide[Container.dataset_service]),
+) -> DatasetResponse:
+    return await service.restore_dataset(
+        dataset_id=dataset_id,
+        request=request,
+        current_user=current_user,
+    )
+
+@router.get("/{dataset_id}/lineage", response_model=DatasetLineageResponse, status_code=status.HTTP_200_OK)
+@inject
+async def get_dataset_lineage(
+    dataset_id: UUID,
+    workspace_id: UUID = Query(..., description="Workspace (organization) scope id."),
+    current_user: UserResponse = Depends(get_current_user),
+    service: DatasetService = Depends(Provide[Container.dataset_service]),
+) -> DatasetLineageResponse:
+    return await service.get_lineage(
+        dataset_id=dataset_id,
+        workspace_id=workspace_id,
+        current_user=current_user,
+    )
+
+@router.get("/{dataset_id}/impact", response_model=DatasetImpactResponse, status_code=status.HTTP_200_OK)
+@inject
+async def get_dataset_impact(
+    dataset_id: UUID,
+    workspace_id: UUID = Query(..., description="Workspace (organization) scope id."),
+    current_user: UserResponse = Depends(get_current_user),
+    service: DatasetService = Depends(Provide[Container.dataset_service]),
+) -> DatasetImpactResponse:
+    return await service.get_impact(
         dataset_id=dataset_id,
         workspace_id=workspace_id,
         current_user=current_user,

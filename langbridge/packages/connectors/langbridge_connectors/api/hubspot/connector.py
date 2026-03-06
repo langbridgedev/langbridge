@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from langbridge.packages.connectors.langbridge_connectors.api._http_api_connector import (
@@ -28,6 +29,9 @@ class HubSpotApiConnector(HttpApiConnector):
                 label="Contacts",
                 primary_key="id",
                 cursor_field="after",
+                incremental_cursor_field="updatedAt",
+                supports_incremental=True,
+                default_sync_mode="INCREMENTAL",
             ),
             path="/crm/v3/objects/contacts",
             response_key="results",
@@ -38,6 +42,9 @@ class HubSpotApiConnector(HttpApiConnector):
                 label="Companies",
                 primary_key="id",
                 cursor_field="after",
+                incremental_cursor_field="updatedAt",
+                supports_incremental=True,
+                default_sync_mode="INCREMENTAL",
             ),
             path="/crm/v3/objects/companies",
             response_key="results",
@@ -48,6 +55,9 @@ class HubSpotApiConnector(HttpApiConnector):
                 label="Deals",
                 primary_key="id",
                 cursor_field="after",
+                incremental_cursor_field="updatedAt",
+                supports_incremental=True,
+                default_sync_mode="INCREMENTAL",
             ),
             path="/crm/v3/objects/deals",
             response_key="results",
@@ -58,6 +68,9 @@ class HubSpotApiConnector(HttpApiConnector):
                 label="Tickets",
                 primary_key="id",
                 cursor_field="after",
+                incremental_cursor_field="updatedAt",
+                supports_incremental=True,
+                default_sync_mode="INCREMENTAL",
             ),
             path="/crm/v3/objects/tickets",
             response_key="results",
@@ -86,6 +99,7 @@ class HubSpotApiConnector(HttpApiConnector):
         self,
         resource_name: str,
         *,
+        since: str | None = None,
         cursor: str | None = None,
         limit: int | None = None,
     ) -> ApiExtractResult:
@@ -106,6 +120,8 @@ class HubSpotApiConnector(HttpApiConnector):
         records = payload.get(definition.response_key or "results", []) if isinstance(payload, dict) else []
         if not isinstance(records, list):
             records = []
+        if since:
+            records = [record for record in records if _is_newer_hubspot_record(record, since)]
 
         flattened_records, child_records = flatten_api_records(
             resource_name=definition.resource.name,
@@ -126,5 +142,32 @@ class HubSpotApiConnector(HttpApiConnector):
             status="success",
             records=flattened_records,
             next_cursor=next_cursor,
+            checkpoint_cursor=_max_updated_at(flattened_records, "updatedAt"),
             child_records=child_records,
         )
+
+
+def _is_newer_hubspot_record(record: Any, since: str) -> bool:
+    if not isinstance(record, dict):
+        return False
+    record_value = record.get("updatedAt")
+    if record_value is None:
+        return True
+    return _parse_datetime(record_value) >= _parse_datetime(since)
+
+
+def _max_updated_at(rows: list[dict[str, Any]], field_name: str) -> str | None:
+    values = [str(row.get(field_name) or "").strip() for row in rows if str(row.get(field_name) or "").strip()]
+    if not values:
+        return None
+    return max(values)
+
+
+def _parse_datetime(value: Any) -> datetime:
+    normalized = str(value or "").strip().replace("Z", "+00:00")
+    if not normalized:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

@@ -9,6 +9,7 @@ from langbridge.apps.api.langbridge_api.services.semantic.semantic_model_service
 from langbridge.packages.common.langbridge_common.contracts.semantic import (
     SemanticModelCatalogColumnResponse,
     SemanticModelCatalogResponse,
+    SemanticModelCreateRequest,
     SemanticModelCatalogSchemaResponse,
     SemanticModelCatalogTableResponse,
 )
@@ -109,3 +110,115 @@ async def test_generate_model_yaml_from_selection_returns_yaml_with_selected_col
     assert "sales_customers" in response.yaml_text
     assert "relationships:" in response.yaml_text
     assert isinstance(response.warnings, list)
+
+
+class _SemanticModelRepository:
+    def __init__(self) -> None:
+        self.items: dict[uuid.UUID, object] = {}
+
+    def add(self, model) -> None:
+        self.items[model.id] = model
+
+
+class _LineageCaptureService:
+    def __init__(self) -> None:
+        self.models: list[object] = []
+
+    async def register_semantic_model_lineage(self, *, model) -> None:
+        self.models.append(model)
+
+
+class _GeneratedSemanticModel:
+    def __init__(self, *, dataset_id: uuid.UUID) -> None:
+        self.connector = None
+        self.name = None
+        self.description = None
+        self._dataset_id = dataset_id
+
+    def model_dump(self, by_alias: bool = True, exclude_none: bool = True) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "tables": {
+                "orders": {
+                    "dataset_id": str(self._dataset_id),
+                }
+            }
+        }
+        if self.name:
+            payload["name"] = self.name
+        if self.description:
+            payload["description"] = self.description
+        if self.connector:
+            payload["connector"] = self.connector
+        return payload
+
+
+@pytest.mark.anyio
+async def test_create_model_registers_lineage_for_saved_semantic_model(monkeypatch) -> None:
+    connector_id = uuid.uuid4()
+    organization_id = uuid.uuid4()
+    dataset_id = uuid.uuid4()
+    repository = _SemanticModelRepository()
+    lineage_service = _LineageCaptureService()
+    service = SemanticModelService(
+        repository=repository,
+        builder=SimpleNamespace(build_for_scope=lambda connector_id: _GeneratedSemanticModel(dataset_id=dataset_id)),
+        organization_repository=SimpleNamespace(get_by_id=lambda _organization_id: SimpleNamespace(id=organization_id)),
+        project_repository=SimpleNamespace(get_by_id=lambda _project_id: None),
+        connector_service=SimpleNamespace(
+            get_connector=lambda _connector_id: SimpleNamespace(
+                id=connector_id,
+                name="warehouse",
+                connector_type="POSTGRES",
+                config={},
+                organization_id=organization_id,
+            )
+        ),
+        agent_service=SimpleNamespace(),
+        semantic_search_service=SimpleNamespace(),
+        emvironment_service=SimpleNamespace(),
+        lineage_service=lineage_service,
+    )
+
+    async def _build_for_scope(*, connector_id: uuid.UUID):
+        return _GeneratedSemanticModel(dataset_id=dataset_id)
+
+    async def _get_organization(_organization_id: uuid.UUID):
+        return SimpleNamespace(id=organization_id)
+
+    async def _get_project(_project_id: uuid.UUID):
+        return None
+
+    async def _get_connector(_connector_id: uuid.UUID):
+        return SimpleNamespace(
+            id=connector_id,
+            name="warehouse",
+            connector_type="POSTGRES",
+            config={},
+            organization_id=organization_id,
+        )
+
+    async def _noop_populate_vector_indexes(*args, **kwargs) -> None:
+        return None
+
+    service._builder = SimpleNamespace(build_for_scope=_build_for_scope)
+    service._organization_repository = SimpleNamespace(get_by_id=_get_organization)
+    service._project_repository = SimpleNamespace(get_by_id=_get_project)
+    service._connector_service = SimpleNamespace(get_connector=_get_connector)
+    monkeypatch.setattr(service, "_populate_vector_indexes", _noop_populate_vector_indexes)
+
+    response = await service.create_model(
+        SemanticModelCreateRequest(
+            connector_id=connector_id,
+            organization_id=organization_id,
+            name="Orders semantic model",
+            description="Maps orders dataset",
+            auto_generate=True,
+        )
+    )
+
+    assert response.id in repository.items
+    assert len(lineage_service.models) == 1
+    saved_model = lineage_service.models[0]
+    assert saved_model.id == response.id
+    assert '"dataset_id":' in saved_model.content_json
+    assert str(dataset_id) in saved_model.content_json
