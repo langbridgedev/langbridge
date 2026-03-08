@@ -50,3 +50,8 @@ class AgentJobStateResponse(_Base):
     final_response: JobFinalResponse | None = None
     thinking_breakdown: dict[str, Any] | None = None
     has_internal_events: bool = False
+
+
+class AgentJobCancelResponse(_Base):
+    accepted: bool
+    status: str

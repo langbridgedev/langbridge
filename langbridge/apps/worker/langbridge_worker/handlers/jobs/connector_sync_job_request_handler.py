@@ -130,6 +130,16 @@ class ConnectorSyncJobRequestHandler(BaseMessageHandler):
         try:
             total_resources = max(1, len(request.resource_names))
             for index, resource_name in enumerate(request.resource_names):
+                refreshed_job = await self._job_repository.get_by_id(job_record.id)
+                if refreshed_job is not None:
+                    job_record = refreshed_job
+                if job_record.status == JobStatus.cancelled:
+                    self._logger.info("Connector sync job %s cancelled before resource %s.", job_record.id, resource_name)
+                    if job_record.finished_at is None:
+                        job_record.finished_at = datetime.now(timezone.utc)
+                    if not job_record.status_message:
+                        job_record.status_message = "Connector sync cancelled."
+                    return None
                 job_record.progress = max(5, 5 + int((index / total_resources) * 85))
                 job_record.status_message = f"Syncing {resource_name} ({index + 1}/{total_resources})."
                 active_state = await self._runtime.get_or_create_state(
@@ -170,6 +180,17 @@ class ConnectorSyncJobRequestHandler(BaseMessageHandler):
                     )
                 )
 
+            refreshed_job = await self._job_repository.get_by_id(job_record.id)
+            if refreshed_job is not None:
+                job_record = refreshed_job
+            if job_record.status == JobStatus.cancelled:
+                self._logger.info("Connector sync job %s cancelled before completion.", job_record.id)
+                if job_record.finished_at is None:
+                    job_record.finished_at = datetime.now(timezone.utc)
+                if not job_record.status_message:
+                    job_record.status_message = "Connector sync cancelled."
+                return None
+
             job_record.status = JobStatus.succeeded
             job_record.progress = 100
             job_record.status_message = "Connector sync completed."
@@ -183,11 +204,15 @@ class ConnectorSyncJobRequestHandler(BaseMessageHandler):
             self._logger.exception("Connector sync job %s failed: %s", job_record.id, exc)
             if active_state is not None:
                 await self._runtime.mark_failed(state=active_state, error_message=str(exc))
-            job_record.status = JobStatus.failed
-            job_record.progress = 100
-            job_record.status_message = "Connector sync failed."
-            job_record.finished_at = datetime.now(timezone.utc)
-            job_record.error = {"message": str(exc)}
+            refreshed_job = await self._job_repository.get_by_id(job_record.id)
+            if refreshed_job is not None:
+                job_record = refreshed_job
+            if job_record.status != JobStatus.cancelled:
+                job_record.status = JobStatus.failed
+                job_record.progress = 100
+                job_record.status_message = "Connector sync failed."
+                job_record.finished_at = datetime.now(timezone.utc)
+                job_record.error = {"message": str(exc)}
         return None
 
     @staticmethod

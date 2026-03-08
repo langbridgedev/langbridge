@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from langbridge.packages.common.langbridge_common.contracts.auth import UserResponse
 from langbridge.packages.common.langbridge_common.contracts.jobs.agent_job import (
+    AgentJobCancelResponse,
     AgentJobStateResponse,
     CreateAgentJobRequest,
     JobEventResponse,
@@ -22,7 +24,12 @@ from langbridge.packages.common.langbridge_common.contracts.jobs.semantic_query_
     CreateSemanticQueryJobRequest,
 )
 from langbridge.packages.common.langbridge_common.contracts.jobs.type import JobType
-from langbridge.packages.common.langbridge_common.db.job import JobRecord
+from langbridge.packages.common.langbridge_common.db.job import (
+    JobEventRecord,
+    JobEventVisibility as DbJobEventVisibility,
+    JobRecord,
+    JobStatus,
+)
 from langbridge.packages.common.langbridge_common.errors.application_errors import (
     PermissionDeniedBusinessValidationError,
     ResourceNotFound,
@@ -66,6 +73,43 @@ class JobService:
             thinking_breakdown=thinking_breakdown,
             has_internal_events=has_internal_events,
         )
+
+    async def cancel_agent_job(
+        self,
+        *,
+        job_id: uuid.UUID,
+        organization_id: uuid.UUID,
+        current_user: UserResponse,
+    ) -> AgentJobCancelResponse:
+        job = await self._job_repository.get_by_id(job_id)
+        if job is None:
+            raise ResourceNotFound("Job not found")
+
+        self._enforce_job_access(job, organization_id, current_user)
+
+        if job.status in {JobStatus.succeeded, JobStatus.failed, JobStatus.cancelled}:
+            return AgentJobCancelResponse(accepted=True, status=job.status.value)
+
+        now = datetime.now(timezone.utc)
+        job.status = JobStatus.cancelled
+        job.finished_at = now
+        job.updated_at = now
+        job.status_message = "Job cancelled by user."
+        job.error = {"message": "Job cancelled by user."}
+        job.job_events.append(
+            JobEventRecord(
+                job_id=job.id,
+                event_type="JobCancelled",
+                visibility=DbJobEventVisibility.public,
+                details={
+                    "visibility": "public",
+                    "message": "Job cancelled by user.",
+                    "source": "api",
+                    "details": {},
+                },
+            )
+        )
+        return AgentJobCancelResponse(accepted=True, status=JobStatus.cancelled.value)
 
     def _enforce_job_access(
         self,

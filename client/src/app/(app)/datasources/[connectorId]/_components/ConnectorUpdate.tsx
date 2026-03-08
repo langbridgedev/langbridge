@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Save,
   ShieldCheck,
+  Square,
   Trash2,
 } from 'lucide-react';
 
@@ -21,7 +22,7 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
-import { fetchAgentJobState, type AgentJobState } from '@/orchestration/jobs';
+import { cancelAgentJob, fetchAgentJobState, type AgentJobState } from '@/orchestration/jobs';
 import { ApiError } from '@/orchestration/http';
 import {
   deleteConnector,
@@ -200,6 +201,11 @@ export function ConnectorUpdate({ connectorId, organizationId }: ConnectorUpdate
         title: 'Sync completed',
         description: job.finalResponse?.summary || 'Connector sync finished successfully.',
       });
+    } else if (job.status === 'cancelled') {
+      toast({
+        title: 'Sync cancelled',
+        description: job.error?.message || 'Connector sync was cancelled.',
+      });
     } else {
       toast({
         title: 'Sync failed',
@@ -297,6 +303,29 @@ export function ConnectorUpdate({ connectorId, organizationId }: ConnectorUpdate
     onError: (error: unknown) => {
       toast({
         title: 'Sync failed to start',
+        description: resolveError(error),
+        variant: 'destructive',
+      });
+    },
+  });
+
+  const cancelJobMutation = useMutation({
+    mutationFn: (jobId: string) => cancelAgentJob(organizationId, jobId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['connector-sync-job', organizationId, activeJobId] }),
+        queryClient.invalidateQueries({ queryKey: syncHistoryQueryKey(organizationId, connectorId) }),
+        queryClient.invalidateQueries({ queryKey: syncStateQueryKey(organizationId, connectorId) }),
+        queryClient.invalidateQueries({ queryKey: resourceQueryKey(organizationId, connectorId) }),
+      ]);
+      toast({
+        title: 'Cancellation requested',
+        description: 'The sync job was marked for cancellation.',
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        title: 'Unable to cancel sync',
         description: resolveError(error),
         variant: 'destructive',
       });
@@ -549,9 +578,24 @@ export function ConnectorUpdate({ connectorId, organizationId }: ConnectorUpdate
                   {formatStatus(activeJobQuery.data.status)} | {activeJobQuery.data.progress}% complete
                 </p>
               </div>
-              <p className="text-sm text-[color:var(--text-secondary)]">
-                {activeJobQuery.data.events.at(-1)?.message || activeJobQuery.data.finalResponse?.summary || 'Sync in progress'}
-              </p>
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                <p className="text-sm text-[color:var(--text-secondary)]">
+                  {activeJobQuery.data.events.at(-1)?.message || activeJobQuery.data.finalResponse?.summary || 'Sync in progress'}
+                </p>
+                {!JOB_TERMINAL_STATUSES.has(activeJobQuery.data.status) ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => cancelJobMutation.mutate(activeJobQuery.data.id)}
+                    isLoading={cancelJobMutation.isPending}
+                    disabled={cancelJobMutation.isPending}
+                  >
+                    <Square className="mr-2 h-4 w-4" aria-hidden="true" />
+                    Cancel sync
+                  </Button>
+                ) : null}
+              </div>
             </div>
           </div>
         ) : null}
@@ -711,7 +755,21 @@ export function ConnectorUpdate({ connectorId, organizationId }: ConnectorUpdate
                 >
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-sm font-medium text-[color:var(--text-primary)]">{formatStatus(item.status)}</p>
-                    <p className="text-xs text-[color:var(--text-muted)]">{item.progress}%</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs text-[color:var(--text-muted)]">{item.progress}%</p>
+                      {!JOB_TERMINAL_STATUSES.has(item.status) ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => cancelJobMutation.mutate(item.jobId)}
+                          isLoading={cancelJobMutation.isPending && activeJobId === item.jobId}
+                          disabled={cancelJobMutation.isPending}
+                        >
+                          Cancel
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
                   <p className="mt-1 text-xs text-[color:var(--text-muted)]">{item.statusMessage || 'No status message'}</p>
                   <p className="mt-2 text-xs text-[color:var(--text-muted)]">

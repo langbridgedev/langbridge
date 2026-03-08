@@ -46,6 +46,11 @@ export type AgentJobState = {
   hasInternalEvents?: boolean;
 };
 
+export type AgentJobCancelResponse = {
+  accepted: boolean;
+  status: string;
+};
+
 export async function fetchAgentJobState(
   organizationId: string,
   jobId: string,
@@ -57,4 +62,16 @@ export async function fetchAgentJobState(
   }
   const query = params.toString();
   return apiFetch<AgentJobState>(`${basePath(organizationId)}/${jobId}${query ? `?${query}` : ''}`);
+}
+
+export async function cancelAgentJob(
+  organizationId: string,
+  jobId: string,
+): Promise<AgentJobCancelResponse> {
+  if (!jobId) {
+    throw new Error('Job id is required.');
+  }
+  return apiFetch<AgentJobCancelResponse>(`${basePath(organizationId)}/${jobId}/cancel`, {
+    method: 'POST',
+  });
 }

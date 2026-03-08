@@ -64,6 +64,26 @@ const DEFAULT_CREATE_STATE: CreateState = {
   maxRowsPreview: '1000',
 };
 
+const SQL_CONNECTOR_TYPES = new Set([
+  'SQLSERVER',
+  'POSTGRES',
+  'MYSQL',
+  'MARIADB',
+  'SNOWFLAKE',
+  'REDSHIFT',
+  'BIGQUERY',
+  'ORACLE',
+  'SQLITE',
+  'TRINO',
+]);
+
+function isSqlConnector(connectorType?: string | null): boolean {
+  if (!connectorType) {
+    return false;
+  }
+  return SQL_CONNECTOR_TYPES.has(connectorType.toUpperCase());
+}
+
 export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element {
   const organizationId = params.organizationId;
   const router = useRouter();
@@ -151,79 +171,120 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
     },
   });
 
-  const connectors = connectorsQuery.data || [];
+  const connectors = useMemo(() => connectorsQuery.data || [], [connectorsQuery.data]);
 
   const selectedColumnCount = useMemo(
     () => Object.values(selectedColumns).filter(Boolean).length,
     [selectedColumns],
   );
 
-  async function loadSchemas(connectionId: string) {
-    if (!connectionId) {
-      setSchemas([]);
-      return;
-    }
-    setLoadingSchemas(true);
-    setModalError(null);
-    try {
-      const response = await fetchConnectorSchemas(organizationId, connectionId);
-      setSchemas(response.schemas || []);
-    } catch (error) {
-      setModalError(resolveError(error));
-    } finally {
-      setLoadingSchemas(false);
-    }
-  }
+  const tableConnectors = useMemo(
+    () => connectors.filter((connector) => isSqlConnector(connector.connectorType)),
+    [connectors],
+  );
 
-  async function loadTables(connectionId: string, schemaName: string) {
-    if (!connectionId || !schemaName) {
-      setTables([]);
-      return;
-    }
-    setLoadingTables(true);
-    setModalError(null);
-    try {
-      const response = await fetchConnectorTables(organizationId, connectionId, schemaName);
-      setTables(response.tables || []);
-    } catch (error) {
-      setModalError(resolveError(error));
-    } finally {
-      setLoadingTables(false);
-    }
-  }
+  const availableCreateConnectors = createState.datasetType === 'TABLE' ? tableConnectors : connectors;
 
-  async function loadColumns(connectionId: string, schemaName: string, tableName: string) {
-    if (!connectionId || !schemaName || !tableName) {
-      setColumns([]);
+  const loadSchemas = useCallback(
+    async (connectionId: string) => {
+      if (!connectionId) {
+        setSchemas([]);
+        return;
+      }
+      setLoadingSchemas(true);
+      setModalError(null);
+      try {
+        const response = await fetchConnectorSchemas(organizationId, connectionId);
+        setSchemas(response.schemas || []);
+      } catch (error) {
+        setModalError(resolveError(error));
+      } finally {
+        setLoadingSchemas(false);
+      }
+    },
+    [organizationId],
+  );
+
+  const loadTables = useCallback(
+    async (connectionId: string, schemaName: string) => {
+      if (!connectionId || !schemaName) {
+        setTables([]);
+        return;
+      }
+      setLoadingTables(true);
+      setModalError(null);
+      try {
+        const response = await fetchConnectorTables(organizationId, connectionId, schemaName);
+        setTables(response.tables || []);
+      } catch (error) {
+        setModalError(resolveError(error));
+      } finally {
+        setLoadingTables(false);
+      }
+    },
+    [organizationId],
+  );
+
+  const loadColumns = useCallback(
+    async (connectionId: string, schemaName: string, tableName: string) => {
+      if (!connectionId || !schemaName || !tableName) {
+        setColumns([]);
+        return;
+      }
+      setLoadingColumns(true);
+      setModalError(null);
+      try {
+        const response = await fetchConnectorColumns(organizationId, connectionId, schemaName, tableName);
+        const nextColumns = Object.values(response.columns || {});
+        setColumns(nextColumns);
+        const nextSelected: Record<string, boolean> = {};
+        nextColumns.forEach((column) => {
+          nextSelected[column.name] = true;
+        });
+        setSelectedColumns(nextSelected);
+      } catch (error) {
+        setModalError(resolveError(error));
+      } finally {
+        setLoadingColumns(false);
+      }
+    },
+    [organizationId],
+  );
+
+  useEffect(() => {
+    if (createState.datasetType !== 'TABLE') {
       return;
     }
-    setLoadingColumns(true);
-    setModalError(null);
-    try {
-      const response = await fetchConnectorColumns(organizationId, connectionId, schemaName, tableName);
-      const nextColumns = Object.values(response.columns || {});
-      setColumns(nextColumns);
-      const nextSelected: Record<string, boolean> = {};
-      nextColumns.forEach((column) => {
-        nextSelected[column.name] = true;
-      });
-      setSelectedColumns(nextSelected);
-    } catch (error) {
-      setModalError(resolveError(error));
-    } finally {
-      setLoadingColumns(false);
+    const currentConnectorIsValid = tableConnectors.some((connector) => connector.id === createState.connectionId);
+    if (currentConnectorIsValid) {
+      return;
     }
-  }
+    const nextConnectionId = tableConnectors[0]?.id || '';
+    setCreateState((current) => ({
+      ...current,
+      connectionId: nextConnectionId,
+      schemaName: '',
+      tableName: '',
+    }));
+    setSchemas([]);
+    setTables([]);
+    setColumns([]);
+    setSelectedColumns({});
+    if (nextConnectionId) {
+      void loadSchemas(nextConnectionId);
+    }
+  }, [createState.connectionId, createState.datasetType, loadSchemas, tableConnectors]);
 
   function openCreateModal() {
+    const defaultConnectionId = tableConnectors[0]?.id || connectors[0]?.id || '';
     setCreateState({
       ...DEFAULT_CREATE_STATE,
-      connectionId: connectors[0]?.id || '',
+      connectionId: defaultConnectionId,
     });
     setModalError(null);
     setCreateOpen(true);
-    if (connectors[0]?.id) {
-      void loadSchemas(connectors[0].id);
+    if (defaultConnectionId) {
+      void loadSchemas(defaultConnectionId);
     }
   }
 
@@ -421,7 +482,24 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
                 value={createState.datasetType}
                 onChange={(event) => {
                   const nextType = (event.target.value as DatasetType) || 'TABLE';
-                  setCreateState((current) => ({ ...current, datasetType: nextType }));
+                  const nextConnectionId =
+                    nextType === 'TABLE' && !tableConnectors.some((connector) => connector.id === createState.connectionId)
+                      ? (tableConnectors[0]?.id || '')
+                      : createState.connectionId;
+                  setCreateState((current) => ({
+                    ...current,
+                    datasetType: nextType,
+                    connectionId: nextConnectionId,
+                    schemaName: '',
+                    tableName: '',
+                  }));
+                  setSchemas([]);
+                  setTables([]);
+                  setColumns([]);
+                  setSelectedColumns({});
+                  if (nextType === 'TABLE' && nextConnectionId) {
+                    void loadSchemas(nextConnectionId);
+                  }
                 }}
               >
                 <option value="TABLE">Table</option>
@@ -468,12 +546,15 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
                 }}
               >
                 <option value="">Select connection</option>
-                {connectors.map((connector) => (
+                {availableCreateConnectors.map((connector) => (
                   <option key={connector.id} value={connector.id}>
                     {connector.name}
                   </option>
                 ))}
               </Select>
+              {createState.datasetType === 'TABLE' && availableCreateConnectors.length === 0 ? (
+                <p className="text-xs text-[color:var(--text-muted)]">No SQL connectors are available for table datasets.</p>
+              ) : null}
             </div>
             <div className="space-y-1">
               <Label>Max preview rows</Label>
