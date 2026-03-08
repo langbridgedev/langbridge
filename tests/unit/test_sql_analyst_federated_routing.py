@@ -139,6 +139,7 @@ def test_sql_analyst_tool_routes_cross_source_to_federation() -> None:
     assert connector.calls == []
     assert len(federated_executor.calls) == 1
     assert federated_executor.calls[0]["dialect"] == "postgres"
+    assert federated_executor.calls[0]["max_rows"] == 50
 
 
 def test_sql_analyst_tool_single_source_uses_connector_execution() -> None:

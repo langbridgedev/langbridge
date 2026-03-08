@@ -89,9 +89,6 @@ jobs:
           - name: worker
             context: .
             file: langbridge/Dockerfile.worker
-          - name: gateway
-            context: .
-            file: langbridge/Dockerfile.gateway
           - name: migrate
             context: .
             file: langbridge/Dockerfile.migrate

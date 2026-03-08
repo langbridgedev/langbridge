@@ -2,7 +2,6 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from types import ModuleType
 from types import SimpleNamespace
 
 if "pandas" not in sys.modules:
@@ -17,14 +16,6 @@ if "pandas" not in sys.modules:
         ),
     )
     sys.modules["pandas"] = pandas_stub
-
-if "trino" not in sys.modules:
-    trino_stub = ModuleType("trino")
-    trino_stub.dbapi = SimpleNamespace(connect=lambda *args, **kwargs: None)
-    trino_auth_stub = ModuleType("trino.auth")
-    trino_auth_stub.BasicAuthentication = lambda *args, **kwargs: None
-    sys.modules["trino"] = trino_stub
-    sys.modules["trino.auth"] = trino_auth_stub
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 PACKAGE_ROOT = REPO_ROOT

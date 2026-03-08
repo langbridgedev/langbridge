@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -10,6 +9,7 @@ import sqlglot
 from sqlglot import exp
 from pydantic import ValidationError
 
+from langbridge.apps.worker.langbridge_worker.dataset_execution import DatasetExecutionResolver
 from langbridge.apps.worker.langbridge_worker.secrets import SecretProviderRegistry
 from langbridge.apps.worker.langbridge_worker.tools import FederatedQueryTool
 from langbridge.packages.common.langbridge_common.config import settings
@@ -27,9 +27,16 @@ from langbridge.packages.common.langbridge_common.errors.application_errors impo
 from langbridge.packages.common.langbridge_common.repositories.connector_repository import (
     ConnectorRepository,
 )
+from langbridge.packages.common.langbridge_common.repositories.dataset_repository import (
+    DatasetRepository,
+)
 from langbridge.packages.common.langbridge_common.repositories.sql_repository import (
     SqlJobRepository,
     SqlJobResultArtifactRepository,
+)
+from langbridge.packages.common.langbridge_common.utils.datasets import (
+    dataset_supports_structured_federation,
+    relation_reference_candidates,
 )
 from langbridge.packages.common.langbridge_common.utils.sql import (
     apply_result_redaction,
@@ -64,6 +71,7 @@ class SqlJobRequestHandler(BaseMessageHandler):
         sql_job_repository: SqlJobRepository,
         sql_job_result_artifact_repository: SqlJobResultArtifactRepository,
         connector_repository: ConnectorRepository,
+        dataset_repository: DatasetRepository | None = None,
         secret_provider_registry: SecretProviderRegistry | None = None,
         federated_query_tool: FederatedQueryTool | None = None,
     ) -> None:
@@ -71,9 +79,13 @@ class SqlJobRequestHandler(BaseMessageHandler):
         self._sql_job_repository = sql_job_repository
         self._sql_job_result_artifact_repository = sql_job_result_artifact_repository
         self._connector_repository = connector_repository
+        self._dataset_repository = dataset_repository
         self._secret_provider_registry = secret_provider_registry or SecretProviderRegistry()
         self._sql_connector_factory = SqlConnectorFactory()
         self._federated_query_tool = federated_query_tool
+        self._dataset_execution_resolver = DatasetExecutionResolver(
+            dataset_repository=self._dataset_repository,
+        )
 
     async def handle(self, payload: SqlJobRequestMessage) -> None:
         request = self._parse_request(payload)
@@ -253,11 +265,11 @@ class SqlJobRequestHandler(BaseMessageHandler):
             max_rows=request.enforced_limit,
             dialect=source_sqlglot_dialect,
         )
-        workflow = self._build_federated_workflow(
+        workflow, source_aliases = await self._build_federated_workflow(
             workspace_id=request.workspace_id,
             query=executable_sql,
             source_dialect=source_sqlglot_dialect,
-            federated_aliases=request.federated_aliases,
+            federated_datasets=request.federated_datasets,
             job=job,
         )
         tool_payload = {
@@ -308,7 +320,7 @@ class SqlJobRequestHandler(BaseMessageHandler):
             "query_sql": executable_sql,
             "federated": True,
             "workflow_id": workflow.id,
-            "source_aliases": sorted(request.federated_aliases.keys()),
+            "source_aliases": source_aliases,
         }
         self._store_preview_artifact(
             job=job,
@@ -369,17 +381,6 @@ class SqlJobRequestHandler(BaseMessageHandler):
             }
         }
 
-    async def _execute_federated_stub(
-        self,
-        job: SqlJobRecord,
-        request: CreateSqlJobRequest,
-    ) -> None:
-        if not settings.SQL_FEDERATION_ENABLED or not request.allow_federation:
-            raise BusinessValidationError("Federated SQL execution is disabled.")
-        raise BusinessValidationError(
-            "Federated SQL interface is available, but no federated executor is configured."
-        )
-
     async def _create_sql_connector(
         self,
         *,
@@ -438,7 +439,6 @@ class SqlJobRequestHandler(BaseMessageHandler):
             ConnectorRuntimeType.SQLSERVER: "tsql",
             ConnectorRuntimeType.ORACLE: "oracle",
             ConnectorRuntimeType.SQLITE: "sqlite",
-            ConnectorRuntimeType.TRINO: "trino",
         }
         return connector_map.get(connector_type, "tsql")
 
@@ -482,73 +482,113 @@ class SqlJobRequestHandler(BaseMessageHandler):
         )
         self._sql_job_result_artifact_repository.add(snapshot_artifact)
 
-    def _build_federated_workflow(
+    async def _build_federated_workflow(
         self,
         *,
         workspace_id: uuid.UUID,
         query: str,
         source_dialect: str,
-        federated_aliases: dict[str, str],
+        federated_datasets: list[dict[str, Any]],
         job: SqlJobRecord,
-    ) -> FederationWorkflow:
-        alias_map = self._normalize_federated_aliases(federated_aliases)
-        table_bindings = self._extract_federated_table_bindings(
+    ) -> tuple[FederationWorkflow, list[str]]:
+        return await self._build_dataset_federated_workflow(
+            workspace_id=workspace_id,
             query=query,
             source_dialect=source_dialect,
-            alias_map=alias_map,
+            federated_datasets=federated_datasets,
+            job=job,
+        )
+
+    async def _build_dataset_federated_workflow(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        query: str,
+        source_dialect: str,
+        federated_datasets: list[dict[str, Any]],
+        job: SqlJobRecord,
+    ) -> tuple[FederationWorkflow, list[str]]:
+        if self._dataset_repository is None:
+            raise BusinessValidationError("Dataset repository is required for dataset-backed federated SQL.")
+
+        dataset_map = self._normalize_federated_datasets(federated_datasets)
+        datasets = await self._dataset_repository.get_by_ids_for_workspace(
+            workspace_id=workspace_id,
+            dataset_ids=[dataset_id for _, dataset_id in dataset_map.values()],
+        )
+        datasets_by_id = {dataset.id: dataset for dataset in datasets}
+        for alias, dataset_id in dataset_map.values():
+            if dataset_id not in datasets_by_id:
+                raise BusinessValidationError(
+                    f"Federated dataset alias '{alias}' references unknown dataset '{dataset_id}'."
+                )
+
+        table_bindings = self._extract_dataset_federated_table_bindings(
+            query=query,
+            source_dialect=source_dialect,
+            dataset_map=dataset_map,
+            datasets_by_id=datasets_by_id,
         )
         workflow_id = f"workflow_sql_{job.id.hex[:12]}"
         dataset_id = f"dataset_sql_{job.id.hex[:12]}"
         dataset_name = f"sql_job_{job.id.hex[:8]}"
-        return FederationWorkflow(
-            id=workflow_id,
-            workspace_id=str(workspace_id),
-            dataset=VirtualDataset(
-                id=dataset_id,
-                name=dataset_name,
+        return (
+            FederationWorkflow(
+                id=workflow_id,
                 workspace_id=str(workspace_id),
-                tables=table_bindings,
-                relationships=[],
+                dataset=VirtualDataset(
+                    id=dataset_id,
+                    name=dataset_name,
+                    workspace_id=str(workspace_id),
+                    tables=table_bindings,
+                    relationships=[],
+                ),
+                broadcast_threshold_bytes=settings.FEDERATION_BROADCAST_THRESHOLD_BYTES,
+                partition_count=settings.FEDERATION_PARTITION_COUNT,
+                max_stage_retries=settings.FEDERATION_STAGE_MAX_RETRIES,
+                stage_parallelism=settings.FEDERATION_STAGE_PARALLELISM,
             ),
-            broadcast_threshold_bytes=settings.FEDERATION_BROADCAST_THRESHOLD_BYTES,
-            partition_count=settings.FEDERATION_PARTITION_COUNT,
-            max_stage_retries=settings.FEDERATION_STAGE_MAX_RETRIES,
-            stage_parallelism=settings.FEDERATION_STAGE_PARALLELISM,
+            sorted(alias.strip().lower() for alias, _ in dataset_map.values()),
         )
 
     @staticmethod
-    def _normalize_federated_aliases(federated_aliases: dict[str, str]) -> dict[str, tuple[str, uuid.UUID]]:
-        alias_map: dict[str, tuple[str, uuid.UUID]] = {}
-        for raw_alias, raw_connector_id in (federated_aliases or {}).items():
-            alias = str(raw_alias or "").strip()
+    def _normalize_federated_datasets(
+        federated_datasets: list[dict[str, Any]],
+    ) -> dict[str, tuple[str, uuid.UUID]]:
+        dataset_map: dict[str, tuple[str, uuid.UUID]] = {}
+        for raw_item in federated_datasets or []:
+            item = dict(raw_item or {})
+            alias = str(item.get("alias") or "").strip()
             if not alias:
                 continue
             normalized_alias = alias.lower()
+            raw_dataset_id = item.get("dataset_id") or item.get("datasetId")
             try:
-                connector_id = uuid.UUID(str(raw_connector_id))
+                dataset_id = uuid.UUID(str(raw_dataset_id))
             except (TypeError, ValueError) as exc:
                 raise BusinessValidationError(
-                    f"Federated alias '{alias}' has an invalid connector id."
+                    f"Federated dataset alias '{alias}' has an invalid dataset id."
                 ) from exc
-            existing = alias_map.get(normalized_alias)
-            if existing is not None and existing[1] != connector_id:
+            existing = dataset_map.get(normalized_alias)
+            if existing is not None and existing[1] != dataset_id:
                 raise BusinessValidationError(
-                    f"Federated alias '{alias}' maps to multiple connector ids."
+                    f"Federated dataset alias '{alias}' maps to multiple dataset ids."
                 )
-            alias_map[normalized_alias] = (alias, connector_id)
+            dataset_map[normalized_alias] = (alias, dataset_id)
 
-        if not alias_map:
+        if not dataset_map:
             raise BusinessValidationError(
-                "federated_aliases must include at least one alias to connector mapping."
+                "federated_datasets must include at least one alias to dataset mapping."
             )
-        return alias_map
+        return dataset_map
 
-    def _extract_federated_table_bindings(
+    def _extract_dataset_federated_table_bindings(
         self,
         *,
         query: str,
         source_dialect: str,
-        alias_map: dict[str, tuple[str, uuid.UUID]],
+        dataset_map: dict[str, tuple[str, uuid.UUID]],
+        datasets_by_id: dict[uuid.UUID, Any],
     ) -> dict[str, VirtualTableBinding]:
         try:
             expression = sqlglot.parse_one(query, read=source_dialect)
@@ -560,8 +600,19 @@ class SqlJobRequestHandler(BaseMessageHandler):
             for cte in expression.find_all(exp.CTE)
             if str(cte.alias_or_name or "").strip()
         }
-        single_alias_entry = next(iter(alias_map.values())) if len(alias_map) == 1 else None
         table_bindings: dict[str, VirtualTableBinding] = {}
+        relation_candidates: dict[uuid.UUID, set[str]] = {}
+        for dataset_id, dataset in datasets_by_id.items():
+            descriptor = self._dataset_execution_resolver._build_dataset_execution_descriptor(dataset)
+            if not dataset_supports_structured_federation(
+                source_kind=descriptor.source_kind,
+                storage_kind=descriptor.storage_kind,
+                capabilities=descriptor.execution_capabilities,
+            ):
+                raise BusinessValidationError(
+                    f"Dataset '{dataset.name}' does not support federated structured execution."
+                )
+            relation_candidates[dataset_id] = relation_reference_candidates(descriptor.relation_identity)
 
         for table in expression.find_all(exp.Table):
             table_name = str(table.name or "").strip()
@@ -572,74 +623,86 @@ class SqlJobRequestHandler(BaseMessageHandler):
             if not schema_name and not catalog_name and table_name.lower() in cte_names:
                 continue
 
-            source_alias = catalog_name
-            if not source_alias:
-                if single_alias_entry is None:
-                    raise BusinessValidationError(
-                        f"Table '{table.sql()}' is missing a federated source alias. "
-                        "Use '<source_alias>.<schema>.<table>' when multiple sources are configured."
-                    )
-                source_alias = single_alias_entry[0]
+            reference_candidates = {
+                ".".join(part for part in (catalog_name, schema_name, table_name) if part).lower(),
+                ".".join(part for part in (schema_name, table_name) if part).lower(),
+                table_name.lower(),
+            }
+            reference_candidates = {candidate for candidate in reference_candidates if candidate}
 
-            alias_key = source_alias.lower()
-            alias_entry = alias_map.get(alias_key)
-            if alias_entry is None:
+            canonical_alias: str | None = None
+            dataset_id: uuid.UUID | None = None
+            if catalog_name and catalog_name.lower() in dataset_map:
+                canonical_alias, dataset_id = dataset_map[catalog_name.lower()]
+            else:
+                matched_dataset_ids = [
+                    selected_dataset_id
+                    for selected_dataset_id, candidates in relation_candidates.items()
+                    if candidates.intersection(reference_candidates)
+                ]
+                if len(matched_dataset_ids) == 1:
+                    dataset_id = matched_dataset_ids[0]
+                    canonical_alias = next(
+                        (
+                            alias
+                            for alias, selected_dataset_id in dataset_map.values()
+                            if selected_dataset_id == dataset_id
+                        ),
+                        None,
+                    )
+                elif len(matched_dataset_ids) > 1:
+                    raise BusinessValidationError(
+                        f"Table '{table.sql()}' matches multiple federated datasets. "
+                        "Use an explicit dataset alias prefix."
+                    )
+
+            if dataset_id is None:
                 raise BusinessValidationError(
-                    f"Table '{table.sql()}' references unknown federated alias '{source_alias}'."
+                    f"Table '{table.sql()}' does not resolve to a selected federated dataset."
                 )
-            canonical_alias, connector_id = alias_entry
-            source_id = self._federated_source_id(canonical_alias)
-            table_key = self._federated_table_key(
-                source_alias=canonical_alias,
-                schema_name=schema_name,
-                table_name=table_name,
+
+            dataset = datasets_by_id[dataset_id]
+            binding, _dialect = self._dataset_execution_resolver._build_binding_from_dataset_record(
+                dataset=dataset,
+                table_key=".".join(part for part in (catalog_name, schema_name, table_name) if part) or table_name,
+                logical_schema=schema_name,
+                logical_table_name=table_name,
+                catalog_name=(canonical_alias or catalog_name),
             )
-            metadata: dict[str, Any] = {"source_alias": canonical_alias}
-            if catalog_name:
-                # Catalog in federated SQL is a logical source alias, not a physical DB catalog.
-                metadata.update(
-                    {
-                        "physical_catalog": None,
-                        "physical_schema": schema_name,
-                        "physical_table": table_name,
-                        "skip_catalog_in_pushdown": True,
-                    }
-                )
-            binding = VirtualTableBinding(
-                table_key=table_key,
-                source_id=source_id,
-                connector_id=connector_id,
-                schema=schema_name,
-                table=table_name,
-                catalog=catalog_name if catalog_name else None,
-                metadata=metadata,
+            binding = self._with_dataset_logical_alias(
+                binding=binding,
+                logical_catalog=(canonical_alias or catalog_name),
+                dataset_alias=canonical_alias,
             )
-            existing = table_bindings.get(table_key)
+            existing = table_bindings.get(binding.table_key)
             if existing is not None and existing.model_dump(mode="json") != binding.model_dump(mode="json"):
                 raise BusinessValidationError(
                     f"Table '{table.sql()}' resolves to conflicting federated bindings."
                 )
-            table_bindings[table_key] = binding
+            table_bindings[binding.table_key] = binding
 
         if not table_bindings:
             raise BusinessValidationError(
-                "Federated SQL query must reference at least one physical table."
+                "Federated SQL query must reference at least one structured dataset."
             )
         return table_bindings
 
     @staticmethod
-    def _federated_source_id(alias: str) -> str:
-        normalized = re.sub(r"[^a-z0-9_]", "_", alias.strip().lower())
-        normalized = re.sub(r"_+", "_", normalized).strip("_")
-        return f"source_{normalized or 'default'}"
-
-    @staticmethod
-    def _federated_table_key(*, source_alias: str, schema_name: str | None, table_name: str) -> str:
-        parts = [source_alias.strip().lower()]
-        if schema_name:
-            parts.append(schema_name)
-        parts.append(table_name)
-        return ".".join(parts)
+    def _with_dataset_logical_alias(
+        *,
+        binding: VirtualTableBinding,
+        logical_catalog: str | None,
+        dataset_alias: str | None,
+    ) -> VirtualTableBinding:
+        metadata = dict(binding.metadata or {})
+        if dataset_alias:
+            metadata["dataset_alias"] = dataset_alias
+        return binding.model_copy(
+            update={
+                "catalog": logical_catalog,
+                "metadata": metadata,
+            }
+        )
 
     @staticmethod
     def _extract_execution_columns(
@@ -737,7 +800,10 @@ class SqlJobRequestHandler(BaseMessageHandler):
             {"section": "mode", "value": "federated"},
             {"section": "source_dialect", "value": source_dialect},
             {"section": "normalized_sql", "value": query_sql},
-            {"section": "source_alias_count", "value": str(len(request.federated_aliases))},
+            {
+                "section": "source_alias_count",
+                "value": str(len(request.federated_datasets)),
+            },
             {"section": "table_count", "value": str(len(logical_tables) if isinstance(logical_tables, dict) else 0)},
             {"section": "join_count", "value": str(len(logical_joins) if isinstance(logical_joins, list) else 0)},
             {"section": "stage_count", "value": str(len(physical_stages) if isinstance(physical_stages, list) else 0)},

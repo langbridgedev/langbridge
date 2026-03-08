@@ -31,4 +31,3 @@ pandas==2.3.3
 itsdangerous==2.2.0
 numpy==1.26.4
 faiss-cpu==1.13.1
-trino==0.336.0

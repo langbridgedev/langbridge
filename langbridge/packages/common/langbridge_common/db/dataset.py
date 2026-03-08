@@ -54,6 +54,9 @@ class DatasetRecord(Base):
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     tags_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     dataset_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_kind: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    connector_kind: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    storage_kind: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     dialect: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     catalog_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -61,6 +64,8 @@ class DatasetRecord(Base):
     table_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     storage_uri: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     sql_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    relation_identity_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    execution_capabilities_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     referenced_dataset_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     federated_plan_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

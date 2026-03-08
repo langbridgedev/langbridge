@@ -7,8 +7,7 @@ export type SqlDialect =
   | 'redshift'
   | 'bigquery'
   | 'oracle'
-  | 'sqlite'
-  | 'trino';
+  | 'sqlite';
 export type SqlJobStatus =
   | 'queued'
   | 'running'
@@ -28,7 +27,7 @@ export interface SqlExecuteRequestPayload {
   requestedLimit?: number;
   requestedTimeoutSeconds?: number;
   explain?: boolean;
-  federatedAliases?: Record<string, string>;
+  federatedDatasets?: Array<{ alias: string; datasetId: string }>;
 }
 
 export interface SqlExecuteResponsePayload {

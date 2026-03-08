@@ -74,7 +74,6 @@ const SQL_CONNECTOR_TYPES = new Set([
   'BIGQUERY',
   'ORACLE',
   'SQLITE',
-  'TRINO',
 ]);
 
 function isSqlConnector(connectorType?: string | null): boolean {
@@ -504,9 +503,6 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
               >
                 <option value="TABLE">Table</option>
                 <option value="SQL">SQL</option>
-                <option value="FEDERATED" disabled>
-                  Federated (Feature flag)
-                </option>
                 <option value="FILE">File</option>
               </Select>
             </div>

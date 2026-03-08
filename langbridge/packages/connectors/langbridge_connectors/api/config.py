@@ -19,7 +19,6 @@ class ConnectorRuntimeType(Enum):
     SQLITE = "SQLITE"
     FAISS = "FAISS"
     QDRANT = "QDRANT"
-    TRINO = "TRINO"
     SHOPIFY = "SHOPIFY"
     STRIPE = "STRIPE"
     HUBSPOT = "HUBSPOT"

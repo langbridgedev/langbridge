@@ -260,7 +260,9 @@ class SqlService:
                     allowed_tables=list(policy.allowed_tables_json or []),
                     redaction_rules=redaction_rules,
                     explain=request.explain,
-                    federated_aliases=request.federated_aliases,
+                    federated_datasets=[
+                        dataset.model_dump(mode="json") for dataset in request.federated_datasets
+                    ],
                     correlation_id=self._request_context_provider.correlation_id,
                 )
             )

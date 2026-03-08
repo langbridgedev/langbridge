@@ -1,1 +1,0 @@
-from .connector import TrinoConnector, TrinoConnectorConfig

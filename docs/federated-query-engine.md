@@ -11,5 +11,5 @@ The current engine docs are now split into:
 
 - The built-in federated planner + executor is the primary structured data engine.
 - Worker runtime is the execution boundary.
-- Trino and SQL gateway are deprecated legacy paths and not required for target architecture.
+- Trino and the old SQL gateway have been removed from the active runtime surface.
 - SQL analyst tools bound to unified semantic models route execution through federation in the same worker job.

@@ -1,5 +1,7 @@
 export type DatasetType = 'TABLE' | 'SQL' | 'FEDERATED' | 'FILE';
 export type DatasetStatus = 'draft' | 'published';
+export type DatasetSourceKind = 'database' | 'saas' | 'api' | 'file' | 'virtual';
+export type DatasetStorageKind = 'table' | 'parquet' | 'csv' | 'json' | 'view' | 'virtual';
 export type DatasetSortDirection = 'asc' | 'desc';
 export type DatasetLineageNodeType =
   | 'connection'
@@ -52,6 +54,31 @@ export interface DatasetStats {
   lastProfiledAt?: string | null;
 }
 
+export interface DatasetExecutionCapabilities {
+  supportsStructuredScan: boolean;
+  supportsSqlFederation: boolean;
+  supportsFilterPushdown: boolean;
+  supportsProjectionPushdown: boolean;
+  supportsAggregationPushdown: boolean;
+  supportsJoinPushdown: boolean;
+  supportsMaterialization: boolean;
+  supportsSemanticModeling: boolean;
+}
+
+export interface DatasetRelationIdentity {
+  canonicalReference: string;
+  relationName: string;
+  qualifiedName?: string | null;
+  catalogName?: string | null;
+  schemaName?: string | null;
+  tableName?: string | null;
+  storageUri?: string | null;
+  datasetId?: string | null;
+  connectorId?: string | null;
+  sourceKind: DatasetSourceKind;
+  storageKind: DatasetStorageKind;
+}
+
 export interface DatasetRecord {
   id: string;
   workspaceId: string;
@@ -62,6 +89,9 @@ export interface DatasetRecord {
   description?: string | null;
   tags: string[];
   datasetType: DatasetType;
+  sourceKind: DatasetSourceKind;
+  connectorKind?: string | null;
+  storageKind: DatasetStorageKind;
   dialect?: string | null;
   storageUri?: string | null;
   catalogName?: string | null;
@@ -71,6 +101,8 @@ export interface DatasetRecord {
   referencedDatasetIds: string[];
   federatedPlan?: Record<string, unknown> | null;
   fileConfig?: Record<string, unknown> | null;
+  relationIdentity: DatasetRelationIdentity;
+  executionCapabilities: DatasetExecutionCapabilities;
   status: DatasetStatus;
   revisionId?: string | null;
   columns: DatasetColumn[];
@@ -89,6 +121,11 @@ export interface DatasetCatalogItem {
   id: string;
   name: string;
   datasetType: DatasetType;
+  sourceKind: DatasetSourceKind;
+  connectorKind?: string | null;
+  storageKind: DatasetStorageKind;
+  relationIdentity: DatasetRelationIdentity;
+  executionCapabilities: DatasetExecutionCapabilities;
   tags: string[];
   columns: DatasetColumn[];
   updatedAt: string;
@@ -125,7 +162,6 @@ export interface DatasetVersion extends DatasetVersionSummary {
   policySnapshot: Record<string, unknown>;
   sourceBindingsSnapshot: Array<Record<string, unknown>>;
   executionCharacteristicsSnapshot?: Record<string, unknown> | null;
-  legacySnapshot?: Record<string, unknown> | null;
 }
 
 export interface DatasetVersionListResponse {

@@ -12,8 +12,6 @@ pip install -r langbridge/requirements.txt
 Run API:
 
 ```bash
-python langbridge/main.py
-# or
 uvicorn langbridge.apps.api.langbridge_api.main:app --reload
 ```
 

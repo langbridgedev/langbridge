@@ -163,6 +163,37 @@ async def test_execute_sql_applies_policy_limits_and_dispatches_job() -> None:
 
 
 @pytest.mark.anyio
+async def test_execute_sql_dispatches_federated_datasets() -> None:
+    workspace_id = uuid.uuid4()
+    user = _internal_user()
+    policy = _policy(workspace_id)
+    policy.allow_federation = True
+    dataset_id = uuid.uuid4()
+
+    service, _sql_job_repository, sql_job_request_service, _ = _build_service(
+        policy=policy,
+        connector=None,
+    )
+
+    await service.execute_sql(
+        request=SqlExecuteRequest(
+            workspace_id=workspace_id,
+            federated=True,
+            query="SELECT * FROM shop.orders",
+            federated_datasets=[{"alias": "shop", "dataset_id": dataset_id}],
+        ),
+        current_user=user,
+    )
+
+    dispatched_request = sql_job_request_service.dispatch_sql_job.call_args.args[0]
+    assert dispatched_request.execution_mode == "federated"
+    assert dispatched_request.federated_datasets == [
+        {"alias": "shop", "dataset_id": str(dataset_id)}
+    ]
+    assert "federated_aliases" not in dispatched_request.model_dump(mode="json")
+
+
+@pytest.mark.anyio
 async def test_get_sql_job_results_returns_page_and_next_cursor() -> None:
     workspace_id = uuid.uuid4()
     user_id = uuid.uuid4()

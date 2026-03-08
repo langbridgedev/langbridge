@@ -23,5 +23,5 @@ Endpoints:
 
 ## Notes
 
-- Legacy Trino/gateway compose services are deprecated and not required.
 - SQL and semantic execution use the Worker + Federated Query Engine path.
+- Hosted deployments only need the API, Worker, UI, Postgres, and Redis core services.

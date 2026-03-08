@@ -35,6 +35,6 @@ docker compose up --build migrate api worker client db redis
   - `FEDERATION_STAGE_MAX_RETRIES`
   - `FEDERATION_STAGE_PARALLELISM`
 
-## Deprecated Stack Warning
+## Execution Model
 
-Trino and SQL gateway services present in some compose manifests are deprecated transitional components and should not be required for self-hosted production rollouts.
+Self-hosted production rollouts use the same API + Worker + Federated Query Engine path as hosted deployments.

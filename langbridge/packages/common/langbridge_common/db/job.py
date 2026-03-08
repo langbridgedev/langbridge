@@ -110,7 +110,7 @@ class JobRecord(Base):
     progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 0..100
     status_message: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
 
-    result: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)  # e.g., {type, uri, trino_query_id}
+    result: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)  # e.g., {type, uri, query_id}
     error: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
 
     # Timing

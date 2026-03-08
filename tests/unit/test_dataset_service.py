@@ -680,6 +680,57 @@ async def test_dataset_service_crud_and_preview_dispatch() -> None:
 
 
 @pytest.mark.anyio
+async def test_dataset_service_resolves_structured_file_capabilities_for_shopify_parquet() -> None:
+    workspace_id = uuid.uuid4()
+    current_user = UserResponse(
+        id=uuid.uuid4(),
+        username="dataset-user",
+        email="dataset@example.com",
+        is_active=True,
+        available_organizations=[workspace_id],
+    )
+    connector = _FakeConnector(
+        id=uuid.uuid4(),
+        connector_type="POSTGRES",
+        organizations=[_OrgRef(id=workspace_id)],
+    )
+    service = _build_dataset_service(
+        workspace_id=workspace_id,
+        connector=connector,
+    )
+
+    created = await service.create_dataset(
+        request=DatasetCreateRequest(
+            workspace_id=workspace_id,
+            name="shopify_orders",
+            dataset_type=DatasetType.FILE,
+            dialect="duckdb",
+            storage_uri="file:///tmp/shopify_orders.parquet",
+            file_config={
+                "format": "parquet",
+                "connector_sync": {
+                    "connector_type": "shopify",
+                    "resource_name": "orders",
+                },
+            },
+        ),
+        current_user=current_user,
+    )
+    catalog = await service.get_catalog(
+        workspace_id=workspace_id,
+        project_id=None,
+        current_user=current_user,
+    )
+
+    assert created.source_kind.value == "saas"
+    assert created.connector_kind == "shopify"
+    assert created.storage_kind.value == "parquet"
+    assert created.execution_capabilities.supports_sql_federation is True
+    assert created.relation_identity.storage_uri == "file:///tmp/shopify_orders.parquet"
+    assert catalog.items[0].execution_capabilities.supports_structured_scan is True
+
+
+@pytest.mark.anyio
 async def test_dataset_create_does_not_insert_policy_twice_when_repo_cannot_read_pending() -> None:
     workspace_id = uuid.uuid4()
     user_id = uuid.uuid4()
@@ -1372,7 +1423,8 @@ async def test_dataset_versioning_restore_diff_and_lineage_impact_flow() -> None
     )
     assert first_revision.definition_snapshot["table_name"] == "orders"
     assert first_revision.policy_snapshot["max_rows_preview"] == 50
-    assert len(first_revision.source_bindings_snapshot) == 2
+    assert len(first_revision.source_bindings_snapshot) == 3
+    assert first_revision.source_bindings_snapshot[0]["source_type"] == "dataset_contract"
 
     model = SemanticModelEntry(
         id=uuid.uuid4(),

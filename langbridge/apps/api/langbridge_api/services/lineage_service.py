@@ -42,6 +42,11 @@ from langbridge.packages.common.langbridge_common.utils.lineage import (
     build_file_resource_id,
     build_source_table_resource_id,
 )
+from langbridge.packages.common.langbridge_common.utils.datasets import (
+    resolve_dataset_connector_kind,
+    resolve_dataset_source_kind,
+    resolve_dataset_storage_kind,
+)
 from langbridge.packages.common.langbridge_common.utils.sql import extract_table_references
 
 
@@ -114,9 +119,31 @@ class LineageService:
 
     async def register_dataset_lineage(self, *, dataset: DatasetRecord) -> None:
         edges: list[_LineageEdgeInput] = []
-        dataset_type = str(dataset.dataset_type or "").upper()
         target_type = LineageNodeType.DATASET
         target_id = str(dataset.id)
+        connection_connector_type: str | None = None
+        if dataset.connection_id is not None and not dataset.connector_kind:
+            connector = await self._connector_repository.get_by_id(dataset.connection_id)
+            connection_connector_type = getattr(connector, "connector_type", None)
+        connector_kind = resolve_dataset_connector_kind(
+            explicit_connector_kind=dataset.connector_kind,
+            connection_connector_type=connection_connector_type,
+            file_config=dict(dataset.file_config_json or {}),
+            storage_uri=dataset.storage_uri,
+            legacy_dataset_type=dataset.dataset_type,
+        )
+        source_kind = resolve_dataset_source_kind(
+            explicit_source_kind=dataset.source_kind,
+            legacy_dataset_type=dataset.dataset_type,
+            connector_kind=connector_kind,
+            file_config=dict(dataset.file_config_json or {}),
+        )
+        storage_kind = resolve_dataset_storage_kind(
+            explicit_storage_kind=dataset.storage_kind,
+            legacy_dataset_type=dataset.dataset_type,
+            file_config=dict(dataset.file_config_json or {}),
+            storage_uri=dataset.storage_uri,
+        )
 
         if dataset.connection_id is not None:
             edges.append(
@@ -130,7 +157,7 @@ class LineageService:
                 )
             )
 
-        if dataset_type == "TABLE":
+        if storage_kind.value == "table":
             resource_id = self._source_table_id(
                 connection_id=dataset.connection_id,
                 catalog_name=dataset.catalog_name,
@@ -153,7 +180,7 @@ class LineageService:
                         ),
                     )
                 )
-        elif dataset_type == "SQL":
+        elif storage_kind.value == "view":
             dataset_refs, source_refs = await self._resolve_sql_references(
                 workspace_id=dataset.workspace_id,
                 project_id=dataset.project_id,
@@ -185,7 +212,7 @@ class LineageService:
                         metadata=dict(source_ref["metadata"]),
                     )
                 )
-        elif dataset_type == "FILE":
+        elif storage_kind.value in {"csv", "parquet", "json"}:
             storage_uri = self._resolve_file_storage_uri(dataset)
             file_config = dict(dataset.file_config_json or {})
             sync_meta = (
@@ -194,7 +221,7 @@ class LineageService:
                 else {}
             )
             resource_name = str(sync_meta.get("resource_name") or "").strip()
-            if dataset.connection_id is not None and resource_name:
+            if dataset.connection_id is not None and resource_name and source_kind.value in {"api", "saas"}:
                 edges.append(
                     _LineageEdgeInput(
                         source_type=LineageNodeType.API_RESOURCE,
@@ -211,6 +238,7 @@ class LineageService:
                             "resource_name": resource_name,
                             "root_resource_name": sync_meta.get("root_resource_name"),
                             "parent_resource_name": sync_meta.get("parent_resource_name"),
+                            "source_kind": source_kind.value,
                         },
                     )
                 )
@@ -225,10 +253,12 @@ class LineageService:
                         metadata={
                             "storage_uri": storage_uri,
                             "file_config": dict(dataset.file_config_json or {}),
+                            "source_kind": source_kind.value,
+                            "storage_kind": storage_kind.value,
                         },
                     )
                 )
-        elif dataset_type == "FEDERATED":
+        elif storage_kind.value == "virtual":
             for child_id in self._extract_federated_dataset_ids(dataset):
                 if child_id == dataset.id:
                     continue

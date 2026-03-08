@@ -92,7 +92,7 @@ Reference:
 ## Getting Started
 
 ### Local (core stack)
-- API: `python langbridge/main.py`
+- API: `uvicorn langbridge.apps.api.langbridge_api.main:app --reload`
 - Worker: `python -m langbridge.apps.worker.langbridge_worker.main`
 - UI: `cd client && npm install && npm run dev`
 
@@ -100,8 +100,6 @@ Reference:
 - `docker compose up --build migrate api worker client db redis`
 - UI: `http://localhost:3000`
 - API docs: `http://localhost:8000/docs`
-
-Legacy Trino/gateway services may still exist in compose files but are deprecated and not required.
 
 ## Development
 
@@ -117,15 +115,11 @@ Developer docs:
 
 **Trino has been removed from the target architecture in favor of the built-in Federated Query Engine.**
 
-Legacy Trino and SQL gateway modules remain in the repo as transitional code and are marked deprecated:
-- `langbridge/apps/gateway/**`
-- `langbridge/services/trino/**`
-- `langbridge/packages/connectors/langbridge_connectors/api/_trino/**`
-- Related docker/env wiring listed in `docs/architecture/deprecations.md`
+Gateway packaging, Trino connector runtime, and related env wiring have been removed from the active release surface.
+See `docs/architecture/deprecations.md` for the historical cleanup record.
 
 ## Roadmap
 
-- Remove legacy Trino gateway components from runtime, CI, and compose defaults.
 - Expand federated join strategies and planner heuristics.
 - Improve cost-based optimization and statistics feedback loops.
 - Add runtime autoscaling and placement policies for customer runtimes.

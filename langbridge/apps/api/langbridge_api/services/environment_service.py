@@ -1,5 +1,6 @@
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from enum import Enum
 import hashlib
 import json
 import logging
@@ -46,24 +47,6 @@ SETTINGS_CATALOG: tuple[EnvironmentSettingCatalogItem, ...] = (
         category="General",
         data_type="string",
         placeholder="support@company.com",
-    ),
-    EnvironmentSettingCatalogItem(
-        setting_key="feature_flag_new_dashboard",
-        display_name="New dashboard experience",
-        description="Enable the new dashboard UI for organization members.",
-        category="General",
-        data_type="boolean",
-        options=["true", "false"],
-        default_value="false",
-    ),
-    EnvironmentSettingCatalogItem(
-        setting_key="feature_flag_sql_ui",
-        display_name="SQL workbench",
-        description="Enable SQL workbench features for the organization.",
-        category="General",
-        data_type="boolean",
-        options=["true", "false"],
-        default_value="true",
     ),
     EnvironmentSettingCatalogItem(
         setting_key="redaction_policy_pii",
@@ -124,15 +107,6 @@ SETTINGS_CATALOG: tuple[EnvironmentSettingCatalogItem, ...] = (
         category="AI / LLM",
         data_type="string",
         placeholder="gpt-4o-mini",
-    ),
-    EnvironmentSettingCatalogItem(
-        setting_key="feature_flag_agentic_model_builder",
-        display_name="Agentic model builder",
-        description="Enable agentic semantic model builder capabilities.",
-        category="AI / LLM",
-        data_type="boolean",
-        options=["true", "false"],
-        default_value="false",
     ),
     EnvironmentSettingCatalogItem(
         setting_key="staging_db_connection",
@@ -247,8 +221,8 @@ SETTINGS_CATALOG: tuple[EnvironmentSettingCatalogItem, ...] = (
     ),
 )
 
-class EnvironmentSettingKey:
-    pass  # Placeholder for potential future use as a structured key registry
+class EnvironmentSettingKey(str, Enum):
+    DEFAULT_SEMANTIC_VECTOR_CONNECTOR = "default_semantic_vector_connector"
 
 class EnvironmentService:
     _META_PREFIX = "__meta__:"

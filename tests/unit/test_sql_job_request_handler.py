@@ -16,6 +16,7 @@ from langbridge.packages.common.langbridge_common.contracts.jobs.sql_job import 
     CreateSqlJobRequest,
 )
 from langbridge.packages.common.langbridge_common.contracts.jobs.type import JobType
+from langbridge.packages.common.langbridge_common.db.dataset import DatasetRecord
 from langbridge.packages.common.langbridge_common.db.sql import SqlJobRecord
 from langbridge.packages.connectors.langbridge_connectors.api.connector import QueryResult
 from langbridge.packages.messaging.langbridge_messaging.contracts.jobs.sql_job import (
@@ -49,6 +50,19 @@ class _FakeSqlArtifactRepository:
 class _FakeConnectorRepository:
     async def get_by_id(self, _connector_id):
         return object()
+
+
+class _FakeDatasetRepository:
+    def __init__(self, datasets: list[DatasetRecord]) -> None:
+        self._datasets = {dataset.id: dataset for dataset in datasets}
+
+    async def get_by_ids_for_workspace(self, *, workspace_id, dataset_ids):
+        return [
+            dataset
+            for dataset_id in dataset_ids
+            if (dataset := self._datasets.get(dataset_id)) is not None
+            and dataset.workspace_id == workspace_id
+        ]
 
 
 class _FakeSqlConnector:
@@ -179,9 +193,11 @@ async def test_sql_job_request_handler_executes_and_redacts(monkeypatch) -> None
 
 
 @pytest.mark.anyio
-async def test_sql_job_request_handler_executes_federated_query_and_redacts() -> None:
+async def test_sql_job_request_handler_executes_dataset_backed_federated_query_and_redacts() -> None:
     workspace_id = uuid.uuid4()
     user_id = uuid.uuid4()
+    crm_connector_id = uuid.uuid4()
+    billing_connector_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
     job = SqlJobRecord(
         id=uuid.uuid4(),
@@ -205,12 +221,69 @@ async def test_sql_job_request_handler_executes_federated_query_and_redacts() ->
         created_at=now,
         updated_at=now,
     )
+    crm_dataset = DatasetRecord(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        project_id=None,
+        connection_id=crm_connector_id,
+        created_by=None,
+        updated_by=None,
+        name="crm_accounts",
+        description=None,
+        tags_json=[],
+        dataset_type="TABLE",
+        dialect="postgres",
+        catalog_name=None,
+        schema_name="public",
+        table_name="accounts",
+        storage_uri=None,
+        sql_text=None,
+        file_config_json=None,
+        referenced_dataset_ids_json=[],
+        federated_plan_json=None,
+        status="published",
+        revision_id=None,
+        row_count_estimate=None,
+        bytes_estimate=None,
+        last_profiled_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    billing_dataset = DatasetRecord(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        project_id=None,
+        connection_id=billing_connector_id,
+        created_by=None,
+        updated_by=None,
+        name="billing_accounts",
+        description=None,
+        tags_json=[],
+        dataset_type="TABLE",
+        dialect="postgres",
+        catalog_name=None,
+        schema_name="public",
+        table_name="accounts",
+        storage_uri=None,
+        sql_text=None,
+        file_config_json=None,
+        referenced_dataset_ids_json=[],
+        federated_plan_json=None,
+        status="published",
+        revision_id=None,
+        row_count_estimate=None,
+        bytes_estimate=None,
+        last_profiled_at=None,
+        created_at=now,
+        updated_at=now,
+    )
     fake_federated_tool = _FakeFederatedQueryTool()
     artifact_repo = _FakeSqlArtifactRepository()
     handler = SqlJobRequestHandler(
         sql_job_repository=_FakeSqlJobRepository(job),
         sql_job_result_artifact_repository=artifact_repo,
         connector_repository=_FakeConnectorRepository(),
+        dataset_repository=_FakeDatasetRepository([crm_dataset, billing_dataset]),
         federated_query_tool=fake_federated_tool,
     )
 
@@ -230,10 +303,10 @@ async def test_sql_job_request_handler_executes_federated_query_and_redacts() ->
         enforced_timeout_seconds=30,
         allow_federation=True,
         redaction_rules={"secret": "hash"},
-        federated_aliases={
-            "crm": str(uuid.uuid4()),
-            "billing": str(uuid.uuid4()),
-        },
+        federated_datasets=[
+            {"alias": "crm", "dataset_id": str(crm_dataset.id)},
+            {"alias": "billing", "dataset_id": str(billing_dataset.id)},
+        ],
     )
     message = SqlJobRequestMessage(
         sql_job_id=job.id,
@@ -256,9 +329,145 @@ async def test_sql_job_request_handler_executes_federated_query_and_redacts() ->
     tables = dataset.get("tables") or {}
     assert "crm.public.accounts" in tables
     assert "billing.public.accounts" in tables
-    assert tables["crm.public.accounts"]["metadata"]["skip_catalog_in_pushdown"] is True
-    assert tables["crm.public.accounts"]["metadata"]["physical_catalog"] is None
+    assert tables["crm.public.accounts"]["metadata"]["dataset_alias"] == "crm"
+    assert tables["crm.public.accounts"]["metadata"]["physical_schema"] == "public"
+    assert tables["crm.public.accounts"]["metadata"]["physical_table"] == "accounts"
     assert len(artifact_repo.added) == 1
+
+
+@pytest.mark.anyio
+async def test_sql_job_request_handler_executes_dataset_backed_federated_query() -> None:
+    workspace_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    warehouse_connector_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    job = SqlJobRecord(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        project_id=None,
+        user_id=user_id,
+        connection_id=None,
+        execution_mode="federated",
+        status="queued",
+        query_text=(
+            "SELECT o.id, c.customer_id "
+            "FROM shop.api_connector.shopify_orders AS o "
+            "JOIN customers.public.customers AS c ON o.customer_id = c.customer_id"
+        ),
+        query_hash="dataset-fed-hash",
+        query_params_json={},
+        requested_limit=None,
+        enforced_limit=100,
+        requested_timeout_seconds=None,
+        enforced_timeout_seconds=30,
+        is_explain=False,
+        is_federated=True,
+        correlation_id="corr-fed-dataset",
+        policy_snapshot_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    shopify_dataset = DatasetRecord(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        project_id=None,
+        connection_id=None,
+        created_by=None,
+        updated_by=None,
+        name="shopify_orders",
+        description=None,
+        tags_json=[],
+        dataset_type="FILE",
+        dialect="duckdb",
+        catalog_name=None,
+        schema_name="api_connector",
+        table_name="shopify_orders",
+        storage_uri="file:///tmp/shopify_orders.parquet",
+        sql_text=None,
+        file_config_json={
+            "format": "parquet",
+            "connector_sync": {"connector_type": "shopify", "resource_name": "orders"},
+        },
+        referenced_dataset_ids_json=[],
+        federated_plan_json=None,
+        status="published",
+        revision_id=None,
+        row_count_estimate=None,
+        bytes_estimate=None,
+        last_profiled_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    customer_dataset = DatasetRecord(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        project_id=None,
+        connection_id=warehouse_connector_id,
+        created_by=None,
+        updated_by=None,
+        name="customers",
+        description=None,
+        tags_json=[],
+        dataset_type="TABLE",
+        dialect="postgres",
+        catalog_name=None,
+        schema_name="public",
+        table_name="customers",
+        storage_uri=None,
+        sql_text=None,
+        file_config_json=None,
+        referenced_dataset_ids_json=[],
+        federated_plan_json=None,
+        status="published",
+        revision_id=None,
+        row_count_estimate=None,
+        bytes_estimate=None,
+        last_profiled_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    fake_federated_tool = _FakeFederatedQueryTool()
+    handler = SqlJobRequestHandler(
+        sql_job_repository=_FakeSqlJobRepository(job),
+        sql_job_result_artifact_repository=_FakeSqlArtifactRepository(),
+        connector_repository=_FakeConnectorRepository(),
+        dataset_repository=_FakeDatasetRepository([shopify_dataset, customer_dataset]),
+        federated_query_tool=fake_federated_tool,
+    )
+
+    request = CreateSqlJobRequest(
+        sql_job_id=job.id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        execution_mode="federated",
+        query=job.query_text,
+        query_dialect="tsql",
+        params={},
+        enforced_limit=100,
+        enforced_timeout_seconds=30,
+        allow_federation=True,
+        federated_datasets=[
+            {"alias": "shop", "dataset_id": str(shopify_dataset.id)},
+            {"alias": "customers", "dataset_id": str(customer_dataset.id)},
+        ],
+    )
+    message = SqlJobRequestMessage(
+        sql_job_id=job.id,
+        job_type=JobType.SQL,
+        job_request=request.model_dump(mode="json"),
+    )
+
+    await handler.handle(message)
+
+    assert job.status == "succeeded"
+    payload = fake_federated_tool.execute_payloads[0]
+    tables = payload["workflow"]["dataset"]["tables"]
+    assert "shop.api_connector.shopify_orders" in tables
+    assert "customers.public.customers" in tables
+    assert tables["shop.api_connector.shopify_orders"]["dataset_descriptor"]["source_kind"] == "saas"
+    assert tables["shop.api_connector.shopify_orders"]["dataset_descriptor"]["storage_kind"] == "parquet"
+    assert tables["customers.public.customers"]["metadata"]["physical_table"] == "customers"
 
 
 @pytest.mark.anyio
@@ -304,7 +513,7 @@ async def test_sql_job_request_handler_federated_mode_requires_tool() -> None:
         enforced_limit=100,
         enforced_timeout_seconds=30,
         allow_federation=True,
-        federated_aliases={"crm": str(uuid.uuid4())},
+        federated_datasets=[{"alias": "crm", "dataset_id": uuid.uuid4()}],
     )
     message = SqlJobRequestMessage(
         sql_job_id=job.id,

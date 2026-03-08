@@ -12,7 +12,7 @@ This page now points to the split development docs.
 
 ## Quick Commands
 
-- API: `python langbridge/main.py`
+- API: `uvicorn langbridge.apps.api.langbridge_api.main:app --reload`
 - Worker: `python -m langbridge.apps.worker.langbridge_worker.main`
 - UI: `cd client && npm install && npm run dev`
 - Unit tests: `pytest -q tests/unit`
@@ -21,4 +21,4 @@ This page now points to the split development docs.
 ## Notes
 
 - SQL and semantic execution run through Worker + Federated Query Engine.
-- Trino/SQL gateway runtime is deprecated and not required for active development direction.
+- Federated SQL authoring is dataset-first and runs through worker-mediated federation.
