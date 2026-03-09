@@ -2,8 +2,6 @@
 
 The Federated Query Engine is Langbridge's primary structured data engine.
 
-It replaces the old dependency on a Trino-based data plane and runs through Worker execution.
-
 The engine now consumes normalized dataset execution descriptors as its primary structured input abstraction.
 
 - database tables

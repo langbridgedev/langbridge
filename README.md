@@ -50,9 +50,7 @@ More architecture docs:
 - `docs/architecture/hybrid-deployment.md`
 - `docs/architecture/deprecations.md`
 
-## Federated Query Engine (Replaces Trino)
-
-Langbridge no longer requires a Trino-based data plane.
+## Federated Query Engine
 
 Primary structured query execution now uses the built-in federated engine in `langbridge/packages/federation` and Worker tooling in `langbridge/apps/worker/langbridge_worker/tools/federated_query_tool.py`.
 
@@ -110,13 +108,6 @@ Developer docs:
 - `docs/features/semantic.md`
 - `docs/features/federation.md`
 - `docs/features/agents.md`
-
-## Migration Note
-
-**Trino has been removed from the target architecture in favor of the built-in Federated Query Engine.**
-
-Gateway packaging, Trino connector runtime, and related env wiring have been removed from the active release surface.
-See `docs/architecture/deprecations.md` for the historical cleanup record.
 
 ## Roadmap
 

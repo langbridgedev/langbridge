@@ -69,7 +69,7 @@ def apply_tenant_aware_context(
     table_connector_map: Mapping[str, UUID] | None = None,
 ) -> SemanticModel:
     """
-    Produce a tenant-aware semantic model by assigning per-table Trino catalogs.
+    Produce a tenant-aware semantic model by assigning per-table catalogs.
 
     Catalog naming strategy is deterministic: `org_<org12>__src_<connector12>`.
     Existing explicit table catalogs are preserved.
