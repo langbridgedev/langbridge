@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from dependency_injector import containers, providers
@@ -123,6 +124,11 @@ from langbridge.apps.api.langbridge_api.services.task_dispatch_service import (
 from langbridge.apps.api.langbridge_api.services.thread_service import ThreadService
 from langbridge.apps.api.langbridge_api.services.sql_service import SqlService
 from langbridge.apps.api.langbridge_api.services.storage import create_dashboard_snapshot_storage
+from langbridge.apps.worker.langbridge_worker.secrets import SecretProviderRegistry
+from langbridge.apps.worker.langbridge_worker.tools import FederatedQueryTool
+from langbridge.apps.worker.langbridge_worker.semantic_query_execution_service import (
+    SemanticQueryExecutionService,
+)
 from langbridge.packages.messaging.langbridge_messaging.broker.redis import RedisBroker
 from langbridge.packages.messaging.langbridge_messaging.flusher.flusher import MessageFlusher
 from langbridge.apps.api.langbridge_api.request_context import get_request_context
@@ -230,6 +236,12 @@ class Container(containers.DeclarativeContainer):
         RedisBroker,
         stream=settings.REDIS_API_STREAM,
         group=settings.REDIS_API_CONSUMER_GROUP,
+    )
+    secret_provider_registry = providers.Singleton(SecretProviderRegistry)
+    federated_query_tool = providers.Factory(
+        FederatedQueryTool,
+        connector_repository=connector_repository,
+        secret_provider_registry=secret_provider_registry,
     )
 
     environment_service = providers.Factory(
@@ -344,11 +356,19 @@ class Container(containers.DeclarativeContainer):
         emvironment_service=environment_service,
         lineage_service=lineage_service,
     )
+    semantic_query_execution_service = providers.Factory(
+        SemanticQueryExecutionService,
+        semantic_model_repository=semantic_model_repository,
+        dataset_repository=dataset_repository,
+        federated_query_tool=federated_query_tool,
+        logger=logging.getLogger("langbridge.semantic_query"),
+    )
 
     semantic_query_service = providers.Factory(
         SemanticQueryService,
         semantic_model_service=semantic_model_service,
         connector_service=connector_service,
+        semantic_query_execution_service=semantic_query_execution_service,
     )
 
     dashboard_snapshot_storage = providers.Singleton(create_dashboard_snapshot_storage)
@@ -464,6 +484,7 @@ class Container(containers.DeclarativeContainer):
         agent_service=agent_service,
         thread_service=thread_service,
         message_service=message_service,
+        semantic_query_service=semantic_query_service,
     )
 
     message_flusher = providers.Factory(

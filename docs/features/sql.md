@@ -5,7 +5,7 @@ Langbridge SQL is a first-class in-product SQL workbench for native SQL executio
 ## Product Scope
 
 - UI-native SQL editor (`/sql/{organizationId}`).
-- Connection selector and federated source builder.
+- Connection selector and dataset-oriented federated source builder.
 - Parameterized SQL, explain, query history, saved queries.
 - Result preview with server-enforced limits.
 - Export controls and workspace policy enforcement.
@@ -17,7 +17,8 @@ Langbridge SQL is a first-class in-product SQL workbench for native SQL executio
 2. Control plane validates request and policy bounds.
 3. SQL job is enqueued and executed by worker handler.
 4. Worker applies safety checks and limit/timeout enforcement.
-5. Results and artifacts are persisted and retrieved via SQL job APIs.
+5. Federated execution resolves dataset descriptors into the existing worker federation pipeline.
+6. Results and artifacts are persisted and retrieved via SQL job APIs.
 
 No direct execution occurs in UI or API process.
 
@@ -48,10 +49,17 @@ Base: `/api/v1/sql`
 - Workspace schema/table allowlists.
 - Result redaction rules where configured.
 - Correlation IDs and job IDs exposed for supportability.
+- Worker execution, job lifecycle, and artifact-backed results are preserved in federated mode.
 
 ## Federated SQL Authoring
 
-Federated mode maps source aliases to connectors and executes via worker federation pipeline.
+Federated mode is now dataset-first for structured datasets.
+
+- The SQL workspace defaults federated mode on when the workspace allows federation and structured federatable datasets exist.
+- Users select structured datasets, assign aliases, and write SQL against those aliases.
+- The backend sends `federated_datasets` to the worker as the only federated execution contract.
+- Structured file-backed datasets such as parquet Shopify syncs participate in joins the same way as database datasets.
+- Composite virtual datasets keep their normalized metadata/capabilities, but direct table-style SQL authoring over virtual datasets remains a follow-up.
 
 Query pattern:
 
@@ -59,10 +67,16 @@ Query pattern:
 SELECT TOP 100
   a.id,
   b.id
-FROM crm.public.accounts AS a
-JOIN billing.public.accounts AS b
+FROM shop.api_connector.shopify_orders AS a
+JOIN warehouse.public.customers AS b
   ON a.id = b.id
 ORDER BY a.id DESC;
 ```
 
-Where `crm` and `billing` are source aliases configured in the SQL sidebar.
+Where `shop` and `warehouse` are dataset aliases configured in the SQL sidebar.
+
+This allows examples like:
+
+- join Shopify parquet syncs with Postgres/MySQL/Snowflake tables
+- query CSV/parquet uploads together with warehouse tables
+- route multi-dataset structured questions through federation-first agent execution instead of bespoke source SQL

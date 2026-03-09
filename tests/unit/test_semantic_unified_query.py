@@ -97,7 +97,7 @@ def test_apply_tenant_aware_context_sets_catalog_from_org_and_connector_tokens()
     assert tenant_model.tables["legacy_sales"].schema == "sales"
 
 
-def test_trino_translation_uses_catalog_schema_table_when_catalog_is_available() -> None:
+def test_catalog_qualified_translation_uses_catalog_schema_table_when_available() -> None:
     model = SemanticModel(
         version="1.0",
         tables={
@@ -111,7 +111,7 @@ def test_trino_translation_uses_catalog_schema_table_when_catalog_is_available()
     )
     query = SemanticQuery(dimensions=["orders.id"], limit=10)
 
-    plan = SemanticQueryEngine().compile(query, model, dialect="trino")
+    plan = SemanticQueryEngine().compile(query, model, dialect="postgres")
     assert '"tenant_catalog"."analytics"."orders"' in plan.sql
 
 
@@ -150,4 +150,3 @@ def test_joined_dimensions_are_qualified_to_avoid_ambiguous_column_names() -> No
     assert 't0."id" AS "orders__id"' in sql
     assert 't1."id" AS "customers__id"' in sql
     assert "ON t0.customer_id = t1.id" in sql
-

@@ -35,7 +35,6 @@ _DIALECT_MAP: dict[SqlDialetcs, str] = {
     SqlDialetcs.SQLSERVER: "tsql",
     SqlDialetcs.ORACLE: "oracle",
     SqlDialetcs.SQLITE: "sqlite",
-    SqlDialetcs.TRINO: "trino",
 }
 
 
@@ -127,9 +126,17 @@ class FederatedQueryTool:
 
         for source_id, bindings in source_bindings.items():
             binding = bindings[0]
+            descriptor = getattr(binding, "dataset_descriptor", None)
+            descriptor_payload = descriptor.model_dump(mode="json") if descriptor is not None else {}
             metadata = binding.metadata if isinstance(binding.metadata, dict) else {}
-            source_kind = str(metadata.get("source_kind") or "connector").strip().lower()
-            if source_kind == "file":
+            descriptor_source_kind = str(descriptor_payload.get("source_kind") or "").strip().lower()
+            descriptor_storage_kind = str(descriptor_payload.get("storage_kind") or "").strip().lower()
+            source_kind = str(metadata.get("source_kind") or descriptor_source_kind or "connector").strip().lower()
+            is_file_like_source = source_kind == "file" or (
+                descriptor_source_kind in {"file", "saas", "api"}
+                and descriptor_storage_kind in {"csv", "parquet"}
+            )
+            if is_file_like_source:
                 sources[source_id] = DuckDbFileRemoteSource(
                     source_id=source_id,
                     bindings=bindings,
@@ -138,6 +145,8 @@ class FederatedQueryTool:
                 continue
 
             connector_id = binding.connector_id
+            if connector_id is None and descriptor_payload.get("connector_id"):
+                connector_id = UUID(str(descriptor_payload["connector_id"]))
             if connector_id is None:
                 raise ValueError(f"Connector source '{source_id}' is missing connector_id.")
             for extra_binding in bindings[1:]:

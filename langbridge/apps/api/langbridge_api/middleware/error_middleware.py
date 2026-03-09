@@ -1,7 +1,9 @@
 import logging
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
+
+from langbridge.apps.api.langbridge_api.error_responses import build_error_response
 from langbridge.packages.common.langbridge_common.errors.application_errors import (
     AuthenticationError,
     AuthorizationError,
@@ -29,61 +31,81 @@ class ErrorMiddleware(BaseHTTPMiddleware):
             return response
         except ResourceAlreadyExists as e:
             self.logger.warning(f"Resource already exists: {e}")
-            return JSONResponse(
+            return build_error_response(
                 status_code=409,
-                content={"error": "ResourceAlreadyExists", "message": str(e)}
+                code="RESOURCE_ALREADY_EXISTS",
+                message=str(e),
+                details=str(e),
             )
         except ResourceNotFound as e:
             self.logger.warning(f"Resource not found: {e}")
-            return JSONResponse(
+            return build_error_response(
                 status_code=404,
-                content={"error": "ResourceNotFound", "message": str(e)}
+                code="RESOURCE_NOT_FOUND",
+                message=str(e),
+                details=str(e),
             )
         except InvalidRequest as e:
             self.logger.warning(f"Invalid request: {e}")
-            return JSONResponse(
+            return build_error_response(
                 status_code=400,
-                content={"error": "InvalidRequest", "message": str(e)}
+                code="INVALID_REQUEST",
+                message=str(e),
+                details=str(e),
             )
         except BusinessValidationError as e:
             self.logger.warning(f"Business validation error: {e}")
-            return JSONResponse(
+            return build_error_response(
                 status_code=400,
-                content={"error": "BusinessValidationError", "message": str(e)}
+                code="BUSINESS_VALIDATION_ERROR",
+                message=e.message,
+                details=str(e),
+                field_errors=e.errors,
             )
         except PermissionDeniedBusinessValidationError as e:
             self.logger.warning(f"Permission denied business validation error: {e}")
-            return JSONResponse(
+            return build_error_response(
                 status_code=403,
-                content={"error": "PermissionDeniedBusinessValidationError", "message": str(e)}
+                code="PERMISSION_DENIED",
+                message=e.message,
+                details=str(e),
+                field_errors=e.errors,
             )
         except AuthenticationError as e:
             self.logger.warning(f"Authentication error: {e}")
-            return JSONResponse(
+            return build_error_response(
                 status_code=401,
-                content={"error": "AuthenticationError", "message": str(e)}
+                code="AUTHENTICATION_REQUIRED",
+                message=str(e),
+                details=str(e),
             )
         except AuthorizationError as e:
             self.logger.warning(f"Authorization error: {e}")
-            return JSONResponse(
+            return build_error_response(
                 status_code=403,
-                content={"error": "AuthorizationError", "message": str(e)}
+                code="AUTHORIZATION_ERROR",
+                message=str(e),
+                details=str(e),
             )
         except ApplicationError as e:
             self.logger.error("Application error", exc_info=True)
-            return JSONResponse(
+            return build_error_response(
                 status_code=500,
-                content={"error": "ApplicationError", "message": "An internal application error occurred."}
+                code="APPLICATION_ERROR",
+                message="An internal application error occurred.",
             )
         except ValueError as e:
             self.logger.warning(f"Value error: {e}")
-            return JSONResponse(
+            return build_error_response(
                 status_code=400,
-                content={"error": "ValueError", "message": str(e)}
+                code="INVALID_VALUE",
+                message=str(e),
+                details=str(e),
             )
         except Exception as e:
             self.logger.error("Unhandled exception", exc_info=True)
-            return JSONResponse(
+            return build_error_response(
                 status_code=500,
-                content={"error": "InternalServerError", "message": "An internal server error occurred."}
+                code="INTERNAL_ERROR",
+                message="An internal server error occurred.",
             )

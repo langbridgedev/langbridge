@@ -1,12 +1,13 @@
 'use client';
 
-import { JSX, useEffect } from 'react';
+import { JSX, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, Database, Plus, RefreshCw } from 'lucide-react';
+import { ArrowRight, Database, Plus, RefreshCw, Search } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useWorkspaceScope } from '@/context/workspaceScope';
 import { fetchConnectors } from '@/orchestration/connectors';
@@ -22,6 +23,7 @@ export default function DataConnectionsIndex({ params }: DataConnectionsIndexPro
   const router = useRouter();
   const { selectedOrganizationId, setSelectedOrganizationId } = useWorkspaceScope();
   const organizationId = params.organizationId;
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     if (organizationId && organizationId !== selectedOrganizationId) {
@@ -41,19 +43,36 @@ export default function DataConnectionsIndex({ params }: DataConnectionsIndexPro
     router.push(`/datasources/${organizationId}/create`);
   };
 
-  const connectors = (connectorsQuery.data ?? [])
-    .filter((connector): connector is ConnectorResponse & { id: string } => Boolean(connector.id))
-    .sort((a, b) => {
-      const left = a.name.toLowerCase();
-      const right = b.name.toLowerCase();
-      if (left < right) {
-        return -1;
-      }
-      if (left > right) {
-        return 1;
-      }
-      return 0;
-    });
+  const connectors = useMemo(
+    () =>
+      (connectorsQuery.data ?? [])
+        .filter((connector): connector is ConnectorResponse & { id: string } => Boolean(connector.id))
+        .sort((a, b) => {
+          const left = a.name.toLowerCase();
+          const right = b.name.toLowerCase();
+          if (left < right) {
+            return -1;
+          }
+          if (left > right) {
+            return 1;
+          }
+          return 0;
+        }),
+    [connectorsQuery.data],
+  );
+
+  const filteredConnectors = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) {
+      return connectors;
+    }
+    return connectors.filter((connector) =>
+      [connector.name, connector.connectorType ?? '', connector.description ?? '']
+        .join(' ')
+        .toLowerCase()
+        .includes(term),
+    );
+  }, [connectors, search]);
 
   return (
     <div className="space-y-6 text-[color:var(--text-secondary)]">
@@ -82,17 +101,29 @@ export default function DataConnectionsIndex({ params }: DataConnectionsIndexPro
       </header>
 
       <section className="surface-panel flex flex-1 flex-col rounded-3xl p-6 shadow-soft">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-sm font-semibold text-[color:var(--text-primary)]">Connections</h2>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => connectorsQuery.refetch()}
-            disabled={connectorsQuery.isFetching || !hasOrganization}
-            className="text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)]"
-          >
-            <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" /> Refresh
-          </Button>
+          <div className="flex flex-1 flex-col gap-3 sm:max-w-xl sm:flex-row sm:items-center sm:justify-end">
+            <div className="relative w-full sm:max-w-sm">
+              <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-[color:var(--text-muted)]" aria-hidden="true" />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search connections"
+                className="pl-9"
+                aria-label="Search connections"
+              />
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => connectorsQuery.refetch()}
+              disabled={connectorsQuery.isFetching || !hasOrganization}
+              className="text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)]"
+            >
+              <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" /> Refresh
+            </Button>
+          </div>
         </div>
 
         <div className="mt-6 flex-1">
@@ -133,9 +164,19 @@ export default function DataConnectionsIndex({ params }: DataConnectionsIndexPro
                 Create connection
               </Button>
             </div>
+          ) : filteredConnectors.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-4 text-center text-[color:var(--text-muted)]">
+              <div className="inline-flex items-center justify-center rounded-full border border-[color:var(--panel-border)] bg-[color:var(--chip-bg)] px-3 py-1 text-xs font-medium">
+                No matches
+              </div>
+              <div className="space-y-2">
+                <p className="text-base font-semibold text-[color:var(--text-primary)]">No connections match that search</p>
+                <p className="text-sm">Try a connector name, type, or description keyword.</p>
+              </div>
+            </div>
           ) : (
             <ul className="space-y-3">
-              {connectors.map((connector) => (
+              {filteredConnectors.map((connector) => (
                 <li key={connector.id}>
                   <Link
                     href={`/datasources/${organizationId}/${connector.id}`}

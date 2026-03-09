@@ -161,6 +161,7 @@ class OrchestratorService:
         agent_service: AgentService,
         thread_service: ThreadService,
         message_service: MessageService,
+        semantic_query_service: SemanticQueryService,
     ):
         self._organization_service = organization_service
         self._semantic_model_service = semantic_model_service
@@ -169,10 +170,7 @@ class OrchestratorService:
         self._thread_service = thread_service
         self._logger = logging.getLogger(__name__)
         self._vector_factory = VectorDBConnectorFactory()
-        self._semantic_query_service = SemanticQueryService(
-            semantic_model_service=semantic_model_service,
-            connector_service=connector_service,
-        )
+        self._semantic_query_service = semantic_query_service
         self._message_service = message_service
 
     async def chat(
@@ -734,7 +732,6 @@ class OrchestratorService:
             "SQLSERVER": "tsql",
             "ORACLE": "oracle",
             "SQLITE": "sqlite",
-            "TRINO": "trino",
         }
         return dialect_map.get(dialect_name, "tsql")
 

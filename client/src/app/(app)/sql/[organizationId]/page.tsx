@@ -23,15 +23,18 @@ import {
   Wand2,
 } from 'lucide-react';
 
+import { ErrorPanel } from '@/components/ErrorPanel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/toast';
 import { useWorkspaceScope } from '@/context/workspaceScope';
+import { toDisplayError, type DisplayError } from '@/lib/errors';
 import { fetchConnectors } from '@/orchestration/connectors';
 import type { ConnectorResponse } from '@/orchestration/connectors/types';
-import { ensureDataset } from '@/orchestration/datasets';
+import { ensureDataset, fetchDatasetCatalog } from '@/orchestration/datasets';
+import type { DatasetCatalogItem } from '@/orchestration/datasets/types';
 import {
   assistSql,
   cancelSqlJob,
@@ -50,6 +53,12 @@ import {
   updateSavedSqlQuery,
   updateSqlWorkspacePolicy,
 } from '@/orchestration/sql';
+import {
+  injectFederatedDirectives,
+  parseFederatedDirectiveBindings,
+  shouldDefaultFederatedMode,
+  supportsStructuredFederatedDataset,
+} from '@/orchestration/sql/federation';
 import type {
   SqlAssistMode,
   SqlDialect,
@@ -88,7 +97,7 @@ type SortState = {
 
 type FederatedSource = {
   id: string;
-  connectorId: string;
+  datasetId?: string;
   alias: string;
 };
 
@@ -144,7 +153,6 @@ const DIALECT_OPTIONS: Array<{ value: SqlDialect; label: string }> = [
   { value: 'bigquery', label: 'BigQuery' },
   { value: 'oracle', label: 'Oracle' },
   { value: 'sqlite', label: 'SQLite' },
-  { value: 'trino', label: 'Trino' },
 ];
 const CONNECTOR_DIALECT_MAP: Record<string, SqlDialect> = {
   SQLSERVER: 'tsql',
@@ -156,7 +164,6 @@ const CONNECTOR_DIALECT_MAP: Record<string, SqlDialect> = {
   BIGQUERY: 'bigquery',
   ORACLE: 'oracle',
   SQLITE: 'sqlite',
-  TRINO: 'trino',
 };
 const QUERY_SYNC_DELAY_MS = 120;
 const MAX_COMPLETION_SUGGESTIONS = 150;
@@ -277,6 +284,17 @@ function nextFederatedSourceId(): string {
   return `src-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function datasetReferencePreview(dataset: DatasetCatalogItem, alias: string): string {
+  const normalizedAlias = normalizeFederatedAlias(alias) || 'dataset';
+  const relation = dataset.relationIdentity;
+  const relationName = relation?.tableName || relation?.relationName || dataset.name;
+  const schemaName = relation?.schemaName;
+  if (schemaName) {
+    return `${normalizedAlias}.${schemaName}.${relationName}`;
+  }
+  return `${normalizedAlias}.${relationName}`;
+}
+
 export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   const { organizationId } = use(params);
   const router = useRouter();
@@ -296,6 +314,7 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   const [queryDialect, setQueryDialect] = useState<SqlDialect>('tsql');
   const [dialectTouched, setDialectTouched] = useState(false);
   const [federatedMode, setFederatedMode] = useState(false);
+  const [modeTouched, setModeTouched] = useState(false);
   const [federatedSources, setFederatedSources] = useState<FederatedSource[]>([]);
   const [explainMode, setExplainMode] = useState(false);
   const [activeTab, setActiveTab] = useState('results');
@@ -322,12 +341,15 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   const [assistantSuggestion, setAssistantSuggestion] = useState('');
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
   const [sortState, setSortState] = useState<SortState>(null);
+  const [executionError, setExecutionError] = useState<DisplayError | null>(null);
+  const [schemaBrowserError, setSchemaBrowserError] = useState<DisplayError | null>(null);
   const completionItemsRef = useRef<string[]>([]);
   const editorRef = useRef<{ getValue: () => string; setValue: (value: string) => void; focus: () => void } | null>(null);
   const queryTextRef = useRef(DEFAULT_QUERY);
   const querySyncTimerRef = useRef<number | null>(null);
   const lastJobStatusRef = useRef<string | null>(null);
   const loadedSavedQueryIdRef = useRef<string | null>(null);
+  const loadedHistoryJobIdRef = useRef<string | null>(null);
 
   const syncQueryText = useCallback((nextValue: string, delayMs: number) => {
     if (querySyncTimerRef.current != null) {
@@ -377,6 +399,12 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     enabled: Boolean(organizationId),
   });
 
+  const datasetCatalogQuery = useQuery({
+    queryKey: ['sql-dataset-catalog', organizationId, selectedProjectId],
+    queryFn: () => fetchDatasetCatalog(organizationId, selectedProjectId || undefined),
+    enabled: Boolean(organizationId),
+  });
+
   const historyQuery = useQuery<SqlHistoryPayload>({
     queryKey: ['sql-history', organizationId, historyScope],
     queryFn: () => fetchSqlHistory(organizationId, historyScope, 100),
@@ -397,10 +425,15 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     setPolicyEditor(policyQuery.data);
     setRequestedLimit(String(policyQuery.data.maxPreviewRows));
     setRequestedTimeoutSeconds(String(policyQuery.data.maxRuntimeSeconds));
-    if (policyQuery.data.defaultDatasource && !selectedConnectionId) {
+    if (!federatedMode && policyQuery.data.defaultDatasource && !selectedConnectionId) {
       setSelectedConnectionId(policyQuery.data.defaultDatasource);
     }
-  }, [policyQuery.data, selectedConnectionId]);
+  }, [policyQuery.data, selectedConnectionId, federatedMode]);
+
+  const availableFederatedDatasets = useMemo(
+    () => (datasetCatalogQuery.data?.items || []).filter((dataset) => supportsStructuredFederatedDataset(dataset)),
+    [datasetCatalogQuery.data?.items],
+  );
 
   useEffect(() => {
     if (!connectorsQuery.data || connectorsQuery.data.length === 0 || selectedConnectionId || federatedMode) {
@@ -431,10 +464,21 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     [availableConnectors, selectedConnectionId],
   );
 
-  const connectorNameById = useMemo(
-    () => Object.fromEntries(availableConnectors.map((connector) => [connector.id || '', connector.name])),
-    [availableConnectors],
+  const datasetById = useMemo(
+    () => Object.fromEntries(availableFederatedDatasets.map((dataset) => [dataset.id, dataset])),
+    [availableFederatedDatasets],
   );
+
+  useEffect(() => {
+    if (modeTouched || !policyQuery.data) {
+      return;
+    }
+    const defaultFederated = shouldDefaultFederatedMode({
+      allowFederation: policyQuery.data.allowFederation,
+      datasets: availableFederatedDatasets,
+    });
+    setFederatedMode(defaultFederated);
+  }, [modeTouched, policyQuery.data, availableFederatedDatasets]);
 
   useEffect(() => {
     if (dialectTouched) {
@@ -447,21 +491,6 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     const inferredDialect = inferDialectFromConnector(selectedConnector?.connectorType || null);
     setQueryDialect(inferredDialect || 'tsql');
   }, [dialectTouched, federatedMode, selectedConnector?.connectorType]);
-
-  useEffect(() => {
-    if (!federatedMode) {
-      return;
-    }
-    if (federatedSources.length > 0) {
-      return;
-    }
-    const initial = availableConnectors.slice(0, 2).map((connector, index) => ({
-      id: nextFederatedSourceId(),
-      connectorId: connector.id || '',
-      alias: normalizeFederatedAlias(connector.name || `source_${index + 1}`) || `source_${index + 1}`,
-    }));
-    setFederatedSources(initial);
-  }, [federatedMode, federatedSources.length, availableConnectors]);
 
   const riskHints = useMemo(() => detectRiskHints(queryText), [queryText]);
 
@@ -488,6 +517,7 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   const executeMutation = useMutation({
     mutationFn: executeSql,
     onSuccess: (payload) => {
+      setExecutionError(null);
       setJobId(payload.sqlJobId);
       setJobState(null);
       setJobResults(null);
@@ -506,13 +536,15 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     },
     onError: (error: Error) => {
       appendLog('error', error.message);
-      toast({ title: 'Unable to queue SQL job', description: error.message, variant: 'destructive' });
+      setExecutionError(toDisplayError(error, 'sql.execution'));
+      setActiveTab('results');
     },
   });
 
   const cancelMutation = useMutation({
     mutationFn: cancelSqlJob,
     onSuccess: (payload, variables) => {
+      setExecutionError(null);
       appendLog('warn', `SQL job ${variables.sqlJobId} cancelled (${payload.status}).`);
       setJobState((current) =>
         current && current.id === variables.sqlJobId
@@ -622,6 +654,7 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     if (!organizationId || !selectedConnectionId || federatedMode) {
       setSchemaMap({});
       setColumnsMap({});
+      setSchemaBrowserError(null);
       return;
     }
     try {
@@ -636,13 +669,14 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
         };
       });
       setSchemaMap(nextMap);
+      setSchemaBrowserError(null);
       appendLog('info', `Loaded ${payload.schemas.length} schemas for ${selectedConnector?.name || selectedConnectionId}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to load schemas.';
       appendLog('error', message);
-      toast({ title: 'Schema browser error', description: message, variant: 'destructive' });
+      setSchemaBrowserError(toDisplayError(error, 'schema.browser'));
     }
-  }, [organizationId, selectedConnectionId, federatedMode, selectedConnector?.name, appendLog, toast]);
+  }, [organizationId, selectedConnectionId, federatedMode, selectedConnector?.name, appendLog]);
 
   useEffect(() => {
     void fetchSchemas();
@@ -672,6 +706,7 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
             error: null,
           },
         }));
+        setSchemaBrowserError(null);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unable to load tables.';
         setSchemaMap((current) => ({
@@ -682,10 +717,10 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
             error: message,
           },
         }));
-        toast({ title: 'Table browser error', description: message, variant: 'destructive' });
+        setSchemaBrowserError(toDisplayError(error, 'schema.browser'));
       }
     },
-    [organizationId, selectedConnectionId, federatedMode, toast],
+    [organizationId, selectedConnectionId, federatedMode],
   );
 
   const loadTableColumns = useCallback(
@@ -704,12 +739,12 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
           type: column.type,
         }));
         setColumnsMap((current) => ({ ...current, [key]: columns }));
+        setSchemaBrowserError(null);
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unable to load columns.';
-        toast({ title: 'Column browser error', description: message, variant: 'destructive' });
+        setSchemaBrowserError(toDisplayError(error, 'schema.browser'));
       }
     },
-    [columnsMap, organizationId, selectedConnectionId, federatedMode, toast],
+    [columnsMap, organizationId, selectedConnectionId, federatedMode],
   );
 
   const ensureDatasetForPhysicalTable = useCallback(
@@ -757,8 +792,8 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     const issues: string[] = [];
     const seenAliases = new Set<string>();
     federatedSources.forEach((source, index) => {
-      if (!source.connectorId) {
-        issues.push(`Source ${index + 1} is missing a connector.`);
+      if (!source.datasetId) {
+        issues.push(`Source ${index + 1} is missing a dataset.`);
       }
       const alias = normalizeFederatedAlias(source.alias);
       if (!alias) {
@@ -770,23 +805,20 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
       }
       seenAliases.add(alias);
     });
-    if (federatedSources.length < 2) {
-      issues.push('Federated mode requires at least 2 sources.');
+    if (federatedSources.length < 1) {
+      issues.push('Federated mode requires at least 1 source.');
     }
     return issues;
   }, [federatedSources]);
 
   const buildFederatedDirectives = useCallback((): string => {
-    const lines = federatedSources
-      .map((source) => {
-        const alias = normalizeFederatedAlias(source.alias);
-        if (!alias || !source.connectorId) {
-          return null;
-        }
-        return `-- langbridge:federated-source alias=${alias} connector_id=${source.connectorId}`;
-      })
-      .filter((line): line is string => Boolean(line));
-    return lines.join('\n');
+    return injectFederatedDirectives(
+      '',
+      federatedSources.map((source) => ({
+        alias: normalizeFederatedAlias(source.alias),
+        datasetId: source.datasetId,
+      })),
+    );
   }, [federatedSources]);
 
   const runSql = useCallback(
@@ -884,9 +916,12 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
           policyQuery.data?.maxRuntimeSeconds || 30,
         ),
         explain: options?.explain ?? explainMode,
-        federatedAliases: Object.fromEntries(
-          federatedSources.map((source) => [normalizeFederatedAlias(source.alias), source.connectorId]),
-        ),
+        federatedDatasets: federatedSources
+          .filter((source) => source.datasetId)
+          .map((source) => ({
+            alias: normalizeFederatedAlias(source.alias),
+            datasetId: source.datasetId as string,
+          })),
       });
     },
     [
@@ -899,8 +934,8 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
       selectedConnectionId,
       queryDialect,
       parameterValues,
+      federatedSources,
       federatedSourceValidation,
-      buildFederatedDirectives,
       executeMutation,
       selectedProjectId,
       requestedLimit,
@@ -944,6 +979,11 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
         fetchSqlJobResults(organizationId, jobId, null, 250),
       ]);
       setJobState(job);
+      if (job.status === 'failed' && job.error?.message) {
+        setExecutionError(toDisplayError(new Error(String(job.error.message)), 'sql.execution'));
+      } else if (job.status !== 'failed') {
+        setExecutionError(null);
+      }
       setJobResults(results);
       setResultCursor(results.nextCursor || null);
 
@@ -967,6 +1007,7 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to poll SQL job status.';
       appendLog('error', message);
+      setExecutionError(toDisplayError(error, 'sql.execution'));
     }
   }, [jobId, organizationId, appendLog, queryClient]);
 
@@ -1123,12 +1164,29 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   }, [savedQueriesQuery.data?.items, selectedSavedQueryId]);
 
   const loadSavedQuery = useCallback((saved: SqlSavedQueryRecord) => {
+    const directiveBindings = parseFederatedDirectiveBindings(saved.query);
     setSelectedSavedQueryId(saved.id);
     setSavedQueryName(saved.name);
     setSavedQueryTags(saved.tags.join(','));
     setShareEnabled(saved.isShared);
     applyQueryText(saved.query, { immediateState: true });
-    setSelectedConnectionId(saved.connectionId || '');
+    if (directiveBindings.length > 0) {
+      setFederatedSources(
+        directiveBindings.map((binding) => ({
+          id: nextFederatedSourceId(),
+          datasetId: binding.datasetId,
+          alias: binding.alias,
+        })),
+      );
+      setFederatedMode(true);
+      setModeTouched(true);
+      setSelectedConnectionId('');
+    } else {
+      setFederatedSources([]);
+      setFederatedMode(false);
+      setModeTouched(true);
+      setSelectedConnectionId(saved.connectionId || '');
+    }
     setParameterValues(
       Object.fromEntries(Object.entries(saved.defaultParams || {}).map(([key, value]) => [key, String(value)])),
     );
@@ -1136,6 +1194,7 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   }, [appendLog, applyQueryText]);
 
   const sharedSavedQueryId = searchParams.get('savedQueryId');
+  const sharedHistoryJobId = searchParams.get('jobId');
 
   useEffect(() => {
     if (!sharedSavedQueryId) {
@@ -1154,26 +1213,44 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     loadedSavedQueryIdRef.current = sharedSavedQueryId;
   }, [sharedSavedQueryId, savedQueriesQuery.data?.items, loadSavedQuery]);
 
-  const viewHistoryJob = useCallback(async (historyItem: SqlJobRecord) => {
+  const loadHistoryJobById = useCallback(async (historyJobId: string) => {
     if (!organizationId) {
       return;
     }
     try {
       const [job, results] = await Promise.all([
-        fetchSqlJob(organizationId, historyItem.id),
-        fetchSqlJobResults(organizationId, historyItem.id, null, 250),
+        fetchSqlJob(organizationId, historyJobId),
+        fetchSqlJobResults(organizationId, historyJobId, null, 250),
       ]);
+      setJobId(job.id);
       setJobState(job);
       setJobResults(results);
       setResultCursor(results.nextCursor || null);
       setSortState(null);
       setActiveTab('results');
-      appendLog('info', `Loaded history job ${historyItem.id}.`);
+      appendLog('info', `Loaded history job ${historyJobId}.`);
+      setExecutionError(null);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to load job from history.';
-      toast({ title: 'History load failed', description: message, variant: 'destructive' });
+      setExecutionError(toDisplayError(error, 'sql.execution'));
+      setActiveTab('results');
     }
-  }, [organizationId, appendLog, toast]);
+  }, [organizationId, appendLog]);
+
+  useEffect(() => {
+    if (!sharedHistoryJobId) {
+      loadedHistoryJobIdRef.current = null;
+      return;
+    }
+    if (loadedHistoryJobIdRef.current === sharedHistoryJobId) {
+      return;
+    }
+    loadedHistoryJobIdRef.current = sharedHistoryJobId;
+    void loadHistoryJobById(sharedHistoryJobId);
+  }, [loadHistoryJobById, sharedHistoryJobId]);
+
+  const viewHistoryJob = useCallback(async (historyItem: SqlJobRecord) => {
+    await loadHistoryJobById(historyItem.id);
+  }, [loadHistoryJobById]);
 
   const saveCurrentQuery = useCallback(() => {
     if (!organizationId) {
@@ -1187,10 +1264,18 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     const basePayload = {
       workspaceId: organizationId,
       projectId: selectedProjectId || null,
-      connectionId: selectedConnectionId || null,
+      connectionId: federatedMode ? null : (selectedConnectionId || null),
       name: savedQueryName.trim(),
       description: null,
-      query: queryTextRef.current,
+      query: injectFederatedDirectives(
+        queryTextRef.current,
+        federatedMode
+          ? federatedSources.map((source) => ({
+              alias: normalizeFederatedAlias(source.alias),
+              datasetId: source.datasetId,
+            }))
+          : [],
+      ),
       tags: savedQueryTags.split(',').map((tag) => tag.trim()).filter(Boolean),
       defaultParams: parameterValues,
       isShared: shareEnabled,
@@ -1212,6 +1297,8 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     toast,
     selectedProjectId,
     selectedConnectionId,
+    federatedMode,
+    federatedSources,
     savedQueryTags,
     parameterValues,
     shareEnabled,
@@ -1289,24 +1376,28 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   }, [policyQuery.data?.budgetLimitBytes, usedBytes]);
 
   const addFederatedSource = useCallback(() => {
-    const usedIds = new Set(federatedSources.map((source) => source.connectorId));
-    const fallbackConnector = availableConnectors.find((connector) => connector.id && !usedIds.has(connector.id))
-      || availableConnectors[0];
-    if (!fallbackConnector?.id) {
-      toast({ title: 'No connectors', description: 'Create a connector before adding federated sources.', variant: 'destructive' });
+    const usedIds = new Set(federatedSources.map((source) => source.datasetId));
+    const fallbackDataset = availableFederatedDatasets.find((dataset) => !usedIds.has(dataset.id))
+      || availableFederatedDatasets[0];
+    if (!fallbackDataset?.id) {
+      toast({
+        title: 'No datasets',
+        description: 'Create a structured dataset before adding federated sources.',
+        variant: 'destructive',
+      });
       return;
     }
-    const baseAlias = normalizeFederatedAlias(fallbackConnector.name || 'source');
-    const alias = baseAlias || `source_${federatedSources.length + 1}`;
+    const baseAlias = normalizeFederatedAlias(fallbackDataset.name || 'dataset');
+    const alias = baseAlias || `dataset_${federatedSources.length + 1}`;
     setFederatedSources((current) => [
       ...current,
       {
         id: nextFederatedSourceId(),
-        connectorId: fallbackConnector.id || '',
+        datasetId: fallbackDataset.id,
         alias,
       },
     ]);
-  }, [federatedSources, availableConnectors, toast]);
+  }, [federatedSources, availableFederatedDatasets, toast]);
 
   const removeFederatedSource = useCallback((sourceId: string) => {
     setFederatedSources((current) => current.filter((source) => source.id !== sourceId));
@@ -1332,9 +1423,9 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     const validSources = federatedSources
       .map((source, index) => ({
         alias: normalizeFederatedAlias(source.alias) || `source_${index + 1}`,
-        connectorId: source.connectorId,
+        datasetId: source.datasetId,
       }))
-      .filter((source) => source.connectorId);
+      .filter((source) => source.datasetId);
     if (validSources.length < 2) {
       toast({
         title: 'Add more sources',
@@ -1346,19 +1437,23 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     const directives = buildFederatedDirectives();
     const left = validSources[0].alias;
     const right = validSources[1].alias;
+    const leftDataset = validSources[0].datasetId ? datasetById[validSources[0].datasetId] : null;
+    const rightDataset = validSources[1].datasetId ? datasetById[validSources[1].datasetId] : null;
+    const leftReference = leftDataset ? datasetReferencePreview(leftDataset, left) : `${left}.public.accounts`;
+    const rightReference = rightDataset ? datasetReferencePreview(rightDataset, right) : `${right}.public.accounts`;
     const template = `${directives}
 -- Federated SQL syntax:
---   <source_alias>.<schema>.<table>
+--   <dataset_alias>.<schema?>.<table>
 SELECT TOP 100
   l.id,
   r.id
-FROM ${left}.public.accounts AS l
-JOIN ${right}.public.accounts AS r
+FROM ${leftReference} AS l
+JOIN ${rightReference} AS r
   ON l.id = r.id
 ORDER BY l.id DESC;`;
     applyQueryText(template, { immediateState: true });
     appendLog('info', 'Inserted federated query template.');
-  }, [federatedSources, buildFederatedDirectives, toast, applyQueryText, appendLog]);
+  }, [federatedSources, buildFederatedDirectives, toast, applyQueryText, appendLog, datasetById]);
 
   const runProfilingQuery = useCallback((column: string, mode: 'top' | 'nulls' | 'distribution') => {
     const trimmedQuery = queryTextRef.current.trim().replace(/;$/, '');
@@ -1459,7 +1554,10 @@ ORDER BY [${column}] ASC;`;
             <input
               type="checkbox"
               checked={federatedMode}
-              onChange={(event) => setFederatedMode(event.target.checked)}
+              onChange={(event) => {
+                setModeTouched(true);
+                setFederatedMode(event.target.checked);
+              }}
               disabled={!policyQuery.data?.allowFederation}
             />
             Federated mode
@@ -1472,7 +1570,7 @@ ORDER BY [${column}] ASC;`;
           {federatedMode ? (
             <div className="space-y-3 rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-3">
               <p className="text-xs text-[color:var(--text-secondary)]">
-                Configure at least two sources, assign aliases, then reference them as
+                Configure structured datasets for federation-first SQL, assign aliases, then reference them as
                 {' '}
                 <span className="font-mono">alias.schema.table</span>
                 .
@@ -1482,13 +1580,15 @@ ORDER BY [${column}] ASC;`;
                   <div key={source.id} className="space-y-2 rounded-lg border border-[color:var(--panel-border)] p-2">
                     <div className="grid gap-2 sm:grid-cols-[1fr_120px_auto]">
                       <Select
-                        value={source.connectorId}
-                        onChange={(event) => updateFederatedSource(source.id, { connectorId: event.target.value })}
+                        value={source.datasetId || ''}
+                        onChange={(event) =>
+                          updateFederatedSource(source.id, { datasetId: event.target.value })
+                        }
                       >
-                        <option value="">Select source</option>
-                        {availableConnectors.map((connector) => (
-                          <option key={`federated-${source.id}-${connector.id}`} value={connector.id}>
-                            {connector.name}
+                        <option value="">Select dataset</option>
+                        {availableFederatedDatasets.map((dataset) => (
+                          <option key={`federated-${source.id}-${dataset.id}`} value={dataset.id}>
+                            {dataset.name}
                           </option>
                         ))}
                       </Select>
@@ -1502,16 +1602,21 @@ ORDER BY [${column}] ASC;`;
                         variant="ghost"
                         size="icon"
                         onClick={() => removeFederatedSource(source.id)}
-                        disabled={federatedSources.length <= 2}
+                        disabled={federatedSources.length <= 1}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
                     <p className="text-[11px] text-[color:var(--text-muted)]">
-                      {(source.connectorId && connectorNameById[source.connectorId]) || 'No source selected'}
+                      {(source.datasetId && datasetById[source.datasetId]?.name) || 'No dataset selected'}
                       {' '}
                       <span className="font-mono">
-                        {`${normalizeFederatedAlias(source.alias) || `source_${index + 1}`}.public.accounts`}
+                        {source.datasetId && datasetById[source.datasetId]
+                          ? datasetReferencePreview(
+                              datasetById[source.datasetId],
+                              normalizeFederatedAlias(source.alias) || `source_${index + 1}`,
+                            )
+                          : `${normalizeFederatedAlias(source.alias) || `source_${index + 1}`}.public.accounts`}
                       </span>
                     </p>
                   </div>
@@ -1520,7 +1625,7 @@ ORDER BY [${column}] ASC;`;
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="outline" size="sm" onClick={addFederatedSource}>
                   <Plus className="mr-1 h-4 w-4" />
-                  Add source
+                  Add dataset
                 </Button>
                 <Button type="button" variant="outline" size="sm" onClick={insertFederatedTemplate}>
                   <Wand2 className="mr-1 h-4 w-4" />
@@ -1550,6 +1655,7 @@ ORDER BY [${column}] ASC;`;
             </div>
           ) : (
             <div className="max-h-[55vh] space-y-2 overflow-auto pr-1 text-sm">
+              {schemaBrowserError ? <ErrorPanel {...schemaBrowserError} /> : null}
               {Object.values(schemaMap).length === 0 ? (
                 <p className="text-xs text-[color:var(--text-muted)]">No schemas loaded.</p>
               ) : null}
@@ -1568,7 +1674,6 @@ ORDER BY [${column}] ASC;`;
                   {selectedSchema === schemaNode.schema ? (
                     <div className="mt-2 space-y-1 text-xs text-[color:var(--text-secondary)]">
                       {schemaNode.loading ? <p>Loading tables...</p> : null}
-                      {schemaNode.error ? <p className="text-rose-500">{schemaNode.error}</p> : null}
                       {schemaNode.tables.map((table) => {
                         const key = `${schemaNode.schema}.${table}`;
                         return (
@@ -1590,11 +1695,7 @@ ORDER BY [${column}] ASC;`;
                                 variant="ghost"
                                 onClick={() => {
                                   void ensureDatasetForPhysicalTable(schemaNode.schema, table).catch((error) => {
-                                    toast({
-                                      title: 'Dataset creation failed',
-                                      description: error instanceof Error ? error.message : 'Unable to ensure dataset.',
-                                      variant: 'destructive',
-                                    });
+                                    setSchemaBrowserError(toDisplayError(error, 'dataset.form'));
                                   });
                                 }}
                               >
@@ -1775,13 +1876,20 @@ ORDER BY [${column}] ASC;`;
             </TabsList>
 
             <TabsContent value="results" className="space-y-3">
-              {jobState?.error?.message ? (
-                <div className="rounded-xl border border-rose-400/50 bg-rose-100/40 p-3 text-sm text-rose-900 dark:bg-rose-900/20 dark:text-rose-100">
-                  <p className="font-semibold">Execution error</p>
-                  <p className="mt-1">{String(jobState.error.message)}</p>
-                  <p className="mt-2 text-xs">Job: {jobState.id}</p>
-                  {jobState.correlationId ? <p className="text-xs">Correlation: {jobState.correlationId}</p> : null}
-                </div>
+              {executionError ? <ErrorPanel {...executionError} /> : null}
+              {!executionError && jobState?.status !== 'cancelled' && jobState?.error?.message ? (
+                <ErrorPanel
+                  {...toDisplayError(new Error(String(jobState.error.message)), 'sql.execution')}
+                  technicalDetails={
+                    [
+                      `Job: ${jobState.id}`,
+                      jobState.correlationId ? `Correlation: ${jobState.correlationId}` : null,
+                      String(jobState.error.message),
+                    ]
+                      .filter(Boolean)
+                      .join('\n')
+                  }
+                />
               ) : null}
               <div className="flex flex-wrap items-center gap-2 text-xs text-[color:var(--text-secondary)]">
                 <span className="rounded-full bg-[color:var(--chip-bg)] px-3 py-1">Rows: {jobResults?.rowCountPreview ?? 0}</span>

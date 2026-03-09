@@ -10,8 +10,22 @@ from langbridge.packages.common.langbridge_common.utils.storage_uri import resol
 from langbridge.packages.common.langbridge_common.db.dataset import DatasetRecord
 from langbridge.packages.common.langbridge_common.errors.application_errors import BusinessValidationError
 from langbridge.packages.common.langbridge_common.repositories.dataset_repository import DatasetRepository
+from langbridge.packages.common.langbridge_common.utils.datasets import (
+    build_dataset_execution_capabilities,
+    build_dataset_relation_identity,
+    derive_legacy_dataset_type,
+    resolve_dataset_connector_kind,
+    resolve_dataset_source_kind,
+    resolve_dataset_storage_kind,
+)
 from langbridge.packages.common.langbridge_common.utils.sql import enforce_read_only_sql
-from langbridge.packages.federation.models import FederationWorkflow, VirtualDataset, VirtualRelationship, VirtualTableBinding
+from langbridge.packages.federation.models import (
+    DatasetExecutionDescriptor,
+    FederationWorkflow,
+    VirtualDataset,
+    VirtualRelationship,
+    VirtualTableBinding,
+)
 from langbridge.packages.semantic.langbridge_semantic.model import SemanticModel, Table
 
 
@@ -128,6 +142,7 @@ class DatasetExecutionResolver:
             table_name=logical_table,
         )
         dialect = (dataset.dialect or "tsql").strip().lower() or "tsql"
+        dataset_descriptor = self._build_dataset_execution_descriptor(dataset)
 
         if dataset_type == "TABLE":
             if dataset.connection_id is None:
@@ -147,6 +162,7 @@ class DatasetExecutionResolver:
                     "physical_schema": dataset.schema_name,
                     "physical_table": physical_table,
                 },
+                dataset_descriptor=dataset_descriptor,
             )
             return binding, dialect
 
@@ -170,6 +186,7 @@ class DatasetExecutionResolver:
                     "physical_sql": sql_text,
                     "sql_dialect": dialect,
                 },
+                dataset_descriptor=dataset_descriptor,
             )
             return binding, dialect
 
@@ -194,6 +211,7 @@ class DatasetExecutionResolver:
                 table=logical_table,
                 catalog=None,
                 metadata=metadata,
+                dataset_descriptor=dataset_descriptor,
             )
             return binding, "duckdb"
 
@@ -474,6 +492,63 @@ class DatasetExecutionResolver:
     def _string_or_none(value: Any) -> str | None:
         normalized = str(value or "").strip()
         return normalized or None
+
+    @staticmethod
+    def _build_dataset_execution_descriptor(dataset: DatasetRecord) -> DatasetExecutionDescriptor:
+        connector_kind = resolve_dataset_connector_kind(
+            explicit_connector_kind=getattr(dataset, "connector_kind", None),
+            connection_connector_type=(dataset.dialect if dataset.connection_id else None),
+            file_config=dict(dataset.file_config_json or {}),
+            storage_uri=dataset.storage_uri,
+            legacy_dataset_type=dataset.dataset_type,
+        )
+        source_kind = resolve_dataset_source_kind(
+            explicit_source_kind=getattr(dataset, "source_kind", None),
+            legacy_dataset_type=dataset.dataset_type,
+            connector_kind=connector_kind,
+            file_config=dict(dataset.file_config_json or {}),
+        )
+        storage_kind = resolve_dataset_storage_kind(
+            explicit_storage_kind=getattr(dataset, "storage_kind", None),
+            legacy_dataset_type=dataset.dataset_type,
+            file_config=dict(dataset.file_config_json or {}),
+            storage_uri=dataset.storage_uri,
+        )
+        relation_identity = build_dataset_relation_identity(
+            dataset_id=dataset.id,
+            connector_id=dataset.connection_id,
+            dataset_name=dataset.name,
+            catalog_name=dataset.catalog_name,
+            schema_name=dataset.schema_name,
+            table_name=dataset.table_name,
+            storage_uri=dataset.storage_uri,
+            source_kind=source_kind,
+            storage_kind=storage_kind,
+            existing_payload=dict(getattr(dataset, "relation_identity_json", None) or {}),
+        )
+        capabilities = build_dataset_execution_capabilities(
+            source_kind=source_kind,
+            storage_kind=storage_kind,
+            existing_payload=dict(getattr(dataset, "execution_capabilities_json", None) or {}),
+        )
+        return DatasetExecutionDescriptor(
+            dataset_id=dataset.id,
+            connector_id=dataset.connection_id,
+            name=dataset.name,
+            source_kind=source_kind.value,
+            connector_kind=connector_kind,
+            storage_kind=storage_kind.value,
+            relation_identity=relation_identity.model_dump(mode="json"),
+            execution_capabilities=capabilities.model_dump(mode="json"),
+            legacy_dataset_type=derive_legacy_dataset_type(
+                source_kind=source_kind,
+                storage_kind=storage_kind,
+            ),
+            metadata={
+                "description": dataset.description,
+                "tags": list(dataset.tags_json or []),
+            },
+        )
 
 
 def build_file_scan_sql(*, storage_uri: str, file_config: dict[str, Any] | None = None) -> str:

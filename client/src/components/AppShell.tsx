@@ -42,8 +42,8 @@ interface NavChild {
 const NAV_ITEMS: NavItem[] = [
   {
     href: '/dashboard',
-    label: 'Agentic workspace',
-    description: 'Monitor automations and jump back into active orchestrations.',
+    label: 'Command Center',
+    description: 'Monitor data, queries, and orchestrations across your analytics workspace.',
     icon: LayoutDashboard,
   },
   {

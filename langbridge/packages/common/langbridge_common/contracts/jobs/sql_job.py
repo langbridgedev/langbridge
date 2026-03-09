@@ -30,7 +30,7 @@ class CreateSqlJobRequest(_Base):
     allowed_schemas: list[str] = Field(default_factory=list)
     allowed_tables: list[str] = Field(default_factory=list)
     redaction_rules: dict[str, str] = Field(default_factory=dict)
-    federated_aliases: dict[str, str] = Field(default_factory=dict)
+    federated_datasets: list[dict[str, Any]] = Field(default_factory=list)
     explain: bool = False
     correlation_id: str | None = None
 
@@ -42,6 +42,8 @@ class CreateSqlJobRequest(_Base):
             raise ValueError("connection_id must be omitted for federated SQL jobs.")
         if self.execution_mode == "federated" and not self.allow_federation:
             raise ValueError("Federated SQL execution is not enabled for this workspace.")
+        if self.execution_mode == "federated" and not self.federated_datasets:
+            raise ValueError("Federated SQL jobs require at least one federated dataset.")
         if not self.query.strip():
             raise ValueError("query is required.")
         self.query_dialect = self.query_dialect.strip().lower() or "tsql"

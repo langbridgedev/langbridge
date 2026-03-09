@@ -166,6 +166,7 @@ export default function DataConnectionsPage({ params }: DataConnectionsPageProps
   const [tableTab, setTableTab] = useState<'all' | 'selected'>('all');
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [selectedColumns, setSelectedColumns] = useState<Record<string, string[]>>({});
+  const [searchTerm, setSearchTerm] = useState('');
   const [columnSearch, setColumnSearch] = useState('');
   const [columnTab, setColumnTab] = useState<'all' | 'selected'>('all');
   const [includeExampleData, setIncludeExampleData] = useState(false);
@@ -1091,6 +1092,13 @@ export default function DataConnectionsPage({ params }: DataConnectionsPageProps
           </div>
           {typesLoading ? <Spinner className="h-5 w-5 text-[color:var(--text-secondary)]" /> : null}
         </header>
+
+        <Input
+          className="mt-5"
+          placeholder="Search connector types"
+          value={searchTerm}
+          onChange={(event) => setSearchTerm(event.target.value)}
+        />
 
         {sortedConnectorTypes.length > 0 ? (
           <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

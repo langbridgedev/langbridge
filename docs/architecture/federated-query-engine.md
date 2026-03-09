@@ -2,7 +2,15 @@
 
 The Federated Query Engine is Langbridge's primary structured data engine.
 
-It replaces the old dependency on a Trino-based data plane and runs through Worker execution.
+The engine now consumes normalized dataset execution descriptors as its primary structured input abstraction.
+
+- database tables
+- uploaded csv/parquet/json datasets
+- parquet-backed SaaS/API syncs such as Shopify
+- virtual datasets
+- future structured third-party connectors
+
+If a dataset advertises structured scan plus SQL federation support, it can participate in runtime joins through this same worker pipeline.
 
 ## Engine Components
 
@@ -21,7 +29,7 @@ It replaces the old dependency on a Trino-based data plane and runs through Work
 ## Query Lifecycle
 
 1. SQL or semantic query enters via API and is dispatched to worker.
-2. Worker binds source connectors and workspace workflow metadata.
+2. Worker resolves dataset descriptors into workspace workflow bindings and source adapters.
 3. Planner produces logical plan and optimized physical stage DAG.
 4. Scheduler executes remote and local stages with retry and artifact reuse.
 5. Result handle, artifacts, stage metrics, and stats are returned.
@@ -47,6 +55,8 @@ Current implementation supports:
 - Pushdown of scans/filters/projections where possible.
 - Join strategy decisions informed by statistics heuristics.
 - Stage-level retries and artifact-backed idempotence.
+- Dataset-oriented relation identity resolution for mixed structured sources.
+- DuckDB-backed local execution for file/parquet sources alongside SQL connector sources.
 
 Roadmap focus:
 - Better cost model and stats feedback.

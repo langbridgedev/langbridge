@@ -102,6 +102,9 @@ class TsqlSemanticTranslator:
         join_steps = JoinPlanner(model.relationships).plan(base_table, required_tables)
         alias_map = self._build_alias_map(base_table, join_steps)
 
+        #TODO: implement ctes. Currently we just inline everything which works but can lead to duplicated expressions and subqueries. We can start by implementing CTEs for joined tables and then expand to more complex expressions if needed.
+        # cte_clauses = self._build_ctes
+
         select_clauses, group_by_expressions, order_aliases = self._build_selects(
             alias_map, dimensions, time_dimensions, measures, metrics, resolver
         )
@@ -669,7 +672,12 @@ class TsqlSemanticTranslator:
             alias = alias_map[table]
         if expression:
             expr = self._ensure_expression(expression)
-            return self._replace_table_refs(expr, alias_map)
+            if isinstance(expr, exp.Column):
+                return exp.Column(
+                    this=exp.Identifier(this=column, quoted=True),
+                    table=exp.Identifier(this=alias, quoted=False),
+                )
+            # return self._replace_table_refs(expr, alias_map)
         if data_type == "date":
             # Sometimes the column might be stored as a string but semantically it's a date
             # Breaks duckdb otherwise since it doesn't allow implicit string to date comparisons

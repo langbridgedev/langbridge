@@ -12,6 +12,19 @@ class TableStatistics(BaseModel):
     distinct_estimates: dict[str, float] = Field(default_factory=dict)
 
 
+class DatasetExecutionDescriptor(BaseModel):
+    dataset_id: UUID | None = None
+    connector_id: UUID | None = None
+    name: str | None = None
+    source_kind: str
+    connector_kind: str | None = None
+    storage_kind: str
+    relation_identity: dict[str, Any] = Field(default_factory=dict)
+    execution_capabilities: dict[str, Any] = Field(default_factory=dict)
+    legacy_dataset_type: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class VirtualTableBinding(BaseModel):
     table_key: str
     source_id: str
@@ -21,6 +34,7 @@ class VirtualTableBinding(BaseModel):
     catalog: str | None = None
     stats: TableStatistics | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    dataset_descriptor: DatasetExecutionDescriptor | None = None
 
     @property
     def full_name(self) -> str:

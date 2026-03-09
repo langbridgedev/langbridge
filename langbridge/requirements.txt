@@ -32,7 +32,6 @@ itsdangerous==2.2.0
 psycopg2==2.9.11
 numpy==1.26.4
 faiss-cpu==1.8.0
-trino==0.336.0
 qdrant-client==1.9.1
 pyarrow==19.0.1
 duckdb==1.2.1

@@ -1,7 +1,7 @@
 import { DashboardCards } from './_components/DashboardCards';
 
 export const metadata = {
-  title: 'Dashboard | LangBridge',
+  title: 'Command Center | LangBridge',
 };
 
 export default function DashboardPage() {

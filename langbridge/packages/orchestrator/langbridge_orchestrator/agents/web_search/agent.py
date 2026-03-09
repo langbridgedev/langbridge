@@ -2,12 +2,13 @@
 Web search agent that retrieves and normalizes search results.
 """
 import asyncio
+import html
 import json
 import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Optional, Protocol
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 try:  # pragma: no cover - optional dependency for environments that do not execute HTTP providers
     import httpx
@@ -141,9 +142,11 @@ class DuckDuckGoInstantAnswerProvider:
         self,
         *,
         base_url: str = "https://api.duckduckgo.com/",
+        html_search_url: str = "https://lite.duckduckgo.com/lite/",
         user_agent: str = "langbridge-web-search/1.0",
     ) -> None:
         self.base_url = base_url
+        self.html_search_url = html_search_url
         self.user_agent = user_agent
 
     def search(
@@ -163,7 +166,16 @@ class DuckDuckGoInstantAnswerProvider:
             response = client.get(self.base_url, params=params)
             response.raise_for_status()
             payload = response.json()
-        return self._parse_results(query, payload, max_results=max_results)
+            results = self._parse_results(query, payload, max_results=max_results)
+            if results:
+                return results
+            html_response = client.get(
+                self.html_search_url,
+                params=self._build_html_params(query, region=region, safe_search=safe_search),
+                follow_redirects=True,
+            )
+            html_response.raise_for_status()
+        return self._parse_html_results(html_response.text, max_results=max_results)
 
     async def search_async(
         self,
@@ -182,7 +194,16 @@ class DuckDuckGoInstantAnswerProvider:
             response = await client.get(self.base_url, params=params)
             response.raise_for_status()
             payload = response.json()
-        return self._parse_results(query, payload, max_results=max_results)
+            results = self._parse_results(query, payload, max_results=max_results)
+            if results:
+                return results
+            html_response = await client.get(
+                self.html_search_url,
+                params=self._build_html_params(query, region=region, safe_search=safe_search),
+                follow_redirects=True,
+            )
+            html_response.raise_for_status()
+        return self._parse_html_results(html_response.text, max_results=max_results)
 
     def _build_params(
         self,
@@ -198,6 +219,21 @@ class DuckDuckGoInstantAnswerProvider:
             "no_html": "1",
             "t": "langbridge",
         }
+        if region:
+            params["kl"] = region
+        safe_value = self._normalize_safe_search(safe_search)
+        if safe_value is not None:
+            params["kp"] = safe_value
+        return params
+
+    def _build_html_params(
+        self,
+        query: str,
+        *,
+        region: Optional[str],
+        safe_search: Optional[str],
+    ) -> Dict[str, str]:
+        params = {"q": query}
         if region:
             params["kl"] = region
         safe_value = self._normalize_safe_search(safe_search)
@@ -273,6 +309,46 @@ class DuckDuckGoInstantAnswerProvider:
 
         return results[:max_results]
 
+    def _parse_html_results(self, payload: str, *, max_results: int) -> list[WebSearchResultItem]:
+        results: list[WebSearchResultItem] = []
+        seen_urls: set[str] = set()
+        pattern = re.compile(
+            r"<a(?=[^>]*class=['\"]result-link['\"])(?P<attrs>[^>]*)>"
+            r"(?P<title>.*?)</a>"
+            r"(?P<tail>.*?)(?=<a[^>]*class=['\"]result-link['\"]|<form[^>]*>|</table>)",
+            re.IGNORECASE | re.DOTALL,
+        )
+        for match in pattern.finditer(payload):
+            if len(results) >= max_results:
+                break
+            href_match = re.search(
+                r"href=['\"](?P<href>[^'\"]+)['\"]",
+                match.group("attrs"),
+                re.IGNORECASE,
+            )
+            if href_match is None:
+                continue
+            url = self._resolve_duckduckgo_result_url(href_match.group("href"))
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            title = self._clean_html_fragment(match.group("title"))
+            snippet_match = re.search(
+                r"<td[^>]*class=['\"]result-snippet['\"][^>]*>(?P<snippet>.*?)</td>",
+                match.group("tail"),
+                re.IGNORECASE | re.DOTALL,
+            )
+            snippet = self._clean_html_fragment(snippet_match.group("snippet")) if snippet_match else ""
+            results.append(
+                WebSearchResultItem(
+                    title=title or url,
+                    url=url,
+                    snippet=snippet,
+                    source=self._source_from_url(url) or self.name,
+                )
+            )
+        return results[:max_results]
+
     @staticmethod
     def _iter_related_topics(raw_topics: Any) -> Iterable[Dict[str, Any]]:
         for topic in DuckDuckGoInstantAnswerProvider._coerce_list(raw_topics):
@@ -295,6 +371,29 @@ class DuckDuckGoInstantAnswerProvider:
             return urlparse(url).netloc
         except ValueError:
             return ""
+
+    @staticmethod
+    def _clean_html_fragment(value: str) -> str:
+        text = re.sub(r"<[^>]+>", " ", value or "")
+        text = html.unescape(text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _resolve_duckduckgo_result_url(value: str) -> str:
+        raw_value = html.unescape(value or "").strip()
+        if not raw_value:
+            return ""
+        if raw_value.startswith("//"):
+            raw_value = f"https:{raw_value}"
+        elif raw_value.startswith("/"):
+            raw_value = urljoin("https://duckduckgo.com", raw_value)
+
+        parsed = urlparse(raw_value)
+        query = parse_qs(parsed.query)
+        target = query.get("uddg", [])
+        if target:
+            return unquote(target[0]).strip()
+        return raw_value
 
     @classmethod
     def _normalize_safe_search(cls, value: Optional[str]) -> Optional[str]:

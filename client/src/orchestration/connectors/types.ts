@@ -27,6 +27,7 @@ export interface ConnectorResponse {
   label?: string | null;
   icon?: string | null;
   connectorType?: string | null;
+  pluginMetadata?: Record<string, unknown> | null;
   organizationId?: string | null;
   projectId?: string | null;
   config?: Record<string, unknown> | null;

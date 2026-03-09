@@ -105,7 +105,7 @@ class Settings(BaseSettings):
     SQL_DEFAULT_MAX_RUNTIME_SECONDS: int = 30
     SQL_DEFAULT_MAX_CONCURRENCY: int = 3
     SQL_DEFAULT_ALLOW_DML: bool = False
-    SQL_DEFAULT_ALLOW_FEDERATION: bool = False
+    SQL_DEFAULT_ALLOW_FEDERATION: bool = True
     SQL_POLICY_MAX_PREVIEW_ROWS_UPPER_BOUND: int = 50000
     SQL_POLICY_MAX_EXPORT_ROWS_UPPER_BOUND: int = 500000
     SQL_POLICY_MAX_RUNTIME_SECONDS_UPPER_BOUND: int = 600
@@ -144,15 +144,6 @@ class Settings(BaseSettings):
     
     CONFIG_KEYRING: str = "default"  # JSON-encoded dict of base64 keys, e.g. '{"key-id-1": "base64key1",
     CONFIG_ACTIVE_KEY: str = "default"  # key ID of the active key in the keyring
-    UNIFIED_TRINO_HOST: str = "localhost"
-    UNIFIED_TRINO_PORT: int = 8080
-    UNIFIED_TRINO_USER: str = "trino"
-    UNIFIED_TRINO_PASSWORD: str | None = None
-    UNIFIED_TRINO_CATALOG: str = "system"
-    UNIFIED_TRINO_SCHEMA: str = "information_schema"
-    UNIFIED_TRINO_HTTP_SCHEME: str = "http"
-    UNIFIED_TRINO_VERIFY: bool = True
-    UNIFIED_TRINO_SOURCE: str = "langbridge"
     FEDERATION_ARTIFACT_DIR: str = ".cache/federation"
     FEDERATION_BROADCAST_THRESHOLD_BYTES: int = 64 * 1024 * 1024
     FEDERATION_PARTITION_COUNT: int = 8

@@ -50,9 +50,7 @@ More architecture docs:
 - `docs/architecture/hybrid-deployment.md`
 - `docs/architecture/deprecations.md`
 
-## Federated Query Engine (Replaces Trino)
-
-Langbridge no longer requires a Trino-based data plane.
+## Federated Query Engine
 
 Primary structured query execution now uses the built-in federated engine in `langbridge/packages/federation` and Worker tooling in `langbridge/apps/worker/langbridge_worker/tools/federated_query_tool.py`.
 
@@ -92,7 +90,7 @@ Reference:
 ## Getting Started
 
 ### Local (core stack)
-- API: `python langbridge/main.py`
+- API: `uvicorn langbridge.apps.api.langbridge_api.main:app --reload`
 - Worker: `python -m langbridge.apps.worker.langbridge_worker.main`
 - UI: `cd client && npm install && npm run dev`
 
@@ -100,8 +98,6 @@ Reference:
 - `docker compose up --build migrate api worker client db redis`
 - UI: `http://localhost:3000`
 - API docs: `http://localhost:8000/docs`
-
-Legacy Trino/gateway services may still exist in compose files but are deprecated and not required.
 
 ## Development
 
@@ -113,19 +109,8 @@ Developer docs:
 - `docs/features/federation.md`
 - `docs/features/agents.md`
 
-## Migration Note
-
-**Trino has been removed from the target architecture in favor of the built-in Federated Query Engine.**
-
-Legacy Trino and SQL gateway modules remain in the repo as transitional code and are marked deprecated:
-- `langbridge/apps/gateway/**`
-- `langbridge/services/trino/**`
-- `langbridge/packages/connectors/langbridge_connectors/api/_trino/**`
-- Related docker/env wiring listed in `docs/architecture/deprecations.md`
-
 ## Roadmap
 
-- Remove legacy Trino gateway components from runtime, CI, and compose defaults.
 - Expand federated join strategies and planner heuristics.
 - Improve cost-based optimization and statistics feedback loops.
 - Add runtime autoscaling and placement policies for customer runtimes.

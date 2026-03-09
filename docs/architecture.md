@@ -7,7 +7,7 @@ Langbridge architecture is now defined by:
 - Execution Plane (Worker runtime)
 - Built-in Federated Query Engine (planner + executor)
 
-Trino and SQL gateway are legacy/deprecated and are no longer required in the target architecture.
+The built-in federated engine is the only supported structured execution runtime.
 
 ## Read Next
 

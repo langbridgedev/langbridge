@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ArrowLeft, History, Play, RefreshCw, RotateCcw, Save, Trash2 } from 'lucide-react';
 
+import { ErrorPanel } from '@/components/ErrorPanel';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -12,7 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useWorkspaceScope } from '@/context/workspaceScope';
-import { ApiError } from '@/orchestration/http';
+import { toDisplayError, type DisplayError } from '@/lib/errors';
 import {
   deleteDataset,
   fetchDatasetDiff,
@@ -57,7 +58,8 @@ export default function DatasetDetailPage({ params }: Props): JSX.Element {
   const [diffToRevisionId, setDiffToRevisionId] = useState('');
   const [restoreRevisionId, setRestoreRevisionId] = useState('');
   const [restoreOpen, setRestoreOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<DisplayError | null>(null);
+  const [previewError, setPreviewError] = useState<DisplayError | null>(null);
 
   useEffect(() => {
     if (organizationId && organizationId !== selectedOrganizationId) setSelectedOrganizationId(organizationId);
@@ -109,28 +111,31 @@ export default function DatasetDetailPage({ params }: Props): JSX.Element {
         changeSummary: 'Dataset metadata updated from dataset detail page.',
       });
     },
-    onSuccess: async () => { setError(null); await refreshAll(queryClient, organizationId, datasetId); },
-    onError: (mutationError: unknown) => setError(resolveError(mutationError)),
+    onSuccess: async () => { setPageError(null); await refreshAll(queryClient, organizationId, datasetId); },
+    onError: (mutationError: unknown) => setPageError(toDisplayError(mutationError)),
   });
   const restoreMutation = useMutation({
     mutationFn: () => restoreDataset(datasetId, { workspaceId: organizationId, projectId: selectedProjectId || undefined, revisionId: restoreRevisionId, changeSummary: `Restore dataset from revision ${restoreRevisionId}.` }),
-    onSuccess: async () => { setRestoreOpen(false); setError(null); await refreshAll(queryClient, organizationId, datasetId); },
-    onError: (mutationError: unknown) => setError(resolveError(mutationError)),
+    onSuccess: async () => { setRestoreOpen(false); setPageError(null); await refreshAll(queryClient, organizationId, datasetId); },
+    onError: (mutationError: unknown) => setPageError(toDisplayError(mutationError)),
   });
   const deleteMutation = useMutation({
     mutationFn: () => deleteDataset(datasetId, organizationId),
     onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['datasets-list', organizationId] }); router.push(`/datasets/${organizationId}`); },
-    onError: (mutationError: unknown) => setError(resolveError(mutationError)),
+    onError: (mutationError: unknown) => setPageError(toDisplayError(mutationError)),
   });
   const previewMutation = useMutation({
     mutationFn: async () => { const queued = await previewDataset(datasetId, { workspaceId: organizationId, projectId: selectedProjectId || undefined, limit: Math.max(1, Number(previewLimit) || 100) }); return pollDatasetPreviewJob(datasetId, queued.jobId, organizationId); },
-    onSuccess: (result) => { setPreviewResult(result); setError(null); },
-    onError: (mutationError: unknown) => setError(resolveError(mutationError)),
+    onSuccess: (result) => { setPreviewResult(result); setPreviewError(null); },
+    onError: (mutationError: unknown) => {
+      setPreviewResult(null);
+      setPreviewError(toDisplayError(mutationError, 'dataset.preview'));
+    },
   });
   const profileMutation = useMutation({
     mutationFn: async () => { const queued = await profileDataset(datasetId, { workspaceId: organizationId, projectId: selectedProjectId || undefined }); return pollDatasetProfileJob(datasetId, queued.jobId, organizationId); },
-    onSuccess: async (result) => { setProfileResult(result); setError(null); await queryClient.invalidateQueries({ queryKey: ['dataset-detail', organizationId, datasetId] }); },
-    onError: (mutationError: unknown) => setError(resolveError(mutationError)),
+    onSuccess: async (result) => { setProfileResult(result); setPageError(null); await queryClient.invalidateQueries({ queryKey: ['dataset-detail', organizationId, datasetId] }); },
+    onError: (mutationError: unknown) => setPageError(toDisplayError(mutationError)),
   });
 
   return (
@@ -143,7 +148,7 @@ export default function DatasetDetailPage({ params }: Props): JSX.Element {
         </div>
       </div>
       {datasetQuery.isLoading ? <p className="text-sm">Loading dataset...</p> : null}
-      {datasetQuery.isError ? <p className="text-sm text-rose-600">{resolveError(datasetQuery.error)}</p> : null}
+      {datasetQuery.isError ? <ErrorPanel {...toDisplayError(datasetQuery.error)} /> : null}
 
       {datasetQuery.data ? <div className="surface-panel space-y-4 rounded-3xl p-6 shadow-soft">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -170,7 +175,7 @@ export default function DatasetDetailPage({ params }: Props): JSX.Element {
           <Button onClick={() => saveMutation.mutate()} isLoading={saveMutation.isPending}><Save className="mr-2 h-4 w-4" /> Save dataset</Button>
           <Button variant="outline" disabled={!currentVersion} onClick={() => { setRestoreRevisionId(currentVersion?.id || ''); setRestoreOpen(true); }}><RotateCcw className="mr-2 h-4 w-4" /> Restore revision</Button>
         </div>
-        {error ? <p className="text-sm text-rose-600">{error}</p> : null}
+        {pageError ? <ErrorPanel {...pageError} /> : null}
       </div> : null}
 
       {datasetQuery.data ? <section className="surface-panel rounded-3xl p-6 shadow-soft">
@@ -184,7 +189,7 @@ export default function DatasetDetailPage({ params }: Props): JSX.Element {
           </TabsList>
           <TabsContent value="schema"><SimpleSchemaTable columns={datasetQuery.data.columns} /></TabsContent>
           <TabsContent value="policies"><PolicyEditorView editor={policyEditor} onChange={setPolicyEditor} onSave={() => saveMutation.mutate()} savePending={saveMutation.isPending} onProfile={() => profileMutation.mutate()} profilePending={profileMutation.isPending} profileResult={profileResult} /></TabsContent>
-          <TabsContent value="preview"><PreviewView previewLimit={previewLimit} setPreviewLimit={setPreviewLimit} previewMutation={previewMutation} previewResult={previewResult} previewColumns={previewColumns} /></TabsContent>
+          <TabsContent value="preview"><PreviewView previewLimit={previewLimit} setPreviewLimit={setPreviewLimit} previewMutation={previewMutation} previewResult={previewResult} previewColumns={previewColumns} previewError={previewError} /></TabsContent>
           <TabsContent value="versions"><VersionsView versions={versions} selectedVersionId={selectedVersionId} setSelectedVersionId={setSelectedVersionId} diffFromRevisionId={diffFromRevisionId} diffToRevisionId={diffToRevisionId} setDiffFromRevisionId={setDiffFromRevisionId} setDiffToRevisionId={setDiffToRevisionId} diffData={diffQuery.data} versionData={versionQuery.data} onRestore={(revisionId) => { setRestoreRevisionId(revisionId); setRestoreOpen(true); }} /></TabsContent>
           <TabsContent value="lineage"><LineageView upstreamNodes={upstreamNodes} downstreamNodes={downstreamNodes} impact={impactQuery.data} /></TabsContent>
         </Tabs>
@@ -311,12 +316,14 @@ function PreviewView({
   previewMutation,
   previewResult,
   previewColumns,
+  previewError,
 }: {
   previewLimit: string;
   setPreviewLimit: Dispatch<SetStateAction<string>>;
   previewMutation: { mutate: () => void; isPending: boolean };
   previewResult: DatasetPreviewResponse | null;
   previewColumns: string[];
+  previewError: DisplayError | null;
 }): JSX.Element {
   return (
     <div className="space-y-3">
@@ -330,7 +337,10 @@ function PreviewView({
         </Button>
       </div>
 
-      {previewResult?.error ? <p className="text-sm text-rose-600">{previewResult.error}</p> : null}
+      {previewError ? <ErrorPanel {...previewError} /> : null}
+      {!previewError && previewResult?.error ? (
+        <ErrorPanel {...toDisplayError(new Error(previewResult.error), 'dataset.preview')} />
+      ) : null}
       {previewResult ? (
         <div className="space-y-2">
           <p className="text-xs text-[color:var(--text-muted)]">
@@ -693,16 +703,6 @@ function formatCell(value: unknown): string {
     return JSON.stringify(value);
   }
   return String(value);
-}
-
-function resolveError(error: unknown): string {
-  if (error instanceof ApiError) {
-    return error.message;
-  }
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return 'Something went wrong while processing the request.';
 }
 
 async function pollDatasetPreviewJob(datasetId: string, jobId: string, workspaceId: string): Promise<DatasetPreviewResponse> {

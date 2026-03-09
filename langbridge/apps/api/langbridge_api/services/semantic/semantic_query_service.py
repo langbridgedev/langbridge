@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import uuid
 from collections.abc import Iterable, Mapping
@@ -8,7 +10,9 @@ from langbridge.apps.api.langbridge_api.services.connector_service import Connec
 from langbridge.apps.api.langbridge_api.services.semantic.semantic_model_service import (
     SemanticModelService,
 )
-from langbridge.packages.common.langbridge_common.config import settings
+from langbridge.apps.worker.langbridge_worker.semantic_query_execution_service import (
+    SemanticQueryExecutionService,
+)
 from langbridge.packages.common.langbridge_common.contracts.connectors import ConnectorResponse
 from langbridge.packages.common.langbridge_common.contracts.semantic import (
     SemanticModelRecordResponse,
@@ -30,10 +34,6 @@ from langbridge.packages.connectors.langbridge_connectors.api.connector import (
     QueryResult,
     SqlConnector,
 )
-from langbridge.packages.connectors.langbridge_connectors.api._trino.connector import (
-    TrinoConnector,
-    TrinoConnectorConfig,
-)
 from langbridge.packages.semantic.langbridge_semantic.loader import (
     SemanticModelError,
     load_semantic_model,
@@ -41,9 +41,7 @@ from langbridge.packages.semantic.langbridge_semantic.loader import (
 from langbridge.packages.semantic.langbridge_semantic.model import SemanticModel
 from langbridge.packages.semantic.langbridge_semantic.query import SemanticQuery, SemanticQueryEngine
 from langbridge.packages.semantic.langbridge_semantic.unified_query import (
-    TenantAwareQueryContext,
     UnifiedSourceModel,
-    apply_tenant_aware_context,
     build_unified_semantic_model,
 )
 
@@ -53,9 +51,11 @@ class SemanticQueryService:
         self,
         semantic_model_service: SemanticModelService,
         connector_service: ConnectorService,
+        semantic_query_execution_service: SemanticQueryExecutionService | None = None,
     ):
         self._semantic_model_service = semantic_model_service
         self._connector_service = connector_service
+        self._semantic_query_execution_service = semantic_query_execution_service
         self._engine = SemanticQueryEngine()
         self._logger = logging.getLogger(__name__)
 
@@ -94,43 +94,21 @@ class SemanticQueryService:
         self,
         request: UnifiedSemanticQueryRequest,
     ) -> UnifiedSemanticQueryResponse:
-        sql_connector, execution_connector_id = await self._create_unified_trino_connector(
-            organization_id=request.organization_id,
-        )
+        if self._semantic_query_execution_service is None:
+            raise BusinessValidationError(
+                "Unified semantic query execution service is not configured."
+            )
 
-        unified_model, table_connector_map = await self._build_unified_model_and_map(
+        semantic_query = self._load_query_payload(request.query)
+        execution = await self._semantic_query_execution_service.execute_unified_query(
             organization_id=request.organization_id,
+            project_id=request.project_id,
+            semantic_query=semantic_query,
             semantic_model_ids=request.semantic_model_ids,
             joins=request.joins,
             metrics=request.metrics,
         )
-
-        semantic_query = self._load_query_payload(request.query)
-        execution_model = apply_tenant_aware_context(
-            unified_model,
-            context=TenantAwareQueryContext(
-                organization_id=request.organization_id,
-                execution_connector_id=execution_connector_id,
-            ),
-            table_connector_map=table_connector_map,
-        )
-
-        plan, result = await self._compile_and_execute(
-            semantic_model=execution_model,
-            semantic_query=semantic_query,
-            sql_connector=sql_connector,
-        )
-
-        return UnifiedSemanticQueryResponse(
-            id=uuid.uuid4(),
-            organization_id=request.organization_id,
-            project_id=request.project_id,
-            connector_id=execution_connector_id,
-            semantic_model_ids=request.semantic_model_ids,
-            data=self._engine.format_rows(result.columns, result.rows),
-            annotations=plan.annotations,
-            metadata=plan.metadata,
-        )
+        return execution.response
 
     async def get_meta(
         self,
@@ -159,7 +137,7 @@ class SemanticQueryService:
         self,
         request: UnifiedSemanticQueryMetaRequest,
     ) -> UnifiedSemanticQueryMetaResponse:
-        execution_connector_id = self._build_unified_execution_connector_id(
+        execution_connector_id = SemanticQueryExecutionService.build_unified_execution_connector_id(
             organization_id=request.organization_id
         )
 
@@ -261,44 +239,6 @@ class SemanticQueryService:
                 "Only SQL connectors are supported for semantic queries."
             )
         return sql_connector
-
-    async def _create_unified_trino_connector(
-        self,
-        *,
-        organization_id: UUID,
-    ) -> tuple[TrinoConnector, UUID]:
-        host = settings.UNIFIED_TRINO_HOST.strip()
-        if not host:
-            raise BusinessValidationError(
-                "UNIFIED_TRINO_HOST must be configured for unified semantic query execution."
-            )
-
-        execution_connector_id = self._build_unified_execution_connector_id(
-            organization_id=organization_id
-        )
-        connector = TrinoConnector(
-            TrinoConnectorConfig(
-                host=host,
-                port=settings.UNIFIED_TRINO_PORT,
-                user=settings.UNIFIED_TRINO_USER,
-                password=settings.UNIFIED_TRINO_PASSWORD,
-                catalog=settings.UNIFIED_TRINO_CATALOG,
-                schema=settings.UNIFIED_TRINO_SCHEMA,
-                http_scheme=settings.UNIFIED_TRINO_HTTP_SCHEME,
-                verify=settings.UNIFIED_TRINO_VERIFY,
-                tenant=str(organization_id),
-                source=settings.UNIFIED_TRINO_SOURCE,
-            )
-        )
-        await connector.test_connection()
-        return connector, execution_connector_id
-
-    @staticmethod
-    def _build_unified_execution_connector_id(*, organization_id: UUID) -> UUID:
-        return uuid.uuid5(
-            uuid.NAMESPACE_DNS,
-            f"langbridge-unified-trino:{organization_id}",
-        )
 
     async def _compile_and_execute(
         self,

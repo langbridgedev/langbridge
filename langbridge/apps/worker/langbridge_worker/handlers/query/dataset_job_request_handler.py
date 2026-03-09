@@ -629,21 +629,19 @@ class DatasetJobRequestHandler(BaseMessageHandler):
         max_export_rows = max(1, min(max_export_rows, settings.SQL_POLICY_MAX_EXPORT_ROWS_UPPER_BOUND))
         allow_dml = bool(defaults.allow_dml) if defaults else False
         redaction_rules = dict(defaults.redaction_rules or {}) if defaults else {}
-        self._dataset_policy_repository.add(
-            DatasetPolicyRecord(
-                id=uuid.uuid4(),
-                dataset_id=dataset.id,
-                workspace_id=request.workspace_id,
-                max_rows_preview=max_preview_rows,
-                max_export_rows=max_export_rows,
-                redaction_rules_json=redaction_rules,
-                row_filters_json=[],
-                allow_dml=allow_dml,
-                created_at=now,
-                updated_at=now,
-            )
+        policy = DatasetPolicyRecord(
+            id=uuid.uuid4(),
+            dataset_id=dataset.id,
+            workspace_id=request.workspace_id,
+            max_rows_preview=max_preview_rows,
+            max_export_rows=max_export_rows,
+            redaction_rules_json=redaction_rules,
+            row_filters_json=[],
+            allow_dml=allow_dml,
+            created_at=now,
+            updated_at=now,
         )
-        policy = await self._get_or_create_policy(dataset)
+        self._dataset_policy_repository.add(policy)
         await self._create_dataset_revision(
             dataset=dataset,
             policy=policy,

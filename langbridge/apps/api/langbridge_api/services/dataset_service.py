@@ -27,6 +27,7 @@ from langbridge.packages.common.langbridge_common.contracts.datasets import (
     DatasetColumnResponse,
     DatasetCsvIngestResponse,
     DatasetCreateRequest,
+    DatasetExecutionCapabilities,
     DatasetEnsureRequest,
     DatasetEnsureResponse,
     DatasetListResponse,
@@ -44,10 +45,13 @@ from langbridge.packages.common.langbridge_common.contracts.datasets import (
     DatasetPreviewResponse,
     DatasetProfileRequest,
     DatasetProfileResponse,
+    DatasetRelationIdentity,
     DatasetResponse,
     DatasetRestoreRequest,
+    DatasetSourceKind,
     DatasetStatsResponse,
     DatasetStatus,
+    DatasetStorageKind,
     DatasetType,
     DatasetUpdateRequest,
     DatasetImpactItemResponse,
@@ -111,6 +115,14 @@ from langbridge.packages.common.langbridge_common.utils.sql import (
 )
 from langbridge.packages.common.langbridge_common.utils.storage_uri import (
     path_to_storage_uri,
+)
+from langbridge.packages.common.langbridge_common.utils.datasets import (
+    build_dataset_execution_capabilities,
+    build_dataset_relation_identity,
+    derive_legacy_dataset_type,
+    resolve_dataset_connector_kind,
+    resolve_dataset_source_kind,
+    resolve_dataset_storage_kind,
 )
 from langbridge.packages.connectors.langbridge_connectors.api.config import ConnectorRuntimeType
 from langbridge.apps.api.langbridge_api.services.lineage_service import LineageService
@@ -232,6 +244,14 @@ class DatasetService:
             last_profiled_at=None,
             created_at=now,
             updated_at=now,
+        )
+        await self._apply_dataset_descriptor_metadata(
+            dataset,
+            explicit_source_kind=request.source_kind,
+            explicit_connector_kind=request.connector_kind,
+            explicit_storage_kind=request.storage_kind,
+            explicit_relation_identity=request.relation_identity,
+            explicit_execution_capabilities=request.execution_capabilities,
         )
         self._dataset_repository.add(dataset)
 
@@ -497,8 +517,42 @@ class DatasetService:
         dataset.referenced_dataset_ids_json = list(definition.get("referenced_dataset_ids") or [])
         dataset.federated_plan_json = definition.get("federated_plan")
         dataset.file_config_json = definition.get("file_config")
+        dataset.source_kind = definition.get("source_kind")
+        dataset.connector_kind = definition.get("connector_kind")
+        dataset.storage_kind = definition.get("storage_kind")
+        dataset.relation_identity_json = definition.get("relation_identity")
+        dataset.execution_capabilities_json = definition.get("execution_capabilities")
         if definition.get("status"):
             dataset.status = str(definition["status"])
+
+        await self._apply_dataset_descriptor_metadata(
+            dataset,
+            explicit_source_kind=(
+                DatasetSourceKind(str(definition["source_kind"]))
+                if definition.get("source_kind")
+                else None
+            ),
+            explicit_connector_kind=(
+                str(definition["connector_kind"])
+                if definition.get("connector_kind") is not None
+                else None
+            ),
+            explicit_storage_kind=(
+                DatasetStorageKind(str(definition["storage_kind"]))
+                if definition.get("storage_kind")
+                else None
+            ),
+            explicit_relation_identity=(
+                DatasetRelationIdentity.model_validate(definition["relation_identity"])
+                if isinstance(definition.get("relation_identity"), dict)
+                else None
+            ),
+            explicit_execution_capabilities=(
+                DatasetExecutionCapabilities.model_validate(definition["execution_capabilities"])
+                if isinstance(definition.get("execution_capabilities"), dict)
+                else None
+            ),
+        )
 
         await self._replace_columns(
             dataset=dataset,
@@ -589,6 +643,15 @@ class DatasetService:
         if request.status is not None:
             dataset.status = request.status.value
 
+        await self._apply_dataset_descriptor_metadata(
+            dataset,
+            explicit_source_kind=request.source_kind,
+            explicit_connector_kind=request.connector_kind,
+            explicit_storage_kind=request.storage_kind,
+            explicit_relation_identity=request.relation_identity,
+            explicit_execution_capabilities=request.execution_capabilities,
+        )
+
         if request.columns is not None:
             await self._replace_columns(
                 dataset=dataset,
@@ -651,11 +714,19 @@ class DatasetService:
         items: list[DatasetCatalogItem] = []
         for dataset in datasets:
             columns = await self._dataset_column_repository.list_for_dataset(dataset_id=dataset.id)
+            source_kind, connector_kind, storage_kind, relation_identity, execution_capabilities = (
+                await self._resolve_dataset_descriptor_payload(dataset)
+            )
             items.append(
                 DatasetCatalogItem(
                     id=dataset.id,
                     name=dataset.name,
                     dataset_type=DatasetType(dataset.dataset_type.upper()),
+                    source_kind=source_kind,
+                    connector_kind=connector_kind,
+                    storage_kind=storage_kind,
+                    relation_identity=relation_identity,
+                    execution_capabilities=execution_capabilities,
                     tags=list(dataset.tags_json or []),
                     columns=[self._to_column_response(column) for column in columns],
                     updated_at=dataset.updated_at,
@@ -950,6 +1021,7 @@ class DatasetService:
             created_at=now,
             updated_at=now,
         )
+        await self._apply_dataset_descriptor_metadata(dataset)
         self._dataset_repository.add(dataset)
         await self._replace_columns(
             dataset=dataset,
@@ -1372,22 +1444,7 @@ class DatasetService:
         dataset: DatasetRecord,
         policy: DatasetPolicyRequest | None,
     ) -> DatasetPolicyRecord:
-        existing = await self._dataset_policy_repository.get_for_dataset(dataset_id=dataset.id)
-        if existing is None:
-            existing = DatasetPolicyRecord(
-                id=uuid.uuid4(),
-                dataset_id=dataset.id,
-                workspace_id=dataset.workspace_id,
-                max_rows_preview=settings.SQL_DEFAULT_MAX_PREVIEW_ROWS,
-                max_export_rows=settings.SQL_DEFAULT_MAX_EXPORT_ROWS,
-                redaction_rules_json={},
-                row_filters_json=[],
-                allow_dml=False,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
-            )
-            self._dataset_policy_repository.add(existing)
-        self._set_cached_policy(dataset, existing)
+        existing = await self._get_or_create_policy(dataset)
 
         if policy is not None:
             if policy.max_rows_preview is not None:
@@ -1418,10 +1475,19 @@ class DatasetService:
         schema_snapshot = [self._to_column_response(column).model_dump(mode="json") for column in columns]
         policy_snapshot = self._to_policy_response(policy).model_dump(mode="json")
         source_bindings = await self._build_dataset_source_bindings(dataset)
+        (
+            _source_kind,
+            _connector_kind,
+            _storage_kind,
+            relation_identity,
+            execution_capabilities,
+        ) = await self._resolve_dataset_descriptor_payload(dataset)
         execution_characteristics = {
             "row_count_estimate": dataset.row_count_estimate,
             "bytes_estimate": dataset.bytes_estimate,
             "last_profiled_at": dataset.last_profiled_at.isoformat() if dataset.last_profiled_at else None,
+            "relation_identity": relation_identity.model_dump(mode="json"),
+            "execution_capabilities": execution_capabilities.model_dump(mode="json"),
         }
         snapshot = {
             "dataset": definition,
@@ -1455,6 +1521,13 @@ class DatasetService:
         return revision_id
 
     def _build_dataset_definition_snapshot(self, dataset: DatasetRecord) -> dict[str, Any]:
+        (
+            source_kind,
+            connector_kind,
+            storage_kind,
+            relation_identity,
+            execution_capabilities,
+        ) = self._resolve_dataset_descriptor_payload_sync(dataset)
         return {
             "id": str(dataset.id),
             "workspace_id": str(dataset.workspace_id),
@@ -1464,6 +1537,9 @@ class DatasetService:
             "description": dataset.description,
             "tags": list(dataset.tags_json or []),
             "dataset_type": dataset.dataset_type,
+            "source_kind": source_kind.value,
+            "connector_kind": connector_kind,
+            "storage_kind": storage_kind.value,
             "dialect": dataset.dialect,
             "storage_uri": dataset.storage_uri,
             "catalog_name": dataset.catalog_name,
@@ -1473,27 +1549,54 @@ class DatasetService:
             "referenced_dataset_ids": list(dataset.referenced_dataset_ids_json or []),
             "federated_plan": dataset.federated_plan_json,
             "file_config": dataset.file_config_json,
+            "relation_identity": relation_identity.model_dump(mode="json"),
+            "execution_capabilities": execution_capabilities.model_dump(mode="json"),
             "status": dataset.status,
         }
 
     async def _build_dataset_source_bindings(self, dataset: DatasetRecord) -> list[dict[str, Any]]:
-        dataset_type = DatasetType(dataset.dataset_type.upper())
+        (
+            source_kind,
+            connector_kind,
+            storage_kind,
+            relation_identity,
+            execution_capabilities,
+        ) = await self._resolve_dataset_descriptor_payload(dataset)
+        dataset_type = DatasetType(
+            derive_legacy_dataset_type(
+                source_kind=source_kind,
+                storage_kind=storage_kind,
+            )
+        )
+        bindings: list[dict[str, Any]] = [
+            {
+                "source_type": "dataset_contract",
+                "dataset_id": str(dataset.id),
+                "source_kind": source_kind.value,
+                "connector_kind": connector_kind,
+                "storage_kind": storage_kind.value,
+                "relation_identity": relation_identity.model_dump(mode="json"),
+                "execution_capabilities": execution_capabilities.model_dump(mode="json"),
+            }
+        ]
         if dataset_type == DatasetType.TABLE:
-            return [
-                {
-                    "source_type": "connection",
-                    "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
-                },
-                {
-                    "source_type": "source_table",
-                    "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
-                    "catalog_name": dataset.catalog_name,
-                    "schema_name": dataset.schema_name,
-                    "table_name": dataset.table_name,
-                },
-            ]
+            bindings.extend(
+                [
+                    {
+                        "source_type": "connection",
+                        "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
+                    },
+                    {
+                        "source_type": "source_table",
+                        "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
+                        "catalog_name": dataset.catalog_name,
+                        "schema_name": dataset.schema_name,
+                        "table_name": dataset.table_name,
+                    },
+                ]
+            )
+            return bindings
         if dataset_type == DatasetType.SQL:
-            bindings: list[dict[str, Any]] = []
             if dataset.connection_id:
                 bindings.append(
                     {
@@ -1536,16 +1639,15 @@ class DatasetService:
                 or str((dataset.file_config_json or {}).get("storage_uri") or "").strip()
                 or dataset.storage_uri
             )
-            bindings = [
-                {
-                    "source_type": "file_resource",
-                    "storage_uri": storage_uri,
-                    "file_config": dict(dataset.file_config_json or {}),
-                }
-            ]
+            if dataset.connection_id is not None:
+                bindings.append(
+                    {
+                        "source_type": "connection",
+                        "connection_id": str(dataset.connection_id),
+                    }
+                )
             if isinstance(sync_meta, dict):
-                bindings.insert(
-                    0,
+                bindings.append(
                     {
                         "source_type": "api_resource",
                         "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
@@ -1553,26 +1655,25 @@ class DatasetService:
                         "resource_name": sync_meta.get("resource_name"),
                         "root_resource_name": sync_meta.get("root_resource_name"),
                         "parent_resource_name": sync_meta.get("parent_resource_name"),
-                    },
+                    }
                 )
-                if dataset.connection_id is not None:
-                    bindings.insert(
-                        0,
-                        {
-                            "source_type": "connection",
-                            "connection_id": str(dataset.connection_id),
-                        },
-                    )
+            bindings.append(
+                {
+                    "source_type": "file_resource",
+                    "storage_uri": storage_uri,
+                    "file_config": dict(dataset.file_config_json or {}),
+                }
+            )
             return bindings
         if dataset_type == DatasetType.FEDERATED:
-            return [
+            bindings.extend(
                 {
                     "source_type": "dataset",
                     "dataset_id": value,
                 }
                 for value in self._extract_federated_source_ids(dataset)
-            ]
-        return []
+            )
+        return bindings
 
     def _build_revision_snapshot_payload(self, revision: DatasetRevisionRecord) -> dict[str, Any]:
         definition = dict(revision.definition_json or {})
@@ -1866,9 +1967,172 @@ class DatasetService:
             **dict(item.metadata or {}),
         }
 
+    async def _resolve_dataset_descriptor_payload(
+        self,
+        dataset: DatasetRecord,
+    ) -> tuple[
+        DatasetSourceKind,
+        str | None,
+        DatasetStorageKind,
+        DatasetRelationIdentity,
+        DatasetExecutionCapabilities,
+    ]:
+        if dataset.connection_id is not None and not dataset.connector_kind:
+            connector = await self._connector_repository.get_by_id(dataset.connection_id)
+            connection_connector_type = getattr(connector, "connector_type", None)
+        else:
+            connection_connector_type = None
+        return self._resolve_dataset_descriptor_payload_sync(
+            dataset,
+            connection_connector_type=connection_connector_type,
+        )
+
+    def _resolve_dataset_descriptor_payload_sync(
+        self,
+        dataset: DatasetRecord,
+        *,
+        connection_connector_type: str | None = None,
+    ) -> tuple[
+        DatasetSourceKind,
+        str | None,
+        DatasetStorageKind,
+        DatasetRelationIdentity,
+        DatasetExecutionCapabilities,
+    ]:
+        connector_kind = resolve_dataset_connector_kind(
+            explicit_connector_kind=dataset.connector_kind,
+            connection_connector_type=connection_connector_type,
+            file_config=dict(dataset.file_config_json or {}),
+            storage_uri=dataset.storage_uri,
+            legacy_dataset_type=dataset.dataset_type,
+        )
+        source_kind = resolve_dataset_source_kind(
+            explicit_source_kind=dataset.source_kind,
+            legacy_dataset_type=dataset.dataset_type,
+            connector_kind=connector_kind,
+            file_config=dict(dataset.file_config_json or {}),
+        )
+        storage_kind = resolve_dataset_storage_kind(
+            explicit_storage_kind=dataset.storage_kind,
+            legacy_dataset_type=dataset.dataset_type,
+            file_config=dict(dataset.file_config_json or {}),
+            storage_uri=dataset.storage_uri,
+        )
+        relation_identity = build_dataset_relation_identity(
+            dataset_id=dataset.id,
+            connector_id=dataset.connection_id,
+            dataset_name=dataset.name,
+            catalog_name=dataset.catalog_name,
+            schema_name=dataset.schema_name,
+            table_name=dataset.table_name,
+            storage_uri=dataset.storage_uri,
+            source_kind=source_kind,
+            storage_kind=storage_kind,
+            existing_payload=dict(dataset.relation_identity_json or {}),
+        )
+        execution_capabilities = build_dataset_execution_capabilities(
+            source_kind=source_kind,
+            storage_kind=storage_kind,
+            existing_payload=dict(dataset.execution_capabilities_json or {}),
+        )
+        return (
+            source_kind,
+            connector_kind,
+            storage_kind,
+            relation_identity,
+            execution_capabilities,
+        )
+
+    async def _apply_dataset_descriptor_metadata(
+        self,
+        dataset: DatasetRecord,
+        *,
+        explicit_source_kind: DatasetSourceKind | None = None,
+        explicit_connector_kind: str | None = None,
+        explicit_storage_kind: DatasetStorageKind | None = None,
+        explicit_relation_identity: DatasetRelationIdentity | None = None,
+        explicit_execution_capabilities: DatasetExecutionCapabilities | None = None,
+    ) -> None:
+        connection_connector_type: str | None = None
+        if dataset.connection_id is not None and not explicit_connector_kind:
+            connector = await self._connector_repository.get_by_id(dataset.connection_id)
+            connection_connector_type = getattr(connector, "connector_type", None)
+
+        connector_kind = resolve_dataset_connector_kind(
+            explicit_connector_kind=(
+                explicit_connector_kind
+                if explicit_connector_kind is not None
+                else dataset.connector_kind
+            ),
+            connection_connector_type=connection_connector_type,
+            file_config=dict(dataset.file_config_json or {}),
+            storage_uri=dataset.storage_uri,
+            legacy_dataset_type=dataset.dataset_type,
+        )
+        source_kind = resolve_dataset_source_kind(
+            explicit_source_kind=(
+                explicit_source_kind.value
+                if isinstance(explicit_source_kind, DatasetSourceKind)
+                else explicit_source_kind
+            )
+            or dataset.source_kind,
+            legacy_dataset_type=dataset.dataset_type,
+            connector_kind=connector_kind,
+            file_config=dict(dataset.file_config_json or {}),
+        )
+        storage_kind = resolve_dataset_storage_kind(
+            explicit_storage_kind=(
+                explicit_storage_kind.value
+                if isinstance(explicit_storage_kind, DatasetStorageKind)
+                else explicit_storage_kind
+            )
+            or dataset.storage_kind,
+            legacy_dataset_type=dataset.dataset_type,
+            file_config=dict(dataset.file_config_json or {}),
+            storage_uri=dataset.storage_uri,
+        )
+        relation_identity = (
+            explicit_relation_identity
+            if explicit_relation_identity is not None
+            else build_dataset_relation_identity(
+                dataset_id=dataset.id,
+                connector_id=dataset.connection_id,
+                dataset_name=dataset.name,
+                catalog_name=dataset.catalog_name,
+                schema_name=dataset.schema_name,
+                table_name=dataset.table_name,
+                storage_uri=dataset.storage_uri,
+                source_kind=source_kind,
+                storage_kind=storage_kind,
+                existing_payload=dict(dataset.relation_identity_json or {}),
+            )
+        )
+        execution_capabilities = (
+            explicit_execution_capabilities
+            if explicit_execution_capabilities is not None
+            else build_dataset_execution_capabilities(
+                source_kind=source_kind,
+                storage_kind=storage_kind,
+                existing_payload=dict(dataset.execution_capabilities_json or {}),
+            )
+        )
+
+        dataset.source_kind = source_kind.value
+        dataset.connector_kind = connector_kind
+        dataset.storage_kind = storage_kind.value
+        dataset.relation_identity_json = relation_identity.model_dump(mode="json")
+        dataset.execution_capabilities_json = execution_capabilities.model_dump(mode="json")
+        dataset.dataset_type = derive_legacy_dataset_type(
+            source_kind=source_kind,
+            storage_kind=storage_kind,
+        )
+
     async def _to_dataset_response(self, dataset: DatasetRecord) -> DatasetResponse:
         columns = await self._dataset_column_repository.list_for_dataset(dataset_id=dataset.id)
         policy = await self._get_or_create_policy(dataset)
+        source_kind, connector_kind, storage_kind, relation_identity, execution_capabilities = (
+            await self._resolve_dataset_descriptor_payload(dataset)
+        )
         return DatasetResponse(
             id=dataset.id,
             workspace_id=dataset.workspace_id,
@@ -1879,6 +2143,9 @@ class DatasetService:
             description=dataset.description,
             tags=list(dataset.tags_json or []),
             dataset_type=DatasetType(dataset.dataset_type.upper()),
+            source_kind=source_kind,
+            connector_kind=connector_kind,
+            storage_kind=storage_kind,
             dialect=dataset.dialect,
             storage_uri=dataset.storage_uri,
             catalog_name=dataset.catalog_name,
@@ -1890,6 +2157,8 @@ class DatasetService:
             ],
             federated_plan=dataset.federated_plan_json,
             file_config=dataset.file_config_json,
+            relation_identity=relation_identity,
+            execution_capabilities=execution_capabilities,
             status=DatasetStatus(dataset.status),
             revision_id=dataset.revision_id,
             columns=[self._to_column_response(column) for column in columns],

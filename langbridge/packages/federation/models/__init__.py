@@ -16,6 +16,7 @@
 )
 from langbridge.packages.federation.models.smq import SMQFilter, SMQOrderItem, SMQQuery, SMQTimeDimension
 from langbridge.packages.federation.models.virtual_dataset import (
+    DatasetExecutionDescriptor,
     FederationWorkflow,
     TableStatistics,
     VirtualDataset,
@@ -42,6 +43,7 @@ __all__ = [
     "SMQOrderItem",
     "SMQQuery",
     "SMQTimeDimension",
+    "DatasetExecutionDescriptor",
     "FederationWorkflow",
     "TableStatistics",
     "VirtualDataset",

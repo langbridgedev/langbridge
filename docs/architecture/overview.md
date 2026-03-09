@@ -53,7 +53,6 @@ flowchart LR
 - SQL and semantic workloads share a common federated planning and execution substrate.
 - Control plane and execution plane are independently deployable.
 - Runtime registration and edge task transport are authenticated and auditable.
-- Trino and SQL gateway infrastructure are legacy, deprecated, and no longer required for target architecture.
 
 ## Related Docs
 

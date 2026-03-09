@@ -2,10 +2,11 @@
 
 import { JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, RefreshCw, Search } from 'lucide-react';
 
+import { ErrorPanel } from '@/components/ErrorPanel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -20,8 +21,8 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useWorkspaceScope } from '@/context/workspaceScope';
+import { createDisplayError, toDisplayError, type DisplayError } from '@/lib/errors';
 import { fetchConnectors } from '@/orchestration/connectors';
-import { ApiError } from '@/orchestration/http';
 import {
   createDataset,
   listDatasets,
@@ -64,28 +65,16 @@ const DEFAULT_CREATE_STATE: CreateState = {
   maxRowsPreview: '1000',
 };
 
-const SQL_CONNECTOR_TYPES = new Set([
-  'SQLSERVER',
-  'POSTGRES',
-  'MYSQL',
-  'MARIADB',
-  'SNOWFLAKE',
-  'REDSHIFT',
-  'BIGQUERY',
-  'ORACLE',
-  'SQLITE',
-  'TRINO',
-]);
-
-function isSqlConnector(connectorType?: string | null): boolean {
-  if (!connectorType) {
+function isSqlConnector(connectorFamily?: string | null): boolean {
+  if (!connectorFamily) {
     return false;
   }
-  return SQL_CONNECTOR_TYPES.has(connectorType.toUpperCase());
+  return connectorFamily.toUpperCase() == "DATABASE";
 }
 
 export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element {
   const organizationId = params.organizationId;
+  const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -102,7 +91,7 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
   const [tables, setTables] = useState<string[]>([]);
   const [columns, setColumns] = useState<Array<{ name: string; type: string }>>([]);
   const [selectedColumns, setSelectedColumns] = useState<Record<string, boolean>>({});
-  const [modalError, setModalError] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<DisplayError | null>(null);
   const [loadingSchemas, setLoadingSchemas] = useState(false);
   const [loadingTables, setLoadingTables] = useState(false);
   const [loadingColumns, setLoadingColumns] = useState(false);
@@ -140,11 +129,14 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
       setSchemas([]);
       setTables([]);
       setSelectedColumns({});
+      if (pathname && searchParams.get('create') === '1') {
+        router.replace(pathname, { scroll: false });
+      }
       await queryClient.invalidateQueries({ queryKey: ['datasets-list', organizationId] });
       router.push(`/datasets/${organizationId}/${dataset.id}`);
     },
     onError: (error: unknown) => {
-      setModalError(resolveError(error));
+      setModalError(toDisplayError(error, 'dataset.form'));
     },
   });
   const uploadMutation = useMutation({
@@ -163,11 +155,14 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
       setSchemas([]);
       setTables([]);
       setSelectedColumns({});
+      if (pathname && searchParams.get('create') === '1') {
+        router.replace(pathname, { scroll: false });
+      }
       await queryClient.invalidateQueries({ queryKey: ['datasets-list', organizationId] });
       router.push(`/datasets/${organizationId}/${response.datasetId}`);
     },
     onError: (error: unknown) => {
-      setModalError(resolveError(error));
+      setModalError(toDisplayError(error, 'dataset.form'));
     },
   });
 
@@ -177,9 +172,10 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
     () => Object.values(selectedColumns).filter(Boolean).length,
     [selectedColumns],
   );
+  const fieldErrors = modalError?.fieldErrors ?? {};
 
   const tableConnectors = useMemo(
-    () => connectors.filter((connector) => isSqlConnector(connector.connectorType)),
+    () => connectors.filter((connector) => isSqlConnector(connector.pluginMetadata?.connectorFamily)),
     [connectors],
   );
 
@@ -197,7 +193,7 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
         const response = await fetchConnectorSchemas(organizationId, connectionId);
         setSchemas(response.schemas || []);
       } catch (error) {
-        setModalError(resolveError(error));
+        setModalError(toDisplayError(error, 'schema.browser'));
       } finally {
         setLoadingSchemas(false);
       }
@@ -217,7 +213,7 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
         const response = await fetchConnectorTables(organizationId, connectionId, schemaName);
         setTables(response.tables || []);
       } catch (error) {
-        setModalError(resolveError(error));
+        setModalError(toDisplayError(error, 'schema.browser'));
       } finally {
         setLoadingTables(false);
       }
@@ -243,7 +239,7 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
         });
         setSelectedColumns(nextSelected);
       } catch (error) {
-        setModalError(resolveError(error));
+        setModalError(toDisplayError(error, 'schema.browser'));
       } finally {
         setLoadingColumns(false);
       }
@@ -260,11 +256,11 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
       return;
     }
     const nextConnectionId = tableConnectors[0]?.id || '';
-    setCreateState((current) => ({
-      ...current,
-      connectionId: nextConnectionId,
-      schemaName: '',
-      tableName: '',
+        setCreateState((current) => ({
+          ...current,
+          connectionId: nextConnectionId,
+          schemaName: '',
+          tableName: '',
     }));
     setSchemas([]);
     setTables([]);
@@ -275,7 +271,7 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
     }
   }, [createState.connectionId, createState.datasetType, loadSchemas, tableConnectors]);
 
-  function openCreateModal() {
+  const openCreateModal = useCallback(() => {
     const defaultConnectionId = tableConnectors[0]?.id || connectors[0]?.id || '';
     setCreateState({
       ...DEFAULT_CREATE_STATE,
@@ -286,12 +282,21 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
     if (defaultConnectionId) {
       void loadSchemas(defaultConnectionId);
     }
-  }
+  }, [connectors, loadSchemas, tableConnectors]);
+
+  useEffect(() => {
+    if (searchParams.get('create') === '1' && !createOpen) {
+      openCreateModal();
+    }
+  }, [createOpen, openCreateModal, searchParams]);
 
   const closeCreateModal = useCallback(() => {
     setCreateOpen(false);
     setModalError(null);
-  }, []);
+    if (pathname && searchParams.get('create') === '1') {
+      router.replace(pathname, { scroll: false });
+    }
+  }, [pathname, router, searchParams]);
 
   const handleCreateOpenChange = useCallback(
     (open: boolean) => {
@@ -345,23 +350,59 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
     };
 
     if (!payload.name) {
-      setModalError('Dataset name is required.');
+      setModalError(
+        createDisplayError({
+          title: 'Dataset creation failed',
+          message: 'Dataset name is required before Langbridge can create the asset.',
+          suggestions: ['Provide a dataset name and try again.'],
+          fieldErrors: { name: 'Dataset name is required.' },
+          tone: 'warning',
+        }),
+      );
       return;
     }
 
     if (payload.datasetType === 'TABLE') {
       if (!payload.connectionId || !payload.tableName) {
-        setModalError('Choose a connection, schema, and table for TABLE datasets.');
+        setModalError(
+          createDisplayError({
+            title: 'Dataset creation failed',
+            message: 'Choose a connection, schema, and table before creating a table-backed dataset.',
+            suggestions: ['Select a connection, schema, and table, then try again.'],
+            fieldErrors: {
+              connectionId: 'A connection is required.',
+              schemaName: 'A schema is required.',
+              tableName: 'A table is required.',
+            },
+            tone: 'warning',
+          }),
+        );
         return;
       }
     } else if (payload.datasetType === 'SQL' && !payload.sqlText?.trim()) {
-      setModalError('SQL text is required for SQL datasets.');
+      setModalError(
+        createDisplayError({
+          title: 'Dataset creation failed',
+          message: 'SQL text is required for SQL-backed datasets.',
+          suggestions: ['Add a SQL statement before creating the dataset.'],
+          fieldErrors: { sqlText: 'SQL text is required.' },
+          tone: 'warning',
+        }),
+      );
       return;
     }
 
     if (payload.datasetType === 'FILE') {
       if (!createState.file) {
-        setModalError('Choose a CSV file to upload.');
+        setModalError(
+          createDisplayError({
+            title: 'Dataset creation failed',
+            message: 'Choose a CSV file before creating a file-backed dataset.',
+            suggestions: ['Select a CSV file and try again.'],
+            fieldErrors: { file: 'A CSV file is required.' },
+            tone: 'warning',
+          }),
+        );
         return;
       }
       await uploadMutation.mutateAsync({
@@ -429,7 +470,9 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
         </div>
 
         {datasetsQuery.isLoading ? <p className="text-sm">Loading datasets...</p> : null}
-        {datasetsQuery.isError ? <p className="text-sm text-rose-500">{resolveError(datasetsQuery.error)}</p> : null}
+        {datasetsQuery.isError ? (
+          <ErrorPanel {...toDisplayError(datasetsQuery.error)} />
+        ) : null}
         {!datasetsQuery.isLoading && !datasetsQuery.isError && datasets.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-6 text-sm">
             No datasets found for this scope.
@@ -475,6 +518,7 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
                 onChange={(event) => setCreateState((current) => ({ ...current, name: event.target.value }))}
                 placeholder="Dataset name"
               />
+              {fieldErrors.name ? <p className="text-xs text-rose-600">{fieldErrors.name}</p> : null}
             </div>
             <div className="space-y-1">
               <Label>Type</Label>
@@ -504,9 +548,6 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
               >
                 <option value="TABLE">Table</option>
                 <option value="SQL">SQL</option>
-                <option value="FEDERATED" disabled>
-                  Federated (Feature flag)
-                </option>
                 <option value="FILE">File</option>
               </Select>
             </div>
@@ -525,46 +566,54 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
                 onChange={(event) => setCreateState((current) => ({ ...current, tags: event.target.value }))}
               />
             </div>
-            <div className="space-y-1">
-              <Label>Connection</Label>
+            {
+              createState.datasetType === 'TABLE' && availableCreateConnectors.length > 0 ? 
+              (
+                <><div className="space-y-1">
+                    <Label>Connection</Label>
               <Select
                 value={createState.connectionId}
                 onChange={(event) => {
-                  const connectionId = event.target.value;
-                  setCreateState((current) => ({
-                    ...current,
-                    connectionId,
-                    schemaName: '',
-                    tableName: '',
-                  }));
-                  setSchemas([]);
-                  setTables([]);
-                  setColumns([]);
-                  if (connectionId) {
-                    void loadSchemas(connectionId);
-                  }
-                }}
-              >
-                <option value="">Select connection</option>
-                {availableCreateConnectors.map((connector) => (
-                  <option key={connector.id} value={connector.id}>
-                    {connector.name}
-                  </option>
+                        const connectionId = event.target.value;
+                        setCreateState((current) => ({
+                          ...current,
+                          connectionId,
+                          schemaName: '',
+                          tableName: '',
+                        }));
+                        setSchemas([]);
+                        setTables([]);
+                        setColumns([]);
+                        if (connectionId) {
+                          void loadSchemas(connectionId);
+                        }
+                      } }
+                    >
+                      <option value="">Select connection</option>
+                      {availableCreateConnectors.map((connector) => (
+                        <option key={connector.id} value={connector.id}>
+                          {connector.name}
+                        </option>
                 ))}
               </Select>
+              {fieldErrors.connectionId ? <p className="text-xs text-rose-600">{fieldErrors.connectionId}</p> : null}
               {createState.datasetType === 'TABLE' && availableCreateConnectors.length === 0 ? (
                 <p className="text-xs text-[color:var(--text-muted)]">No SQL connectors are available for table datasets.</p>
               ) : null}
-            </div>
-            <div className="space-y-1">
-              <Label>Max preview rows</Label>
-              <Input
-                value={createState.maxRowsPreview}
-                onChange={(event) => setCreateState((current) => ({ ...current, maxRowsPreview: event.target.value }))}
-              />
-            </div>
+                  </div><div className="space-y-1">
+                      <Label>Max preview rows</Label>
+                      <Input
+                        value={createState.maxRowsPreview}
+                        onChange={(event) => setCreateState((current) => ({ ...current, maxRowsPreview: event.target.value }))} />
+                    </div></>
+              )
+              :
+              null
+            }
           </div>
-
+          <div className="space-y-1 md:col-span-2">
+            <Label>Dataset type details</Label>
+          </div>
           {createState.datasetType === 'TABLE' ? (
             <div className="space-y-4 rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4">
               <div className="grid gap-4 md:grid-cols-2">
@@ -590,6 +639,7 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
                     ))}
                   </Select>
                   {loadingSchemas ? <p className="text-xs text-[color:var(--text-muted)]">Loading schemas...</p> : null}
+                  {fieldErrors.schemaName ? <p className="text-xs text-rose-600">{fieldErrors.schemaName}</p> : null}
                 </div>
                 <div className="space-y-1">
                   <Label>Table</Label>
@@ -611,6 +661,7 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
                     ))}
                   </Select>
                   {loadingTables ? <p className="text-xs text-[color:var(--text-muted)]">Loading tables...</p> : null}
+                  {fieldErrors.tableName ? <p className="text-xs text-rose-600">{fieldErrors.tableName}</p> : null}
                 </div>
               </div>
 
@@ -654,6 +705,7 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
                     }))
                   }
                 />
+                {fieldErrors.file ? <p className="text-xs text-rose-600">{fieldErrors.file}</p> : null}
                 <p className="text-xs text-[color:var(--text-muted)]">
                   Upload a CSV and Langbridge will convert it to Parquet before publishing the dataset.
                 </p>
@@ -686,11 +738,12 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
                   placeholder="SELECT * FROM schema.table"
                   className="font-mono text-xs"
                 />
+                {fieldErrors.sqlText ? <p className="text-xs text-rose-600">{fieldErrors.sqlText}</p> : null}
               </div>
             </div>
           )}
 
-          {modalError ? <p className="text-sm text-rose-600">{modalError}</p> : null}
+          {modalError ? <ErrorPanel {...modalError} /> : null}
 
           <DialogFooter>
             <Button variant="outline" onClick={closeCreateModal} disabled={createMutation.isPending || uploadMutation.isPending}>
@@ -704,14 +757,4 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
       </Dialog>
     </div>
   );
-}
-
-function resolveError(error: unknown): string {
-  if (error instanceof ApiError) {
-    return error.message;
-  }
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return 'Something went wrong while processing the request.';
 }

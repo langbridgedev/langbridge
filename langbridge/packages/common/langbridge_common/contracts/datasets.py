@@ -17,6 +17,23 @@ class DatasetType(str, Enum):
     FILE = "FILE"
 
 
+class DatasetSourceKind(str, Enum):
+    DATABASE = "database"
+    SAAS = "saas"
+    API = "api"
+    FILE = "file"
+    VIRTUAL = "virtual"
+
+
+class DatasetStorageKind(str, Enum):
+    TABLE = "table"
+    PARQUET = "parquet"
+    CSV = "csv"
+    JSON = "json"
+    VIEW = "view"
+    VIRTUAL = "virtual"
+
+
 class DatasetStatus(str, Enum):
     DRAFT = "draft"
     PUBLISHED = "published"
@@ -100,6 +117,31 @@ class DatasetStatsResponse(_Base):
     last_profiled_at: datetime | None = None
 
 
+class DatasetExecutionCapabilities(_Base):
+    supports_structured_scan: bool = False
+    supports_sql_federation: bool = False
+    supports_filter_pushdown: bool = False
+    supports_projection_pushdown: bool = False
+    supports_aggregation_pushdown: bool = False
+    supports_join_pushdown: bool = False
+    supports_materialization: bool = False
+    supports_semantic_modeling: bool = False
+
+
+class DatasetRelationIdentity(_Base):
+    canonical_reference: str
+    relation_name: str
+    qualified_name: str | None = None
+    catalog_name: str | None = None
+    schema_name: str | None = None
+    table_name: str | None = None
+    storage_uri: str | None = None
+    dataset_id: UUID | None = None
+    connector_id: UUID | None = None
+    source_kind: DatasetSourceKind
+    storage_kind: DatasetStorageKind
+
+
 class DatasetCreateRequest(_Base):
     workspace_id: UUID
     project_id: UUID | None = None
@@ -108,6 +150,9 @@ class DatasetCreateRequest(_Base):
     change_summary: str | None = Field(default=None, max_length=1024)
     tags: list[str] = Field(default_factory=list)
     dataset_type: DatasetType
+    source_kind: DatasetSourceKind | None = None
+    connector_kind: str | None = Field(default=None, max_length=64)
+    storage_kind: DatasetStorageKind | None = None
     connection_id: UUID | None = None
     dialect: str | None = Field(default=None, max_length=64)
     catalog_name: str | None = Field(default=None, max_length=255)
@@ -118,6 +163,8 @@ class DatasetCreateRequest(_Base):
     referenced_dataset_ids: list[UUID] = Field(default_factory=list)
     federated_plan: dict[str, Any] | None = None
     file_config: dict[str, Any] | None = None
+    relation_identity: DatasetRelationIdentity | None = None
+    execution_capabilities: DatasetExecutionCapabilities | None = None
     columns: list[DatasetColumnRequest] = Field(default_factory=list)
     policy: DatasetPolicyRequest | None = None
     status: DatasetStatus = DatasetStatus.PUBLISHED
@@ -217,6 +264,9 @@ class DatasetUpdateRequest(_Base):
     description: str | None = Field(default=None, max_length=1024)
     change_summary: str | None = Field(default=None, max_length=1024)
     tags: list[str] | None = None
+    source_kind: DatasetSourceKind | None = None
+    connector_kind: str | None = Field(default=None, max_length=64)
+    storage_kind: DatasetStorageKind | None = None
     connection_id: UUID | None = None
     dialect: str | None = Field(default=None, max_length=64)
     catalog_name: str | None = Field(default=None, max_length=255)
@@ -227,6 +277,8 @@ class DatasetUpdateRequest(_Base):
     referenced_dataset_ids: list[UUID] | None = None
     federated_plan: dict[str, Any] | None = None
     file_config: dict[str, Any] | None = None
+    relation_identity: DatasetRelationIdentity | None = None
+    execution_capabilities: DatasetExecutionCapabilities | None = None
     columns: list[DatasetColumnRequest] | None = None
     policy: DatasetPolicyRequest | None = None
     status: DatasetStatus | None = None
@@ -242,6 +294,9 @@ class DatasetResponse(_Base):
     description: str | None = None
     tags: list[str] = Field(default_factory=list)
     dataset_type: DatasetType
+    source_kind: DatasetSourceKind
+    connector_kind: str | None = None
+    storage_kind: DatasetStorageKind
     dialect: str | None = None
     catalog_name: str | None = None
     schema_name: str | None = None
@@ -251,6 +306,8 @@ class DatasetResponse(_Base):
     referenced_dataset_ids: list[UUID] = Field(default_factory=list)
     federated_plan: dict[str, Any] | None = None
     file_config: dict[str, Any] | None = None
+    relation_identity: DatasetRelationIdentity
+    execution_capabilities: DatasetExecutionCapabilities
     status: DatasetStatus
     revision_id: UUID | None = None
     columns: list[DatasetColumnResponse] = Field(default_factory=list)
@@ -327,6 +384,11 @@ class DatasetCatalogItem(_Base):
     id: UUID
     name: str
     dataset_type: DatasetType
+    source_kind: DatasetSourceKind
+    connector_kind: str | None = None
+    storage_kind: DatasetStorageKind
+    relation_identity: DatasetRelationIdentity
+    execution_capabilities: DatasetExecutionCapabilities
     tags: list[str] = Field(default_factory=list)
     columns: list[DatasetColumnResponse] = Field(default_factory=list)
     updated_at: datetime

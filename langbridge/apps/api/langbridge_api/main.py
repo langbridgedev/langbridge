@@ -4,7 +4,8 @@ import inspect
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -13,6 +14,10 @@ from starlette.responses import Response
 from alembic import command
 from alembic.config import Config
 
+from langbridge.apps.api.langbridge_api.error_responses import (
+    build_error_response,
+    build_validation_error_response,
+)
 from langbridge.apps.api.langbridge_api.routers import api_router_v1
 from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.apps.api.langbridge_api.ioc import build_container
@@ -175,6 +180,31 @@ app.include_router(
     api_router_v1,
     prefix=settings.API_V1_STR,
 )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_: Request, exc: HTTPException) -> Response:
+    detail = exc.detail
+    if isinstance(detail, dict) and "error" in detail:
+        return build_error_response(
+            status_code=exc.status_code,
+            details=detail["error"].get("details") if isinstance(detail.get("error"), dict) else detail,
+            code=detail["error"].get("code") if isinstance(detail.get("error"), dict) else None,
+            message=detail["error"].get("message") if isinstance(detail.get("error"), dict) else None,
+            suggestions=detail["error"].get("suggestions") if isinstance(detail.get("error"), dict) else None,
+            field_errors=detail["error"].get("fieldErrors") if isinstance(detail.get("error"), dict) else None,
+        )
+
+    return build_error_response(
+        status_code=exc.status_code,
+        details=detail,
+        message=str(detail) if detail else None,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(_: Request, exc: RequestValidationError) -> Response:
+    return build_validation_error_response(exc)
 
 
 @app.get("/metrics")

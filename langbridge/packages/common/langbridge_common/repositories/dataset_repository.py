@@ -89,6 +89,23 @@ class DatasetRepository(AsyncBaseRepository[DatasetRecord]):
         )
         return int(count or 0)
 
+    async def get_by_ids_for_workspace(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        dataset_ids: Iterable[uuid.UUID],
+    ) -> list[DatasetRecord]:
+        normalized_ids = [dataset_id for dataset_id in dataset_ids if dataset_id is not None]
+        if not normalized_ids:
+            return []
+        result = await self._session.scalars(
+            select(DatasetRecord).where(
+                DatasetRecord.workspace_id == workspace_id,
+                DatasetRecord.id.in_(normalized_ids),
+            )
+        )
+        return list(result.all())
+
     async def find_file_dataset_for_connection(
         self,
         *,

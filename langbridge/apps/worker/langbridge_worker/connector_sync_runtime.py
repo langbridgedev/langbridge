@@ -44,6 +44,12 @@ from langbridge.packages.common.langbridge_common.utils.lineage import (
     build_file_resource_id,
     stable_payload_hash,
 )
+from langbridge.packages.common.langbridge_common.utils.datasets import (
+    build_dataset_execution_capabilities,
+    build_dataset_relation_identity,
+    resolve_dataset_source_kind,
+    resolve_dataset_storage_kind,
+)
 from langbridge.packages.connectors.langbridge_connectors.api import ApiResource
 from langbridge.packages.connectors.langbridge_connectors.api.config import ConnectorRuntimeType
 
@@ -338,6 +344,10 @@ class ConnectorSyncRuntime:
                 created_at=now,
                 updated_at=now,
             )
+            self._apply_dataset_descriptor_metadata(
+                dataset=dataset,
+                connection_connector_type=connector_type.value,
+            )
             self._dataset_repository.add(dataset)
             change_summary = f"Initial sync materialized {resource_name}."
         else:
@@ -364,6 +374,10 @@ class ConnectorSyncRuntime:
             dataset.row_count_estimate = len(merged_rows)
             dataset.bytes_estimate = bytes_written
             dataset.updated_at = now
+            self._apply_dataset_descriptor_metadata(
+                dataset=dataset,
+                connection_connector_type=connector_type.value,
+            )
             change_summary = f"{sync_mode.value.replace('_', ' ').title()} sync updated {resource_name}."
 
         await self._replace_columns(dataset=dataset, table=table)
@@ -444,10 +458,13 @@ class ConnectorSyncRuntime:
         schema_snapshot = [self._column_snapshot(column) for column in columns]
         policy_snapshot = self._policy_snapshot(policy)
         source_bindings = self._build_dataset_source_bindings(dataset)
+        relation_identity, execution_capabilities = self._resolve_dataset_descriptor_snapshot(dataset)
         execution_characteristics = {
             "row_count_estimate": dataset.row_count_estimate,
             "bytes_estimate": dataset.bytes_estimate,
             "last_profiled_at": dataset.last_profiled_at.isoformat() if dataset.last_profiled_at else None,
+            "relation_identity": relation_identity,
+            "execution_capabilities": execution_capabilities,
         }
         snapshot = {
             "dataset": definition,
@@ -572,6 +589,9 @@ class ConnectorSyncRuntime:
 
     @staticmethod
     def _build_dataset_definition_snapshot(dataset: DatasetRecord) -> dict[str, Any]:
+        relation_identity, execution_capabilities = ConnectorSyncRuntime._resolve_dataset_descriptor_snapshot(
+            dataset
+        )
         return {
             "id": str(dataset.id),
             "workspace_id": str(dataset.workspace_id),
@@ -581,6 +601,9 @@ class ConnectorSyncRuntime:
             "description": dataset.description,
             "tags": list(dataset.tags_json or []),
             "dataset_type": dataset.dataset_type,
+            "source_kind": dataset.source_kind,
+            "connector_kind": dataset.connector_kind,
+            "storage_kind": dataset.storage_kind,
             "dialect": dataset.dialect,
             "storage_uri": dataset.storage_uri,
             "catalog_name": dataset.catalog_name,
@@ -590,6 +613,8 @@ class ConnectorSyncRuntime:
             "referenced_dataset_ids": list(dataset.referenced_dataset_ids_json or []),
             "federated_plan": dataset.federated_plan_json,
             "file_config": dataset.file_config_json,
+            "relation_identity": relation_identity,
+            "execution_capabilities": execution_capabilities,
             "status": dataset.status,
         }
 
@@ -598,7 +623,20 @@ class ConnectorSyncRuntime:
         file_config = dict(dataset.file_config_json or {})
         sync_meta = file_config.get("connector_sync") if isinstance(file_config.get("connector_sync"), dict) else {}
         storage_uri = str(file_config.get("storage_uri") or dataset.storage_uri or "").strip()
-        bindings: list[dict[str, Any]] = []
+        relation_identity, execution_capabilities = ConnectorSyncRuntime._resolve_dataset_descriptor_snapshot(
+            dataset
+        )
+        bindings: list[dict[str, Any]] = [
+            {
+                "source_type": "dataset_contract",
+                "dataset_id": str(dataset.id),
+                "source_kind": dataset.source_kind,
+                "connector_kind": dataset.connector_kind,
+                "storage_kind": dataset.storage_kind,
+                "relation_identity": relation_identity,
+                "execution_capabilities": execution_capabilities,
+            }
+        ]
         if dataset.connection_id is not None:
             bindings.append(
                 {
@@ -626,6 +664,55 @@ class ConnectorSyncRuntime:
                 }
             )
         return bindings
+
+    @staticmethod
+    def _resolve_dataset_descriptor_snapshot(dataset: DatasetRecord) -> tuple[dict[str, Any], dict[str, Any]]:
+        relation_identity = dict(dataset.relation_identity_json or {})
+        execution_capabilities = dict(dataset.execution_capabilities_json or {})
+        return relation_identity, execution_capabilities
+
+    @staticmethod
+    def _apply_dataset_descriptor_metadata(
+        *,
+        dataset: DatasetRecord,
+        connection_connector_type: str | None,
+    ) -> None:
+        connector_kind = str(connection_connector_type or "").strip().lower() or None
+        source_kind = resolve_dataset_source_kind(
+            explicit_source_kind=dataset.source_kind,
+            legacy_dataset_type=dataset.dataset_type,
+            connector_kind=connector_kind,
+            file_config=dict(dataset.file_config_json or {}),
+        )
+        storage_kind = resolve_dataset_storage_kind(
+            explicit_storage_kind="parquet",
+            legacy_dataset_type=dataset.dataset_type,
+            file_config=dict(dataset.file_config_json or {}),
+            storage_uri=dataset.storage_uri,
+        )
+        relation_identity = build_dataset_relation_identity(
+            dataset_id=dataset.id,
+            connector_id=dataset.connection_id,
+            dataset_name=dataset.name,
+            catalog_name=dataset.catalog_name,
+            schema_name=dataset.schema_name,
+            table_name=dataset.table_name,
+            storage_uri=dataset.storage_uri,
+            source_kind=source_kind,
+            storage_kind=storage_kind,
+            existing_payload=dict(dataset.relation_identity_json or {}),
+        )
+        execution_capabilities = build_dataset_execution_capabilities(
+            source_kind=source_kind,
+            storage_kind=storage_kind,
+            existing_payload=dict(dataset.execution_capabilities_json or {}),
+        )
+
+        dataset.source_kind = source_kind.value
+        dataset.connector_kind = connector_kind
+        dataset.storage_kind = storage_kind.value
+        dataset.relation_identity_json = relation_identity.model_dump(mode="json")
+        dataset.execution_capabilities_json = execution_capabilities.model_dump(mode="json")
 
     @staticmethod
     def _dataset_name(

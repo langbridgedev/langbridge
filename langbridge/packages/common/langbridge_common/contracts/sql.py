@@ -40,12 +40,16 @@ class SqlDialect(str, Enum):
     bigquery = "bigquery"
     oracle = "oracle"
     sqlite = "sqlite"
-    trino = "trino"
 
 
 class SqlColumnMetadata(_Base):
     name: str
     type: str | None = None
+
+
+class SqlFederatedDatasetReference(_Base):
+    alias: str = Field(..., min_length=1, max_length=128)
+    dataset_id: UUID
 
 
 class SqlExecuteRequest(_Base):
@@ -59,7 +63,7 @@ class SqlExecuteRequest(_Base):
     requested_limit: int | None = Field(default=None, ge=1)
     requested_timeout_seconds: int | None = Field(default=None, ge=1)
     explain: bool = False
-    federated_aliases: dict[str, str] = Field(default_factory=dict)
+    federated_datasets: list[SqlFederatedDatasetReference] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_target(self) -> "SqlExecuteRequest":
@@ -67,6 +71,8 @@ class SqlExecuteRequest(_Base):
             raise ValueError("connection_id is required for single datasource execution.")
         if self.federated and self.connection_id is not None:
             raise ValueError("connection_id must be omitted for federated execution mode.")
+        if self.federated and not self.federated_datasets:
+            raise ValueError("federated execution requires at least one federated dataset.")
         if not self.query.strip():
             raise ValueError("query must not be empty.")
         return self
