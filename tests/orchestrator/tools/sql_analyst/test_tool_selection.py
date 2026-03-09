@@ -50,17 +50,17 @@ class RecorderConnector:
 
 def _model(name: str, entity: str, tags: list[str] | None = None) -> SemanticModel:
     return SemanticModel(
+        version="1.0",
         name=name,
         tags=tags or [],
-        entities={
+        tables={
             entity: {
-                "table": entity,
-                "columns": {"id": {"type": "integer"}},
-            }
+                "name": entity,
+                "dimensions": [{"name": "id", "type": "integer"}],
+            },
         },
-        joins=[],
+        relationships=[],
         metrics={"total": {"expression": "COUNT(*)"}},
-        dimensions={"id": {"type": "integer"}},
     )
 
 
@@ -91,7 +91,7 @@ def test_analyst_agent_selects_tool_by_keywords() -> None:
         tags=["revenue", "orders"],
     )
 
-    agent = AnalystAgent([customers_tool, sales_tool])
+    agent = AnalystAgent(StaticLLM(""), [], [customers_tool, sales_tool])
     response = agent.answer("Show revenue by orders")
 
     assert response.error is None
@@ -116,7 +116,7 @@ def test_analyst_agent_uses_priority_on_tie() -> None:
         priority=5,
     )
 
-    agent = AnalystAgent([tool_a, tool_b])
+    agent = AnalystAgent(StaticLLM(""), [], [tool_a, tool_b])
     response = agent.answer("General question with no keywords")
 
     assert response.model_name == "model_b"
@@ -139,7 +139,7 @@ def test_semantic_tool_selector_handles_filters() -> None:
         "inventory",
     )
 
-    agent = AnalystAgent([tool_a, tool_b])
+    agent = AnalystAgent(StaticLLM(""), [], [tool_a, tool_b])
     response = agent.answer_with_request(
         AnalystQueryRequest(
             question="Give me KPI results",
@@ -150,4 +150,3 @@ def test_semantic_tool_selector_handles_filters() -> None:
     assert response.model_name == "metrics_model"
     assert conn_a.calls
     assert not conn_b.calls
-

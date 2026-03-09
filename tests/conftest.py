@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import importlib.util
 import sys
 import types
 
 
-if "redis.asyncio" not in sys.modules:
+if importlib.util.find_spec("redis.asyncio") is None:
     redis_module = types.ModuleType("redis")
     redis_asyncio_module = types.ModuleType("redis.asyncio")
     redis_exceptions_module = types.ModuleType("redis.exceptions")
@@ -29,7 +30,7 @@ if "redis.asyncio" not in sys.modules:
     sys.modules["redis.exceptions"] = redis_exceptions_module
 
 
-if "pyarrow" not in sys.modules:
+if importlib.util.find_spec("pyarrow") is None:
     pyarrow_module = types.ModuleType("pyarrow")
     pyarrow_ipc_module = types.ModuleType("pyarrow.ipc")
     pyarrow_parquet_module = types.ModuleType("pyarrow.parquet")
@@ -81,7 +82,7 @@ if "pyarrow" not in sys.modules:
     sys.modules["pyarrow.parquet"] = pyarrow_parquet_module
 
 
-if "duckdb" not in sys.modules:
+if importlib.util.find_spec("duckdb") is None:
     duckdb_module = types.ModuleType("duckdb")
 
     class _FakeDuckDbConnection:
@@ -105,7 +106,7 @@ if "duckdb" not in sys.modules:
     sys.modules["duckdb"] = duckdb_module
 
 
-if "jose" not in sys.modules:
+if importlib.util.find_spec("jose") is None:
     jose_module = types.ModuleType("jose")
 
     class _JWTError(Exception):

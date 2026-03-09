@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("faiss")
 
-sys.path.append(str(pathlib.Path(__file__).resolve().parents[2] / "langbridge"))
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
 
 from langbridge.packages.connectors.langbridge_connectors.api.faiss.config import FaissConnectorConfig  # noqa: E402
 from langbridge.packages.connectors.langbridge_connectors.api.faiss.connector import FaissConnector  # noqa: E402

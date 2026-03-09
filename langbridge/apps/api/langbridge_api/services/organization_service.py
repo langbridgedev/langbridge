@@ -110,7 +110,7 @@ class OrganizationService:
                 "An organization with this name already exists"
             )
 
-        organization = Organization(name=normalized_name)
+        organization = Organization(id=uuid.uuid4(), name=normalized_name)
         self._organization_repository.add(organization)
         await self._organization_repository.add_member(organization, db_owner)
         return self._serialize_organization(organization)

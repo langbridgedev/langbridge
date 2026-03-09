@@ -11,8 +11,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
-from alembic import command
-from alembic.config import Config
+from sqlalchemy import Engine
 
 from langbridge.apps.api.langbridge_api.error_responses import (
     build_error_response,
@@ -26,6 +25,10 @@ from langbridge.packages.common.langbridge_common.logging.logger import setup_lo
 from langbridge.packages.common.langbridge_common.monitoring import (
     PrometheusMiddleware,
     metrics_response,
+)
+from langbridge.packages.common.langbridge_common.db import (
+    Base,
+    create_engine_for_url,
 )
 
 from langbridge.apps.api.langbridge_api.middleware import (
@@ -46,9 +49,6 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency in local t
 load_dotenv()
 logger = logging.getLogger(__name__)
 ROOT_DIR = Path(__file__).resolve().parents[4]
-ALEMBIC_CONFIG_PATH = ROOT_DIR / "alembic.ini"
-
-
 def _resolve_sqlite_path(sqlite_url: str) -> Path | None:
     if sqlite_url.startswith("sqlite:///"):
         path = sqlite_url.removeprefix("sqlite:///")
@@ -71,6 +71,32 @@ def _should_apply_local_sqlite_schema() -> bool:
     )
 
 
+def _load_db_models() -> None:
+    from langbridge.packages.common.langbridge_common.db import agent as _agent  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import associations as _associations  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import auth as _auth  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import bi as _bi  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import connector as _connector  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import connector_sync as _connector_sync  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import dataset as _dataset  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import job as _job  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import lineage as _lineage  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import messages as _messages  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import runtime as _runtime  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import semantic as _semantic  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import sql as _sql  # noqa: F401
+    from langbridge.packages.common.langbridge_common.db import threads as _threads  # noqa: F401
+
+
+def _create_local_sqlite_schema() -> None:
+    _load_db_models()
+    engine: Engine = create_engine_for_url(settings.SQLALCHEMY_DATABASE_URI)
+    try:
+        Base.metadata.create_all(bind=engine)
+    finally:
+        engine.dispose()
+
+
 def _ensure_local_sqlite_schema() -> None:
     if not _should_apply_local_sqlite_schema():
         return
@@ -78,18 +104,8 @@ def _ensure_local_sqlite_schema() -> None:
     if sqlite_path:
         sqlite_path.parent.mkdir(parents=True, exist_ok=True)
         logger.info("Ensuring local SQLite database directory exists at %s", sqlite_path.parent)
-    if not ALEMBIC_CONFIG_PATH.exists():
-        logger.warning("Skipping local migration: %s missing", ALEMBIC_CONFIG_PATH)
-        return
-    config = Config(str(ALEMBIC_CONFIG_PATH))
-    config.set_main_option("sqlalchemy.url", settings.SQLALCHEMY_DATABASE_URI)
-    logger.info("Running Alembic upgrade for local SQLite (%s)", settings.SQLALCHEMY_DATABASE_URI)
-    try:
-        command.upgrade(config, "head")
-        logger.info("Alembic upgrade successful for local SQLite")
-    except Exception as e:
-        logger.error("Alembic upgrade failed for local SQLite: %s", e)
-        raise
+    logger.info("Initializing local SQLite schema via SQLAlchemy metadata (%s)", settings.SQLALCHEMY_DATABASE_URI)
+    _create_local_sqlite_schema()
 
 def custom_generate_unique_id(route: APIRoute) -> str:
     if len(route.tags) == 0:

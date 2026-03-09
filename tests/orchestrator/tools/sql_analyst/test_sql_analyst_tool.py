@@ -78,18 +78,18 @@ class SQLiteConnector:
 
 def _semantic_model(name: str, entity: str) -> SemanticModel:
     return SemanticModel(
+        version="1.0",
         name=name,
-        entities={
+        tables={
             entity: {
-                "table": entity,
-                "columns": {
-                    "order_id": {"type": "integer"},
-                },
+                "name": entity,
+                "dimensions": [
+                    {"name": "order_id", "type": "integer"},
+                ],
             }
         },
-        joins=[],
+        relationships=[],
         metrics={"total_orders": {"expression": "COUNT(*)"}},
-        dimensions={"order_id": {"type": "integer"}},
     )
 
 
@@ -140,4 +140,3 @@ def test_sql_analyst_tool_runs_against_sqlite() -> None:
     assert response.result.rows[0][0] == 2
 
     conn.close()
-

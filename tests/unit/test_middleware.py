@@ -32,8 +32,8 @@ async def test_error_middleware_catches_resource_not_found():
     assert response.status_code == 404
     import json
     body = json.loads(response.body.decode())
-    assert body["error"] == "ResourceNotFound"
-    assert body["message"] == "Item missing"
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert body["error"]["message"] == "Item missing"
 
 @pytest.mark.anyio
 async def test_error_middleware_catches_generic_exception():
@@ -52,6 +52,6 @@ async def test_error_middleware_catches_generic_exception():
     assert response.status_code == 500
     import json
     body = json.loads(response.body.decode())
-    assert body["error"] == "InternalServerError"
+    assert body["error"]["code"] == "INTERNAL_ERROR"
     # Ensure strict message is not leaked
-    assert body["message"] == "An internal server error occurred."
+    assert body["error"]["message"] == "An internal server error occurred."
