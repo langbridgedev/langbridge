@@ -15,11 +15,6 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover - optional dependency
     psycopg = None  # type: ignore
 
-try:  # pragma: no cover - optional dependency
-    import psycopg2  # type: ignore
-except ImportError:  # pragma: no cover - optional dependency
-    psycopg2 = None  # type: ignore
-
 
 class PostgresConnector(SqlConnector):
     """
@@ -37,32 +32,30 @@ class PostgresConnector(SqlConnector):
         super().__init__(config=config, logger=logger)
         self._config = config
 
-    def _connection_kwargs(self) -> Dict[str, Any]:
+    def _connection_kwargs(self, timeout_s: Optional[int] = None) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {
             "host": self._config.host,
             "port": self._config.port,
             "dbname": self._config.database,
             "user": self._config.user,
             "password": self._config.password,
+            "connect_timeout": timeout_s,
+            "autocommit": True,
         }
         if self._config.ssl_mode:
             kwargs["sslmode"] = self._config.ssl_mode
         return kwargs
 
-    def _connect(self):
-        if psycopg is not None:
-            return psycopg.connect(**self._connection_kwargs())  # type: ignore[attr-defined]
-        if psycopg2 is not None:
-            return psycopg2.connect(**self._connection_kwargs())  # type: ignore[attr-defined]
-        raise ConnectorError("psycopg or psycopg2 is required for PostgreSQL support.")
+    async def _connect(self, timeout_s: Optional[int] = None) -> Any:
+        if psycopg is None:
+            raise ConnectorError("psycopg is required for PostgreSQL support.")
+        return await psycopg.AsyncConnection.connect(**self._connection_kwargs(timeout_s))  # type: ignore[attr-defined]
 
     async def test_connection(self) -> None:
         try:
-            conn = self._connect()
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            cursor.close()
-            conn.close()
+            async with await self._connect() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("SELECT 1")
         except Exception as exc:
             self.logger.error("Connection test failed: %s", exc)
             raise ConnectorError(f"Unable to connect to PostgreSQL: {exc}") from exc
@@ -75,13 +68,10 @@ class PostgresConnector(SqlConnector):
             ORDER BY schema_name
         """
         try:
-            conn = self._connect()
-            cursor = conn.cursor()
-            cursor.execute(sql)
-            schemas = [row[0] for row in cursor.fetchall()]
-            cursor.close()
-            conn.close()
-            return schemas
+            async with await self._connect() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(sql)
+                    return [row[0] for row in await cursor.fetchall()]
         except Exception as exc:
             self.logger.error("Failed to fetch schemas: %s", exc)
             raise ConnectorError(f"Unable to fetch schemas from PostgreSQL: {exc}") from exc
@@ -94,18 +84,15 @@ class PostgresConnector(SqlConnector):
             ORDER BY table_name
         """
         try:
-            conn = self._connect()
-            cursor = conn.cursor()
-            cursor.execute(sql, (schema,))
-            tables = [row[0] for row in cursor.fetchall()]
-            cursor.close()
-            conn.close()
-            return tables
+            async with await self._connect() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(sql, (schema,))
+                    return [row[0] for row in await cursor.fetchall()]
         except Exception as exc:
             self.logger.error("Failed to fetch tables: %s", exc)
             raise ConnectorError(f"Unable to fetch tables from PostgreSQL: {exc}") from exc
 
-    def _fetch_primary_keys(self, conn, schema: str, table: str) -> set[str]:
+    async def _fetch_primary_keys(self, conn, schema: str, table: str) -> set[str]:
         sql = """
             SELECT kcu.column_name
             FROM information_schema.table_constraints tc
@@ -116,11 +103,9 @@ class PostgresConnector(SqlConnector):
               AND tc.table_schema = %s
               AND tc.table_name = %s
         """
-        cursor = conn.cursor()
-        cursor.execute(sql, (schema, table))
-        keys = {row[0] for row in cursor.fetchall()}
-        cursor.close()
-        return keys
+        async with conn.cursor() as cursor:
+            await cursor.execute(sql, (schema, table))
+            return {row[0] for row in await cursor.fetchall()}
 
     async def fetch_columns(self, schema: str, table: str) -> list[ColumnMetadata]:
         sql = """
@@ -130,23 +115,21 @@ class PostgresConnector(SqlConnector):
             ORDER BY ordinal_position
         """
         try:
-            conn = self._connect()
-            primary_keys = self._fetch_primary_keys(conn, schema, table)
-            cursor = conn.cursor()
-            cursor.execute(sql, (schema, table))
-            columns = []
-            for name, data_type, is_nullable in cursor.fetchall():
-                columns.append(
-                    ColumnMetadata(
-                        name=name,
-                        data_type=data_type,
-                        is_nullable=is_nullable == "YES",
-                        is_primary_key=name in primary_keys,
-                    )
-                )
-            cursor.close()
-            conn.close()
-            return columns
+            async with await self._connect() as conn:
+                primary_keys = await self._fetch_primary_keys(conn, schema, table)
+                async with conn.cursor() as cursor:
+                    await cursor.execute(sql, (schema, table))
+                    columns = []
+                    for name, data_type, is_nullable in await cursor.fetchall():
+                        columns.append(
+                            ColumnMetadata(
+                                name=name,
+                                data_type=data_type,
+                                is_nullable=is_nullable == "YES",
+                                is_primary_key=name in primary_keys,
+                            )
+                        )
+                    return columns
         except Exception as exc:
             self.logger.error("Failed to fetch columns: %s", exc)
             raise ConnectorError(f"Unable to fetch columns from PostgreSQL: {exc}") from exc
@@ -175,22 +158,19 @@ class PostgresConnector(SqlConnector):
               AND tc.table_name = %s
         """
         try:
-            conn = self._connect()
-            cursor = conn.cursor()
-            cursor.execute(sql, (schema, table))
-            foreign_keys = [
-                ForeignKeyMetadata(
-                    name=row[0],
-                    column=row[1],
-                    schema=row[2],
-                    table=row[3],
-                    foreign_key=row[4],
-                )
-                for row in cursor.fetchall()
-            ]
-            cursor.close()
-            conn.close()
-            return foreign_keys
+            async with await self._connect() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(sql, (schema, table))
+                    return [
+                        ForeignKeyMetadata(
+                            name=row[0],
+                            column=row[1],
+                            schema=row[2],
+                            table=row[3],
+                            foreign_key=row[4],
+                        )
+                        for row in await cursor.fetchall()
+                    ]
         except Exception as exc:
             self.logger.error("Failed to fetch foreign keys: %s", exc)
             raise ConnectorError(f"Unable to fetch foreign keys from PostgreSQL: {exc}") from exc
@@ -200,19 +180,15 @@ class PostgresConnector(SqlConnector):
         sql: str,
         params: Dict[str, Any],
         *,
-        timeout_s: Optional[int] = 30,
+        timeout_s: Optional[int] = 60, # default timeout of 60 seconds for queries, can be overridden by caller
     ) -> tuple[list[str], list[tuple]]:
         try:
-            conn = self._connect()
-            cursor = conn.cursor()
-            # if timeout_s:
-            #     cursor.execute("SET statement_timeout = %s", (int(timeout_s * 1000),))
-            cursor.execute(sql, params or None)
-            columns = [description[0] for description in cursor.description]
-            rows = cursor.fetchall()
-            cursor.close()
-            conn.close()
-            return columns, rows
+            async with await self._connect(timeout_s) as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(sql, params or None)
+                    columns = [description[0] for description in cursor.description or []]
+                    rows = await cursor.fetchall()
+                    return columns, rows
         except Exception as exc:
             self.logger.error("SQL execution failed: %s", exc)
             raise ConnectorError(f"SQL execution failed on PostgreSQL: {exc}") from exc

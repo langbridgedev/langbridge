@@ -283,7 +283,7 @@ class Container(containers.DeclarativeContainer):
 
     connector_schema_service = providers.Factory(
         ConnectorSchemaService,
-        connector_repository=connector_repository
+        async_session_factory=async_session_factory,
     )
     agent_service = providers.Factory(
         AgentService,
@@ -443,6 +443,7 @@ class Container(containers.DeclarativeContainer):
         sql_saved_query_repository=sql_saved_query_repository,
         sql_workspace_policy_repository=sql_workspace_policy_repository,
         connector_repository=connector_repository,
+        dataset_repository=dataset_repository,
         organization_repository=organization_repository,
         user_repository=user_repository,
         sql_job_request_service=sql_job_request_service,

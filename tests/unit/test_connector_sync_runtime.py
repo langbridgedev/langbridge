@@ -371,6 +371,8 @@ async def test_connector_sync_runtime_materializes_parent_child_datasets_and_per
     )
     assert root_rows == [{"id": 101, "total_price": "42.00", "updated_at": "2026-03-01T00:00:00Z"}]
     assert child_rows == [{"_child_index": 0, "_parent_id": 101, "id": 9001, "title": "Hat"}]
+    assert root_dataset.schema_name is None
+    assert child_dataset.schema_name is None
 
     assert len(dataset_revision_repository.by_dataset[root_dataset.id]) == 1
     assert len(dataset_revision_repository.by_dataset[child_dataset.id]) == 1

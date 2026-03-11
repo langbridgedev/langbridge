@@ -506,7 +506,7 @@ export default function DatasetsPage({ params }: DatasetsPageProps): JSX.Element
 
       <Dialog open={createOpen} onOpenChange={handleCreateOpenChange}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
-          <DialogHeader>
+          <DialogHeader>  
             <DialogTitle>Create dataset</DialogTitle>
           </DialogHeader>
 

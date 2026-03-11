@@ -3,7 +3,12 @@ from uuid import UUID
 from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from langbridge.apps.api.langbridge_api.auth.dependencies import get_current_user, get_organization, get_project
+from langbridge.apps.api.langbridge_api.auth.dependencies import (
+    get_current_user,
+    get_organization,
+    get_project,
+    has_organization_access,
+)
 from langbridge.packages.connectors.langbridge_connectors.api.config import ConnectorConfigSchema
 from langbridge.packages.common.langbridge_common.errors.application_errors import BusinessValidationError
 from langbridge.apps.api.langbridge_api.ioc import Container
@@ -165,7 +170,7 @@ async def get_connector_schemas(
     connector_id: UUID,
     organization_id: UUID,
     current_user: UserResponse = Depends(get_current_user),
-    _org = Depends(get_organization),
+    _org_access: UserResponse = Depends(has_organization_access),
     connector_schema_service: ConnectorSchemaService = Depends(
         Provide[Container.connector_schema_service]
     ),
@@ -184,7 +189,7 @@ async def get_connector_tables(
     schema: str,
     organization_id: UUID,
     current_user: UserResponse = Depends(get_current_user),
-    _org = Depends(get_organization),
+    _org_access: UserResponse = Depends(has_organization_access),
     connector_schema_service: ConnectorSchemaService = Depends(
         Provide[Container.connector_schema_service]
     ),
@@ -204,7 +209,7 @@ async def get_connector_table(
     table: str,
     organization_id: UUID,
     current_user: UserResponse = Depends(get_current_user),
-    _org = Depends(get_organization),
+    _org_access: UserResponse = Depends(has_organization_access),
     connector_schema_service: ConnectorSchemaService = Depends(
         Provide[Container.connector_schema_service]
     ),
@@ -240,7 +245,7 @@ async def get_connector_catalog(
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     current_user: UserResponse = Depends(get_current_user),
-    _org = Depends(get_organization),
+    _org_access: UserResponse = Depends(has_organization_access),
     connector_schema_service: ConnectorSchemaService = Depends(
         Provide[Container.connector_schema_service]
     ),

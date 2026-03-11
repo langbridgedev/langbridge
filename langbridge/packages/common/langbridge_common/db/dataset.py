@@ -51,6 +51,11 @@ class DatasetRecord(Base):
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    sql_alias: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        default=lambda: f"dataset_{uuid.uuid4().hex[:8]}",
+    )
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     tags_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     dataset_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -109,7 +114,9 @@ class DatasetRecord(Base):
 
     __table_args__ = (
         UniqueConstraint("workspace_id", "name", name="uq_datasets_workspace_name"),
+        UniqueConstraint("workspace_id", "sql_alias", name="uq_datasets_workspace_sql_alias"),
         Index("ix_datasets_workspace_name", "workspace_id", "name"),
+        Index("ix_datasets_workspace_sql_alias", "workspace_id", "sql_alias"),
         Index("ix_datasets_workspace_updated_at", "workspace_id", "updated_at"),
     )
 

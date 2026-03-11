@@ -229,6 +229,7 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query_a
         created_by=None,
         updated_by=None,
         name="crm_accounts",
+        sql_alias="dataset_1",
         description=None,
         tags_json=[],
         dataset_type="TABLE",
@@ -257,6 +258,7 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query_a
         created_by=None,
         updated_by=None,
         name="billing_accounts",
+        sql_alias="dataset_2",
         description=None,
         tags_json=[],
         dataset_type="TABLE",
@@ -327,11 +329,13 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query_a
     workflow = payload.get("workflow") or {}
     dataset = workflow.get("dataset") or {}
     tables = dataset.get("tables") or {}
+    assert "dataset_1" in tables
+    assert "dataset_2" in tables
     assert "crm.public.accounts" in tables
     assert "billing.public.accounts" in tables
-    assert tables["crm.public.accounts"]["metadata"]["dataset_alias"] == "crm"
-    assert tables["crm.public.accounts"]["metadata"]["physical_schema"] == "public"
-    assert tables["crm.public.accounts"]["metadata"]["physical_table"] == "accounts"
+    assert tables["dataset_1"]["metadata"]["dataset_alias"] == "dataset_1"
+    assert tables["dataset_1"]["metadata"]["physical_schema"] == "public"
+    assert tables["dataset_1"]["metadata"]["physical_table"] == "accounts"
     assert len(artifact_repo.added) == 1
 
 
@@ -375,6 +379,7 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query()
         created_by=None,
         updated_by=None,
         name="shopify_orders",
+        sql_alias="dataset_1",
         description=None,
         tags_json=[],
         dataset_type="FILE",
@@ -406,6 +411,7 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query()
         created_by=None,
         updated_by=None,
         name="customers",
+        sql_alias="dataset_2",
         description=None,
         tags_json=[],
         dataset_type="TABLE",
@@ -463,11 +469,13 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query()
     assert job.status == "succeeded"
     payload = fake_federated_tool.execute_payloads[0]
     tables = payload["workflow"]["dataset"]["tables"]
+    assert "dataset_1" in tables
+    assert "dataset_2" in tables
     assert "shop.api_connector.shopify_orders" in tables
     assert "customers.public.customers" in tables
-    assert tables["shop.api_connector.shopify_orders"]["dataset_descriptor"]["source_kind"] == "saas"
-    assert tables["shop.api_connector.shopify_orders"]["dataset_descriptor"]["storage_kind"] == "parquet"
-    assert tables["customers.public.customers"]["metadata"]["physical_table"] == "customers"
+    assert tables["dataset_1"]["dataset_descriptor"]["source_kind"] == "saas"
+    assert tables["dataset_1"]["dataset_descriptor"]["storage_kind"] == "parquet"
+    assert tables["dataset_2"]["metadata"]["physical_table"] == "customers"
 
 
 @pytest.mark.anyio

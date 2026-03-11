@@ -14,6 +14,7 @@ from langbridge.packages.common.langbridge_common.db.dataset import DatasetRecor
 from langbridge.packages.common.langbridge_common.db.lineage import LineageEdgeRecord
 from langbridge.packages.common.langbridge_common.db.semantic import SemanticModelEntry
 from langbridge.packages.common.langbridge_common.db.sql import SqlSavedQueryRecord
+from langbridge.packages.common.langbridge_common.contracts.sql import SqlSelectedDataset
 from langbridge.packages.common.langbridge_common.errors.application_errors import (
     BusinessValidationError,
 )
@@ -335,35 +336,54 @@ class LineageService:
                 )
             )
 
-        dataset_refs, source_refs = await self._resolve_sql_references(
-            workspace_id=record.workspace_id,
-            project_id=record.project_id,
-            connection_id=record.connection_id,
+        explicit_selected_datasets = self._selected_datasets_from_payload(
+            record.selected_datasets_json,
             query_text=record.query_text,
-            default_catalog=None,
         )
-        for ref in dataset_refs:
+        for selected_dataset in explicit_selected_datasets:
             edges.append(
                 _LineageEdgeInput(
                     source_type=LineageNodeType.DATASET,
-                    source_id=str(ref),
+                    source_id=str(selected_dataset.dataset_id),
                     target_type=target_type,
                     target_id=target_id,
                     edge_type=LineageEdgeType.REFERENCES,
-                    metadata={"match_type": "dataset_reference"},
+                    metadata={
+                        "match_type": "selected_dataset",
+                        "alias": selected_dataset.sql_alias or selected_dataset.alias,
+                    },
                 )
             )
-        for source_ref in source_refs:
-            edges.append(
-                _LineageEdgeInput(
-                    source_type=LineageNodeType.SOURCE_TABLE,
-                    source_id=source_ref["resource_id"],
-                    target_type=target_type,
-                    target_id=target_id,
-                    edge_type=LineageEdgeType.REFERENCES,
-                    metadata=dict(source_ref["metadata"]),
-                )
+        if not explicit_selected_datasets:
+            dataset_refs, source_refs = await self._resolve_sql_references(
+                workspace_id=record.workspace_id,
+                project_id=record.project_id,
+                connection_id=record.connection_id,
+                query_text=record.query_text,
+                default_catalog=None,
             )
+            for ref in dataset_refs:
+                edges.append(
+                    _LineageEdgeInput(
+                        source_type=LineageNodeType.DATASET,
+                        source_id=str(ref),
+                        target_type=target_type,
+                        target_id=target_id,
+                        edge_type=LineageEdgeType.REFERENCES,
+                        metadata={"match_type": "dataset_reference"},
+                    )
+                )
+            for source_ref in source_refs:
+                edges.append(
+                    _LineageEdgeInput(
+                        source_type=LineageNodeType.SOURCE_TABLE,
+                        source_id=source_ref["resource_id"],
+                        target_type=target_type,
+                        target_id=target_id,
+                        edge_type=LineageEdgeType.REFERENCES,
+                        metadata=dict(source_ref["metadata"]),
+                    )
+                )
 
         await self.replace_target_edges(
             workspace_id=record.workspace_id,
@@ -533,7 +553,10 @@ class LineageService:
 
     @staticmethod
     def _dataset_reference_keys(dataset: DatasetRecord) -> set[str]:
-        keys = {(dataset.name or "").strip().lower()}
+        keys = {
+            (dataset.name or "").strip().lower(),
+            (getattr(dataset, "sql_alias", None) or "").strip().lower(),
+        }
         table_name = (dataset.table_name or "").strip().lower()
         schema_name = (dataset.schema_name or "").strip().lower()
         catalog_name = (dataset.catalog_name or "").strip().lower()
@@ -544,6 +567,60 @@ class LineageService:
         if catalog_name and schema_name and table_name:
             keys.add(f"{catalog_name}.{schema_name}.{table_name}")
         return {key for key in keys if key}
+
+    @staticmethod
+    def _selected_datasets_from_payload(
+        payload: list[dict[str, Any]] | None,
+        *,
+        query_text: str | None = None,
+    ) -> list[SqlSelectedDataset]:
+        selected: list[SqlSelectedDataset] = []
+        for item in payload or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                selected.append(SqlSelectedDataset.model_validate(item))
+            except Exception:
+                continue
+        if selected:
+            return selected
+        return LineageService._parse_legacy_selected_datasets(query_text)
+
+    @staticmethod
+    def _parse_legacy_selected_datasets(query_text: str | None) -> list[SqlSelectedDataset]:
+        if not query_text:
+            return []
+        directive_prefix = "-- langbridge:federated-source"
+        selected: list[SqlSelectedDataset] = []
+        seen_aliases: set[str] = set()
+        for line in str(query_text).splitlines():
+            trimmed = line.strip()
+            if not trimmed.startswith(directive_prefix):
+                continue
+            payload = trimmed[len(directive_prefix):].strip()
+            fields: dict[str, str] = {}
+            for part in payload.split():
+                key, separator, value = part.partition("=")
+                if separator and key:
+                    fields[key] = value
+            alias = str(fields.get("alias") or "").strip()
+            dataset_id = fields.get("dataset_id") or fields.get("datasetId")
+            if not alias or not dataset_id:
+                continue
+            try:
+                selected_item = SqlSelectedDataset(
+                    alias=alias,
+                    sql_alias=alias,
+                    dataset_id=dataset_id,
+                )
+            except Exception:
+                continue
+            alias_key = selected_item.alias.lower()
+            if alias_key in seen_aliases:
+                continue
+            seen_aliases.add(alias_key)
+            selected.append(selected_item)
+        return selected
 
     @staticmethod
     def _extract_federated_dataset_ids(dataset: DatasetRecord) -> list[uuid.UUID]:

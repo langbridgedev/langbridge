@@ -12,6 +12,7 @@ from langbridge.packages.common.langbridge_common.db import agent as _agent  # n
 from langbridge.packages.common.langbridge_common.db.dataset import DatasetRecord
 from langbridge.packages.common.langbridge_common.db.lineage import LineageEdgeRecord
 from langbridge.packages.common.langbridge_common.db.semantic import SemanticModelEntry
+from langbridge.packages.common.langbridge_common.db.sql import SqlSavedQueryRecord
 
 
 @pytest.fixture
@@ -362,3 +363,74 @@ async def test_build_dataset_impact_distinguishes_direct_and_indirect_dependents
     assert impact["dependent_datasets"][0]["direct"] is True
     assert impact["semantic_models"][0]["label"] == "Orders semantic model"
     assert impact["semantic_models"][0]["direct"] is False
+
+
+@pytest.mark.anyio
+async def test_register_saved_query_lineage_prefers_selected_dataset_metadata() -> None:
+    workspace_id = uuid.uuid4()
+    connection_id = uuid.uuid4()
+    connector = _FakeConnector(id=connection_id, name="warehouse", connector_type="POSTGRES")
+    dataset = _build_dataset(
+        workspace_id=workspace_id,
+        connection_id=connection_id,
+        name="orders_base",
+        dataset_type="TABLE",
+        schema_name="public",
+        table_name="orders",
+    )
+
+    dataset_repository = _FakeDatasetRepository(dataset)
+    semantic_model_repository = _FakeSemanticModelRepository()
+    lineage_edge_repository = _FakeLineageEdgeRepository()
+    service = _build_service(
+        connector=connector,
+        dataset_repository=dataset_repository,
+        semantic_model_repository=semantic_model_repository,
+        lineage_edge_repository=lineage_edge_repository,
+    )
+
+    now = datetime.now(timezone.utc)
+    record = SqlSavedQueryRecord(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        project_id=None,
+        created_by=uuid.uuid4(),
+        updated_by=uuid.uuid4(),
+        connection_id=None,
+        workbench_mode="dataset",
+        selected_datasets_json=[
+            {
+                "alias": "orders",
+                "dataset_id": str(dataset.id),
+                "dataset_name": dataset.name,
+            }
+        ],
+        name="Orders query",
+        description=None,
+        query_text="SELECT * FROM orders.public.orders",
+        query_hash="hash",
+        tags_json=[],
+        default_params_json={},
+        is_shared=False,
+        last_sql_job_id=None,
+        last_result_artifact_id=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    await service.register_saved_query_lineage(record=record)
+
+    inbound_edges = await lineage_edge_repository.list_inbound(
+        workspace_id=workspace_id,
+        target_type="saved_query",
+        target_id=str(record.id),
+    )
+    dataset_edges = [
+        edge for edge in inbound_edges if edge.source_type == "dataset" and edge.edge_type == "REFERENCES"
+    ]
+    source_table_edges = [edge for edge in inbound_edges if edge.source_type == "source_table"]
+
+    assert len(dataset_edges) == 1
+    assert dataset_edges[0].source_id == str(dataset.id)
+    assert dataset_edges[0].metadata_json["alias"] == "orders"
+    assert source_table_edges == []

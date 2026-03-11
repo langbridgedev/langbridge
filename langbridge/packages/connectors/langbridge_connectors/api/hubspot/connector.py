@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from datetime import datetime, timezone
 from typing import Any
 
@@ -76,6 +74,7 @@ class HubSpotApiConnector(HttpApiConnector):
             response_key="results",
         ),
     }
+    config: HubSpotConnectorConfig
 
     def __init__(self, config: HubSpotConnectorConfig, logger=None, **kwargs: Any) -> None:
         super().__init__(config=config, logger=logger, **kwargs)

@@ -77,6 +77,23 @@ class DatasetRepository(AsyncBaseRepository[DatasetRecord]):
         )
         return result.one_or_none()
 
+    async def get_for_workspace_by_sql_alias(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        sql_alias: str,
+    ) -> DatasetRecord | None:
+        normalized_alias = (sql_alias or "").strip().lower()
+        if not normalized_alias:
+            return None
+        result = await self._session.scalars(
+            select(DatasetRecord).where(
+                DatasetRecord.workspace_id == workspace_id,
+                func.lower(DatasetRecord.sql_alias) == normalized_alias,
+            )
+        )
+        return result.one_or_none()
+
     async def count_for_workspace(
         self,
         *,

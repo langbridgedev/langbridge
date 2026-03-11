@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -139,6 +140,7 @@ _FORBIDDEN_SECRET_KEYS = {
     "client_secret",
 }
 _DATASET_AUTO_GENERATED_TAG = "auto-generated"
+_DATASET_SQL_ALIAS_PATTERN = re.compile(r"[^a-z0-9_]+")
 
 
 class DatasetService:
@@ -225,6 +227,11 @@ class DatasetService:
             created_by=current_user.id,
             updated_by=current_user.id,
             name=request.name.strip(),
+            sql_alias=await self._resolve_dataset_sql_alias(
+                workspace_id=request.workspace_id,
+                requested_alias=request.sql_alias,
+                dataset_name=request.name,
+            ),
             description=(request.description.strip() if request.description else None),
             tags_json=[tag.strip() for tag in request.tags if tag and tag.strip()],
             dataset_type=request.dataset_type.value,
@@ -605,6 +612,13 @@ class DatasetService:
 
         if request.name is not None:
             dataset.name = request.name.strip()
+        if request.sql_alias is not None or ("sql_alias" in request.model_fields_set and not dataset.sql_alias):
+            dataset.sql_alias = await self._resolve_dataset_sql_alias(
+                workspace_id=request.workspace_id,
+                requested_alias=request.sql_alias,
+                dataset_name=(request.name or dataset.name),
+                current_dataset_id=dataset.id,
+            )
         if request.description is not None:
             dataset.description = request.description.strip() or None
         if request.tags is not None:
@@ -721,6 +735,7 @@ class DatasetService:
                 DatasetCatalogItem(
                     id=dataset.id,
                     name=dataset.name,
+                    sql_alias=dataset.sql_alias,
                     dataset_type=DatasetType(dataset.dataset_type.upper()),
                     source_kind=source_kind,
                     connector_kind=connector_kind,
@@ -1002,6 +1017,11 @@ class DatasetService:
             created_by=current_user.id,
             updated_by=current_user.id,
             name=final_name,
+            sql_alias=await self._resolve_dataset_sql_alias(
+                workspace_id=workspace_id,
+                requested_alias=None,
+                dataset_name=final_name,
+            ),
             description=None,
             tags_json=self._normalize_dataset_tags(tags),
             dataset_type=DatasetType.TABLE.value,
@@ -1111,6 +1131,65 @@ class DatasetService:
             if candidate.lower() not in taken_names:
                 return candidate
             counter += 1
+
+    async def _resolve_dataset_sql_alias(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        requested_alias: str | None,
+        dataset_name: str,
+        current_dataset_id: uuid.UUID | None = None,
+    ) -> str:
+        base_alias = self._base_dataset_sql_alias(requested_alias or dataset_name)
+        candidate = base_alias
+        counter = 2
+        while True:
+            existing = await self._get_dataset_by_sql_alias(
+                workspace_id=workspace_id,
+                sql_alias=candidate,
+            )
+            if existing is None or existing.id == current_dataset_id:
+                return candidate
+            candidate = f"{base_alias}_{counter}"
+            counter += 1
+
+    async def _get_dataset_by_sql_alias(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        sql_alias: str,
+    ) -> DatasetRecord | None:
+        getter = getattr(self._dataset_repository, "get_for_workspace_by_sql_alias", None)
+        if callable(getter):
+            return await getter(workspace_id=workspace_id, sql_alias=sql_alias)
+
+        lister = getattr(self._dataset_repository, "list_for_workspace", None)
+        if not callable(lister):
+            return None
+
+        normalized_alias = (sql_alias or "").strip().lower()
+        if not normalized_alias:
+            return None
+
+        datasets = await lister(
+            workspace_id=workspace_id,
+            limit=10000,
+            offset=0,
+        )
+        for dataset in datasets:
+            if (str(getattr(dataset, "sql_alias", "") or "").strip().lower()) == normalized_alias:
+                return dataset
+        return None
+
+    @staticmethod
+    def _base_dataset_sql_alias(raw_value: str | None) -> str:
+        candidate = _DATASET_SQL_ALIAS_PATTERN.sub("_", str(raw_value or "").strip().lower())
+        candidate = re.sub(r"_+", "_", candidate).strip("_")
+        if not candidate:
+            return "dataset"
+        if candidate[0].isdigit():
+            candidate = f"dataset_{candidate}"
+        return candidate
 
     def _render_dataset_name_template(
         self,
@@ -1534,6 +1613,7 @@ class DatasetService:
             "project_id": str(dataset.project_id) if dataset.project_id else None,
             "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
             "name": dataset.name,
+            "sql_alias": dataset.sql_alias,
             "description": dataset.description,
             "tags": list(dataset.tags_json or []),
             "dataset_type": dataset.dataset_type,
@@ -2140,6 +2220,7 @@ class DatasetService:
             connection_id=dataset.connection_id,
             owner_id=dataset.created_by,
             name=dataset.name,
+            sql_alias=dataset.sql_alias,
             description=dataset.description,
             tags=list(dataset.tags_json or []),
             dataset_type=DatasetType(dataset.dataset_type.upper()),

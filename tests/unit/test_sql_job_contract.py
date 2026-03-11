@@ -51,9 +51,21 @@ def test_sql_job_contract_accepts_dataset_backed_federated_execution() -> None:
     )
 
     assert payload.execution_mode == "federated"
+    assert payload.workbench_mode.value == "dataset"
     assert payload.connection_id is None
     assert payload.query_dialect == "tsql"
-    assert payload.federated_datasets == [{"alias": "shop", "dataset_id": dataset_id}]
+    assert [dataset.model_dump(mode="json") for dataset in payload.selected_datasets] == [
+        {
+            "alias": "shop",
+            "sql_alias": "shop",
+            "dataset_id": str(dataset_id),
+            "dataset_name": None,
+            "canonical_reference": None,
+            "connector_id": None,
+            "source_kind": None,
+            "storage_kind": None,
+        }
+    ]
 
 
 def test_sql_execute_request_requires_connection_when_not_federated() -> None:

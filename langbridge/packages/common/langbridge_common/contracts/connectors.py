@@ -122,7 +122,7 @@ def _parse_connector_config(raw_config: Any) -> Optional[Dict[str, Any]]:
 
 
 class ConnectorResponse(_Base):
-    id: Optional[UUID] = None
+    id: UUID
     name: str
     description: Optional[str] = None
     version: Optional[str] = None

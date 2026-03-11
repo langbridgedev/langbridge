@@ -326,6 +326,9 @@ class ConnectorService:
             )
             if not organization:
                 raise BusinessValidationError("Organization not found")
+        if not organization:
+            raise BusinessValidationError("Organization not found") 
+
         organization.connectors.append(connector)
 
         if create_request.project_id:
@@ -366,7 +369,7 @@ class ConnectorService:
 
     async def update_connector(
         self,
-        connector_id: str,
+        connector_id: uuid.UUID,
         update_request: UpdateConnectorRequest,
     ) -> ConnectorResponse:
         connector_entity = await self._connector_repository.get_by_id(connector_id)

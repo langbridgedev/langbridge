@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -36,7 +34,6 @@ from langbridge.packages.common.langbridge_common.repositories.sql_repository im
 )
 from langbridge.packages.common.langbridge_common.utils.datasets import (
     dataset_supports_structured_federation,
-    relation_reference_candidates,
 )
 from langbridge.packages.common.langbridge_common.utils.sql import (
     apply_result_redaction,
@@ -269,7 +266,10 @@ class SqlJobRequestHandler(BaseMessageHandler):
             workspace_id=request.workspace_id,
             query=executable_sql,
             source_dialect=source_sqlglot_dialect,
-            federated_datasets=request.federated_datasets,
+            federated_datasets=[
+                dataset.model_dump(mode="json") if hasattr(dataset, "model_dump") else dict(dataset)
+                for dataset in (request.selected_datasets or request.federated_datasets)
+            ],
             job=job,
         )
         tool_payload = {
@@ -514,18 +514,16 @@ class SqlJobRequestHandler(BaseMessageHandler):
         dataset_map = self._normalize_federated_datasets(federated_datasets)
         datasets = await self._dataset_repository.get_by_ids_for_workspace(
             workspace_id=workspace_id,
-            dataset_ids=[dataset_id for _, dataset_id in dataset_map.values()],
+            dataset_ids=list(dataset_map.keys()),
         )
         datasets_by_id = {dataset.id: dataset for dataset in datasets}
-        for alias, dataset_id in dataset_map.values():
+        for dataset_id, selection in dataset_map.items():
             if dataset_id not in datasets_by_id:
                 raise BusinessValidationError(
-                    f"Federated dataset alias '{alias}' references unknown dataset '{dataset_id}'."
+                    f"Federated dataset '{selection.get('legacy_alias') or selection.get('sql_alias') or dataset_id}' references unknown dataset '{dataset_id}'."
                 )
 
         table_bindings = self._extract_dataset_federated_table_bindings(
-            query=query,
-            source_dialect=source_dialect,
             dataset_map=dataset_map,
             datasets_by_id=datasets_by_id,
         )
@@ -548,61 +546,56 @@ class SqlJobRequestHandler(BaseMessageHandler):
                 max_stage_retries=settings.FEDERATION_STAGE_MAX_RETRIES,
                 stage_parallelism=settings.FEDERATION_STAGE_PARALLELISM,
             ),
-            sorted(alias.strip().lower() for alias, _ in dataset_map.values()),
+            sorted(
+                str(getattr(datasets_by_id[dataset_id], "sql_alias", None) or selection.get("sql_alias") or "").strip().lower()
+                for dataset_id, selection in dataset_map.items()
+            ),
         )
 
     @staticmethod
     def _normalize_federated_datasets(
         federated_datasets: list[dict[str, Any]],
-    ) -> dict[str, tuple[str, uuid.UUID]]:
-        dataset_map: dict[str, tuple[str, uuid.UUID]] = {}
+    ) -> dict[uuid.UUID, dict[str, str | uuid.UUID | None]]:
+        dataset_map: dict[uuid.UUID, dict[str, str | uuid.UUID | None]] = {}
         for raw_item in federated_datasets or []:
             item = dict(raw_item or {})
-            alias = str(item.get("alias") or "").strip()
-            if not alias:
-                continue
-            normalized_alias = alias.lower()
             raw_dataset_id = item.get("dataset_id") or item.get("datasetId")
             try:
                 dataset_id = uuid.UUID(str(raw_dataset_id))
             except (TypeError, ValueError) as exc:
                 raise BusinessValidationError(
-                    f"Federated dataset alias '{alias}' has an invalid dataset id."
+                    "Federated dataset entry has an invalid dataset id."
                 ) from exc
-            existing = dataset_map.get(normalized_alias)
-            if existing is not None and existing[1] != dataset_id:
-                raise BusinessValidationError(
-                    f"Federated dataset alias '{alias}' maps to multiple dataset ids."
-                )
-            dataset_map[normalized_alias] = (alias, dataset_id)
+            legacy_alias = str(item.get("alias") or "").strip() or None
+            sql_alias = str(item.get("sql_alias") or item.get("sqlAlias") or "").strip().lower() or None
+            existing = dataset_map.get(dataset_id)
+            if existing is not None:
+                existing_sql_alias = str(existing.get("sql_alias") or "").strip().lower() or None
+                if existing_sql_alias and sql_alias and existing_sql_alias != sql_alias:
+                    raise BusinessValidationError(
+                        f"Federated dataset '{dataset_id}' maps to multiple SQL aliases."
+                    )
+            dataset_map[dataset_id] = {
+                "dataset_id": dataset_id,
+                "legacy_alias": legacy_alias,
+                "sql_alias": sql_alias,
+            }
 
         if not dataset_map:
             raise BusinessValidationError(
-                "federated_datasets must include at least one alias to dataset mapping."
+                "federated_datasets must include at least one dataset mapping."
             )
         return dataset_map
 
     def _extract_dataset_federated_table_bindings(
         self,
         *,
-        query: str,
-        source_dialect: str,
-        dataset_map: dict[str, tuple[str, uuid.UUID]],
+        dataset_map: dict[uuid.UUID, dict[str, str | uuid.UUID | None]],
         datasets_by_id: dict[uuid.UUID, Any],
     ) -> dict[str, VirtualTableBinding]:
-        try:
-            expression = sqlglot.parse_one(query, read=source_dialect)
-        except sqlglot.ParseError as exc:
-            raise BusinessValidationError(f"Federated SQL parse failed: {exc}") from exc
-
-        cte_names = {
-            str(cte.alias_or_name or "").strip().lower()
-            for cte in expression.find_all(exp.CTE)
-            if str(cte.alias_or_name or "").strip()
-        }
         table_bindings: dict[str, VirtualTableBinding] = {}
-        relation_candidates: dict[uuid.UUID, set[str]] = {}
         for dataset_id, dataset in datasets_by_id.items():
+            selection = dataset_map[dataset_id]
             descriptor = self._dataset_execution_resolver._build_dataset_execution_descriptor(dataset)
             if not dataset_supports_structured_federation(
                 source_kind=descriptor.source_kind,
@@ -612,86 +605,44 @@ class SqlJobRequestHandler(BaseMessageHandler):
                 raise BusinessValidationError(
                     f"Dataset '{dataset.name}' does not support federated structured execution."
                 )
-            relation_candidates[dataset_id] = relation_reference_candidates(descriptor.relation_identity)
-
-        for table in expression.find_all(exp.Table):
-            table_name = str(table.name or "").strip()
-            if not table_name:
-                continue
-            schema_name = str(table.db or "").strip() or None
-            catalog_name = str(table.catalog or "").strip() or None
-            if not schema_name and not catalog_name and table_name.lower() in cte_names:
-                continue
-
-            reference_candidates = {
-                ".".join(part for part in (catalog_name, schema_name, table_name) if part).lower(),
-                ".".join(part for part in (schema_name, table_name) if part).lower(),
-                table_name.lower(),
-            }
-            reference_candidates = {candidate for candidate in reference_candidates if candidate}
-
-            canonical_alias: str | None = None
-            dataset_id: uuid.UUID | None = None
-            if catalog_name and catalog_name.lower() in dataset_map:
-                canonical_alias, dataset_id = dataset_map[catalog_name.lower()]
-            else:
-                matched_dataset_ids = [
-                    selected_dataset_id
-                    for selected_dataset_id, candidates in relation_candidates.items()
-                    if candidates.intersection(reference_candidates)
-                ]
-                if len(matched_dataset_ids) == 1:
-                    dataset_id = matched_dataset_ids[0]
-                    canonical_alias = next(
-                        (
-                            alias
-                            for alias, selected_dataset_id in dataset_map.values()
-                            if selected_dataset_id == dataset_id
-                        ),
-                        None,
-                    )
-                elif len(matched_dataset_ids) > 1:
-                    raise BusinessValidationError(
-                        f"Table '{table.sql()}' matches multiple federated datasets. "
-                        "Use an explicit dataset alias prefix."
-                    )
-
-            if dataset_id is None:
+            sql_alias = str(getattr(dataset, "sql_alias", None) or selection.get("sql_alias") or "").strip().lower()
+            if not sql_alias:
                 raise BusinessValidationError(
-                    f"Table '{table.sql()}' does not resolve to a selected federated dataset."
+                    f"Dataset '{dataset.name}' is missing a SQL alias."
                 )
-
-            dataset = datasets_by_id[dataset_id]
             binding, _dialect = self._dataset_execution_resolver._build_binding_from_dataset_record(
                 dataset=dataset,
-                table_key=".".join(part for part in (catalog_name, schema_name, table_name) if part) or table_name,
-                logical_schema=schema_name,
-                logical_table_name=table_name,
-                catalog_name=(canonical_alias or catalog_name),
+                table_key=sql_alias,
+                logical_schema=None,
+                logical_table_name=sql_alias,
+                catalog_name=None,
             )
-            binding = self._with_dataset_logical_alias(
-                binding=binding,
-                logical_catalog=(canonical_alias or catalog_name),
-                dataset_alias=canonical_alias,
-            )
-            existing = table_bindings.get(binding.table_key)
-            if existing is not None and existing.model_dump(mode="json") != binding.model_dump(mode="json"):
-                raise BusinessValidationError(
-                    f"Table '{table.sql()}' resolves to conflicting federated bindings."
-                )
+            binding = self._with_dataset_logical_alias(binding=binding, dataset_alias=sql_alias)
             table_bindings[binding.table_key] = binding
 
-        if not table_bindings:
-            raise BusinessValidationError(
-                "Federated SQL query must reference at least one structured dataset."
-            )
+            legacy_alias = str(selection.get("legacy_alias") or "").strip()
+            if legacy_alias and legacy_alias.lower() != sql_alias and dataset.table_name:
+                legacy_key = ".".join(
+                    part for part in (legacy_alias, dataset.schema_name, dataset.table_name) if part
+                )
+                legacy_binding, _dialect = self._dataset_execution_resolver._build_binding_from_dataset_record(
+                    dataset=dataset,
+                    table_key=legacy_key,
+                    logical_schema=dataset.schema_name,
+                    logical_table_name=dataset.table_name,
+                    catalog_name=legacy_alias,
+                )
+                table_bindings[legacy_binding.table_key] = self._with_dataset_logical_alias(
+                    binding=legacy_binding,
+                    dataset_alias=sql_alias,
+                )
+
         return table_bindings
 
     @staticmethod
     def _with_dataset_logical_alias(
         *,
         binding: VirtualTableBinding,
-        logical_catalog: str | None,
         dataset_alias: str | None,
     ) -> VirtualTableBinding:
         metadata = dict(binding.metadata or {})
@@ -699,7 +650,6 @@ class SqlJobRequestHandler(BaseMessageHandler):
             metadata["dataset_alias"] = dataset_alias
         return binding.model_copy(
             update={
-                "catalog": logical_catalog,
                 "metadata": metadata,
             }
         )
@@ -802,7 +752,7 @@ class SqlJobRequestHandler(BaseMessageHandler):
             {"section": "normalized_sql", "value": query_sql},
             {
                 "section": "source_alias_count",
-                "value": str(len(request.federated_datasets)),
+                "value": str(len(request.selected_datasets or request.federated_datasets)),
             },
             {"section": "table_count", "value": str(len(logical_tables) if isinstance(logical_tables, dict) else 0)},
             {"section": "join_count", "value": str(len(logical_joins) if isinstance(logical_joins, list) else 0)},

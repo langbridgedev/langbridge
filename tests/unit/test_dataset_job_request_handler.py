@@ -459,6 +459,100 @@ async def test_file_dataset_preview_builds_file_backed_workflow() -> None:
 
 
 @pytest.mark.anyio
+async def test_api_connector_file_dataset_preview_ignores_synthetic_schema() -> None:
+    workspace_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+
+    dataset = DatasetRecord(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        project_id=None,
+        connection_id=None,
+        created_by=user_id,
+        updated_by=user_id,
+        name="hubspot_deals",
+        description=None,
+        tags_json=[],
+        dataset_type="FILE",
+        dialect="duckdb",
+        catalog_name=None,
+        schema_name="api_connector",
+        table_name="hubspot_27d35c77_deals",
+        storage_uri="file:///tmp/hubspot_deals.parquet",
+        sql_text=None,
+        referenced_dataset_ids_json=[],
+        federated_plan_json=None,
+        file_config_json={"format": "parquet", "connector_sync": {"connector_type": "hubspot", "resource_name": "deals"}},
+        status="published",
+        revision_id=None,
+        row_count_estimate=None,
+        bytes_estimate=None,
+        last_profiled_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    columns = [
+        DatasetColumnRecord(
+            id=uuid.uuid4(),
+            dataset_id=dataset.id,
+            workspace_id=workspace_id,
+            name="object_id",
+            data_type="text",
+            nullable=False,
+            ordinal_position=0,
+            description=None,
+            is_allowed=True,
+            is_computed=False,
+            expression=None,
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    policy = DatasetPolicyRecord(
+        id=uuid.uuid4(),
+        dataset_id=dataset.id,
+        workspace_id=workspace_id,
+        max_rows_preview=10,
+        max_export_rows=5000,
+        redaction_rules_json={},
+        row_filters_json=[],
+        allow_dml=False,
+        created_at=now,
+        updated_at=now,
+    )
+    federated_tool = _FakeFederatedQueryTool(
+        responses=[{"rows": [{"object_id": "1"}], "execution": {"total_runtime_ms": 7, "stage_metrics": []}}]
+    )
+    job_record = _build_job_record(workspace_id=workspace_id, job_type=JobType.DATASET_PREVIEW)
+    handler = DatasetJobRequestHandler(
+        job_repository=_FakeJobRepository(job_record),
+        dataset_repository=_FakeDatasetRepository(dataset),
+        dataset_column_repository=_FakeDatasetColumnRepository(columns),
+        dataset_policy_repository=_FakeDatasetPolicyRepository(policy),
+        federated_query_tool=federated_tool,
+    )
+
+    message = DatasetJobRequestMessage(
+        job_id=job_record.id,
+        job_type=JobType.DATASET_PREVIEW,
+        job_request=CreateDatasetPreviewJobRequest(
+            dataset_id=dataset.id,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            enforced_limit=10,
+        ).model_dump(mode="json"),
+    )
+
+    await handler.handle(message)
+
+    assert job_record.status == JobStatus.succeeded
+    query_sql = federated_tool.calls[0]["query"]
+    assert "api_connector." not in query_sql
+    assert 'FROM hubspot_27d35c77_deals' in query_sql
+
+
+@pytest.mark.anyio
 async def test_csv_ingest_job_converts_file_dataset_to_parquet(tmp_path, monkeypatch) -> None:
     workspace_id = uuid.uuid4()
     user_id = uuid.uuid4()

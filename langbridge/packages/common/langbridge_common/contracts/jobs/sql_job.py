@@ -6,6 +6,10 @@ import uuid
 from pydantic import Field, model_validator
 
 from langbridge.packages.common.langbridge_common.contracts.base import _Base
+from langbridge.packages.common.langbridge_common.contracts.sql import (
+    SqlSelectedDataset,
+    SqlWorkbenchMode,
+)
 
 from .type import JobType
 
@@ -16,6 +20,7 @@ class CreateSqlJobRequest(_Base):
     workspace_id: uuid.UUID
     project_id: uuid.UUID | None = None
     user_id: uuid.UUID
+    workbench_mode: SqlWorkbenchMode = SqlWorkbenchMode.dataset
     connection_id: uuid.UUID | None = None
     execution_mode: Literal["single", "federated"] = "single"
     query: str = Field(..., min_length=1)
@@ -30,20 +35,40 @@ class CreateSqlJobRequest(_Base):
     allowed_schemas: list[str] = Field(default_factory=list)
     allowed_tables: list[str] = Field(default_factory=list)
     redaction_rules: dict[str, str] = Field(default_factory=dict)
-    federated_datasets: list[dict[str, Any]] = Field(default_factory=list)
+    selected_datasets: list[SqlSelectedDataset] = Field(default_factory=list)
+    federated_datasets: list[SqlSelectedDataset] = Field(default_factory=list)
     explain: bool = False
     correlation_id: str | None = None
 
     @model_validator(mode="after")
     def _validate_request(self) -> "CreateSqlJobRequest":
-        if self.execution_mode == "single" and self.connection_id is None:
-            raise ValueError("connection_id is required for single datasource SQL jobs.")
-        if self.execution_mode == "federated" and self.connection_id is not None:
-            raise ValueError("connection_id must be omitted for federated SQL jobs.")
-        if self.execution_mode == "federated" and not self.allow_federation:
-            raise ValueError("Federated SQL execution is not enabled for this workspace.")
-        if self.execution_mode == "federated" and not self.federated_datasets:
-            raise ValueError("Federated SQL jobs require at least one federated dataset.")
+        if not self.selected_datasets and self.federated_datasets:
+            self.selected_datasets = list(self.federated_datasets)
+
+        if "workbench_mode" not in self.model_fields_set:
+            self.workbench_mode = (
+                SqlWorkbenchMode.dataset
+                if self.execution_mode == "federated"
+                else SqlWorkbenchMode.direct_sql
+            )
+
+        if self.workbench_mode == SqlWorkbenchMode.direct_sql:
+            if self.execution_mode != "single":
+                raise ValueError("Direct SQL jobs must use single execution mode.")
+            if self.connection_id is None:
+                raise ValueError("connection_id is required for direct SQL jobs.")
+            if self.selected_datasets:
+                raise ValueError("selected_datasets must be omitted for direct SQL jobs.")
+        else:
+            if self.execution_mode != "federated":
+                raise ValueError("Dataset SQL jobs must use federated execution mode.")
+            if self.connection_id is not None:
+                raise ValueError("connection_id must be omitted for dataset SQL jobs.")
+            if not self.allow_federation:
+                raise ValueError("Dataset SQL execution is not enabled for this workspace.")
+            if not self.selected_datasets:
+                raise ValueError("Dataset SQL jobs require at least one selected dataset.")
+
         if not self.query.strip():
             raise ValueError("query is required.")
         self.query_dialect = self.query_dialect.strip().lower() or "tsql"

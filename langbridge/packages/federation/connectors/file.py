@@ -58,6 +58,9 @@ class DuckDbFileRemoteSource(RemoteSource):
                 table=table if isinstance(table, pa.Table) else pa.table({}),
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
             )
+        except Exception as e:
+            self._logger.error("Error executing subplan on file source %s: %s", self.source_id, str(e), exc_info=True)
+            raise
         finally:
             connection.close()
 
@@ -127,7 +130,8 @@ class DuckDbFileRemoteSource(RemoteSource):
 
     @staticmethod
     def _build_scan_sql(*, storage_uri: str, file_format: str, metadata: dict[str, Any]) -> str:
-        path = resolve_local_storage_path(storage_uri).as_posix().replace("'", "''")
+        # path = resolve_local_storage_path(storage_uri).as_posix().replace("'", "''")
+        path = storage_uri.replace("'", "''").replace("file:///app/", "")
         if file_format == "parquet":
             return f"read_parquet('{path}')"
         header = "true" if bool(metadata.get("header", True)) else "false"

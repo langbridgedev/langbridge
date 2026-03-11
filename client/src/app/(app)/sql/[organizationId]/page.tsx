@@ -54,11 +54,13 @@ import {
   updateSqlWorkspacePolicy,
 } from '@/orchestration/sql';
 import {
-  injectFederatedDirectives,
-  parseFederatedDirectiveBindings,
-  shouldDefaultFederatedMode,
-  supportsStructuredFederatedDataset,
-} from '@/orchestration/sql/federation';
+  getDatasetWorkbenchCatalogItems,
+  getDirectSqlConnectors,
+  groupDatasetWorkbenchItems,
+  inferSavedQueryWorkbenchMode,
+  isDirectSqlConnector,
+  resolveSavedQuerySelectedDatasets,
+} from '@/orchestration/sql/workbench';
 import type {
   SqlAssistMode,
   SqlDialect,
@@ -66,6 +68,7 @@ import type {
   SqlJobRecord,
   SqlJobResultsPayload,
   SqlSavedQueryRecord,
+  SqlWorkbenchMode,
   SqlWorkspacePolicyRecord,
 } from '@/orchestration/sql/types';
 
@@ -98,7 +101,6 @@ type SortState = {
 type FederatedSource = {
   id: string;
   datasetId?: string;
-  alias: string;
 };
 
 const MonacoEditor = dynamic(
@@ -275,24 +277,16 @@ function inferDialectFromConnector(connectorType?: string | null): SqlDialect | 
   return CONNECTOR_DIALECT_MAP[connectorType.toUpperCase()] || null;
 }
 
-function normalizeFederatedAlias(rawAlias: string): string {
-  const compact = rawAlias.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
-  return compact.replace(/_+/g, '_').replace(/^_+|_+$/g, '');
-}
-
 function nextFederatedSourceId(): string {
   return `src-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function datasetReferencePreview(dataset: DatasetCatalogItem, alias: string): string {
-  const normalizedAlias = normalizeFederatedAlias(alias) || 'dataset';
-  const relation = dataset.relationIdentity;
-  const relationName = relation?.tableName || relation?.relationName || dataset.name;
-  const schemaName = relation?.schemaName;
-  if (schemaName) {
-    return `${normalizedAlias}.${schemaName}.${relationName}`;
-  }
-  return `${normalizedAlias}.${relationName}`;
+function resolveDatasetSqlAlias(dataset: DatasetCatalogItem | null | undefined, fallback = 'dataset'): string {
+  return String(dataset?.sqlAlias || fallback).trim();
+}
+
+function datasetReferencePreview(dataset: DatasetCatalogItem): string {
+  return resolveDatasetSqlAlias(dataset);
 }
 
 export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
@@ -313,7 +307,7 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   const [requestedTimeoutSeconds, setRequestedTimeoutSeconds] = useState('30');
   const [queryDialect, setQueryDialect] = useState<SqlDialect>('tsql');
   const [dialectTouched, setDialectTouched] = useState(false);
-  const [federatedMode, setFederatedMode] = useState(false);
+  const [federatedMode, setFederatedMode] = useState(true);
   const [modeTouched, setModeTouched] = useState(false);
   const [federatedSources, setFederatedSources] = useState<FederatedSource[]>([]);
   const [explainMode, setExplainMode] = useState(false);
@@ -327,7 +321,7 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   const [columnsMap, setColumnsMap] = useState<TableColumns>({});
   const [selectedSchema, setSelectedSchema] = useState('');
   const [selectedTable, setSelectedTable] = useState('');
-  const [runAgainstDatasetMode, setRunAgainstDatasetMode] = useState(false);
+  const [datasetSearch, setDatasetSearch] = useState('');
   const [lastEnsuredDatasetId, setLastEnsuredDatasetId] = useState<string | null>(null);
   const [sqlLogs, setSqlLogs] = useState<LogEntry[]>([]);
   const [historyScope, setHistoryScope] = useState<'user' | 'workspace'>('user');
@@ -350,6 +344,7 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   const lastJobStatusRef = useRef<string | null>(null);
   const loadedSavedQueryIdRef = useRef<string | null>(null);
   const loadedHistoryJobIdRef = useRef<string | null>(null);
+  const workbenchMode: SqlWorkbenchMode = federatedMode ? 'dataset' : 'direct_sql';
 
   const syncQueryText = useCallback((nextValue: string, delayMs: number) => {
     if (querySyncTimerRef.current != null) {
@@ -431,15 +426,40 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   }, [policyQuery.data, selectedConnectionId, federatedMode]);
 
   const availableFederatedDatasets = useMemo(
-    () => (datasetCatalogQuery.data?.items || []).filter((dataset) => supportsStructuredFederatedDataset(dataset)),
+    () => getDatasetWorkbenchCatalogItems(datasetCatalogQuery.data?.items || []),
     [datasetCatalogQuery.data?.items],
+  );
+
+  const visibleFederatedDatasets = useMemo(() => {
+    const search = datasetSearch.trim().toLowerCase();
+    if (!search) {
+      return availableFederatedDatasets;
+    }
+    return availableFederatedDatasets.filter((dataset) => {
+      const haystack = [
+        dataset.name,
+        dataset.connectorKind,
+        dataset.sourceKind,
+        dataset.storageKind,
+        ...dataset.tags,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(search);
+    });
+  }, [availableFederatedDatasets, datasetSearch]);
+
+  const datasetGroups = useMemo(
+    () => groupDatasetWorkbenchItems(visibleFederatedDatasets),
+    [visibleFederatedDatasets],
   );
 
   useEffect(() => {
     if (!connectorsQuery.data || connectorsQuery.data.length === 0 || selectedConnectionId || federatedMode) {
       return;
     }
-    setSelectedConnectionId(connectorsQuery.data[0]?.id ?? '');
+    setSelectedConnectionId(connectorsQuery.data.filter((connector) => isDirectSqlConnector(connector))[0]?.id ?? '');
   }, [connectorsQuery.data, selectedConnectionId, federatedMode]);
 
   const parameterKeys = useMemo(() => parseParameterKeys(queryText), [queryText]);
@@ -454,8 +474,10 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     });
   }, [parameterKeys]);
 
+  
+
   const availableConnectors = useMemo(
-    () => (connectorsQuery.data || []).filter((connector) => connector.id),
+    () => getDirectSqlConnectors(connectorsQuery.data || []),
     [connectorsQuery.data],
   );
 
@@ -468,17 +490,17 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     () => Object.fromEntries(availableFederatedDatasets.map((dataset) => [dataset.id, dataset])),
     [availableFederatedDatasets],
   );
+  const selectedDatasetIds = useMemo(
+    () => new Set(federatedSources.map((source) => source.datasetId).filter(Boolean) as string[]),
+    [federatedSources],
+  );
 
   useEffect(() => {
-    if (modeTouched || !policyQuery.data) {
+    if (modeTouched) {
       return;
     }
-    const defaultFederated = shouldDefaultFederatedMode({
-      allowFederation: policyQuery.data.allowFederation,
-      datasets: availableFederatedDatasets,
-    });
-    setFederatedMode(defaultFederated);
-  }, [modeTouched, policyQuery.data, availableFederatedDatasets]);
+    setFederatedMode(Boolean(policyQuery.data?.allowFederation ?? true));
+  }, [modeTouched, policyQuery.data?.allowFederation]);
 
   useEffect(() => {
     if (dialectTouched) {
@@ -495,13 +517,25 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   const riskHints = useMemo(() => detectRiskHints(queryText), [queryText]);
 
   const completionCandidates = useMemo(() => {
+    const datasetItems = federatedSources.flatMap((source) => {
+      if (!source.datasetId) {
+        return [];
+      }
+      const dataset = datasetById[source.datasetId];
+      if (!dataset) {
+        return [];
+      }
+      const reference = datasetReferencePreview(dataset);
+      const columnItems = (dataset.columns || []).map((column) => `${reference}.${column.name}`);
+      return [reference, ...columnItems];
+    });
     const schemaItems = Object.values(schemaMap)
       .flatMap((schema) => schema.tables.map((table) => `${schema.schema}.${table}`));
     const columnItems = Object.entries(columnsMap).flatMap(([tableKey, columns]) =>
       columns.map((column) => `${tableKey}.${column.name}`),
     );
-    return [...SQL_KEYWORDS, ...schemaItems, ...columnItems];
-  }, [schemaMap, columnsMap]);
+    return [...SQL_KEYWORDS, ...datasetItems, ...schemaItems, ...columnItems];
+  }, [columnsMap, datasetById, federatedSources, schemaMap]);
 
   useEffect(() => {
     completionItemsRef.current = completionCandidates;
@@ -790,35 +824,21 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
 
   const federatedSourceValidation = useMemo(() => {
     const issues: string[] = [];
-    const seenAliases = new Set<string>();
+    const seenDatasetIds = new Set<string>();
     federatedSources.forEach((source, index) => {
       if (!source.datasetId) {
-        issues.push(`Source ${index + 1} is missing a dataset.`);
-      }
-      const alias = normalizeFederatedAlias(source.alias);
-      if (!alias) {
-        issues.push(`Source ${index + 1} has an invalid alias.`);
+        issues.push(`Dataset ${index + 1} is missing a selection.`);
         return;
       }
-      if (seenAliases.has(alias)) {
-        issues.push(`Alias '${alias}' is duplicated.`);
+      if (seenDatasetIds.has(source.datasetId)) {
+        issues.push(`Dataset ${index + 1} is selected more than once.`);
       }
-      seenAliases.add(alias);
+      seenDatasetIds.add(source.datasetId);
     });
     if (federatedSources.length < 1) {
-      issues.push('Federated mode requires at least 1 source.');
+      issues.push('Dataset mode requires at least 1 selected dataset.');
     }
     return issues;
-  }, [federatedSources]);
-
-  const buildFederatedDirectives = useCallback((): string => {
-    return injectFederatedDirectives(
-      '',
-      federatedSources.map((source) => ({
-        alias: normalizeFederatedAlias(source.alias),
-        datasetId: source.datasetId,
-      })),
-    );
   }, [federatedSources]);
 
   const runSql = useCallback(
@@ -832,12 +852,12 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
         return;
       }
       if (!federatedMode && !selectedConnectionId) {
-        toast({ title: 'Connection required', description: 'Select a data connection before running.', variant: 'destructive' });
+        toast({ title: 'Connector required', description: 'Select a SQL database before running.', variant: 'destructive' });
         return;
       }
       if (federatedMode && federatedSourceValidation.length > 0) {
         toast({
-          title: 'Federated sources not ready',
+          title: 'Datasets not ready',
           description: federatedSourceValidation[0],
           variant: 'destructive',
         });
@@ -854,47 +874,6 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
         }
       }
 
-      if (!federatedMode) {
-        const selectedPhysical = selectedTable.includes('.')
-          ? selectedTable.split('.')
-          : null;
-        const inferredMatch = sql.match(/\b([a-zA-Z_][\w$]*)\.([a-zA-Z_][\w$]*)\b/);
-        const targetSchema = selectedPhysical && selectedPhysical.length >= 2
-          ? selectedPhysical[0]
-          : inferredMatch?.[1] || '';
-        const targetTable = selectedPhysical && selectedPhysical.length >= 2
-          ? selectedPhysical.slice(1).join('.')
-          : inferredMatch?.[2] || '';
-
-        if (runAgainstDatasetMode && targetSchema && targetTable) {
-          try {
-            await ensureDatasetForPhysicalTable(targetSchema, targetTable);
-          } catch (error) {
-            toast({
-              title: 'Dataset creation failed',
-              description: error instanceof Error ? error.message : 'Unable to ensure dataset for selected table.',
-              variant: 'destructive',
-            });
-            return;
-          }
-        } else if (!runAgainstDatasetMode && inferredMatch) {
-          const shouldEnsure = window.confirm(
-            `Detected physical table ${inferredMatch[1]}.${inferredMatch[2]}. Create governed dataset?`,
-          );
-          if (shouldEnsure) {
-            try {
-              await ensureDatasetForPhysicalTable(inferredMatch[1], inferredMatch[2]);
-            } catch (error) {
-              toast({
-                title: 'Dataset creation failed',
-                description: error instanceof Error ? error.message : 'Unable to ensure dataset from detected table.',
-                variant: 'destructive',
-              });
-            }
-          }
-        }
-      }
-
       const paramsPayload = Object.fromEntries(
         Object.entries(parameterValues)
           .filter(([, value]) => value !== '')
@@ -905,8 +884,8 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
       executeMutation.mutate({
         workspaceId: organizationId,
         projectId: selectedProjectId || null,
+        workbenchMode,
         connectionId: federatedMode ? null : selectedConnectionId,
-        federated: federatedMode,
         query: sql,
         queryDialect,
         params: paramsPayload,
@@ -916,22 +895,25 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
           policyQuery.data?.maxRuntimeSeconds || 30,
         ),
         explain: options?.explain ?? explainMode,
-        federatedDatasets: federatedSources
+        selectedDatasets: federatedSources
           .filter((source) => source.datasetId)
-          .map((source) => ({
-            alias: normalizeFederatedAlias(source.alias),
-            datasetId: source.datasetId as string,
-          })),
+          .map((source) => {
+            const dataset = source.datasetId ? datasetById[source.datasetId] : null;
+            const sqlAlias = resolveDatasetSqlAlias(dataset);
+            return {
+              alias: sqlAlias,
+              sqlAlias,
+              datasetId: source.datasetId as string,
+            };
+          }),
       });
     },
     [
-      ensureDatasetForPhysicalTable,
       organizationId,
       toast,
       federatedMode,
-      runAgainstDatasetMode,
-      selectedTable,
       selectedConnectionId,
+      workbenchMode,
       queryDialect,
       parameterValues,
       federatedSources,
@@ -943,6 +925,7 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
       policyQuery.data?.maxPreviewRows,
       policyQuery.data?.maxRuntimeSeconds,
       explainMode,
+      datasetById,
     ],
   );
 
@@ -1164,18 +1147,18 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
   }, [savedQueriesQuery.data?.items, selectedSavedQueryId]);
 
   const loadSavedQuery = useCallback((saved: SqlSavedQueryRecord) => {
-    const directiveBindings = parseFederatedDirectiveBindings(saved.query);
+    const savedMode = inferSavedQueryWorkbenchMode(saved);
+    const savedDatasets = resolveSavedQuerySelectedDatasets(saved);
     setSelectedSavedQueryId(saved.id);
     setSavedQueryName(saved.name);
     setSavedQueryTags(saved.tags.join(','));
     setShareEnabled(saved.isShared);
     applyQueryText(saved.query, { immediateState: true });
-    if (directiveBindings.length > 0) {
+    if (savedMode === 'dataset') {
       setFederatedSources(
-        directiveBindings.map((binding) => ({
+        savedDatasets.map((binding) => ({
           id: nextFederatedSourceId(),
           datasetId: binding.datasetId,
-          alias: binding.alias,
         })),
       );
       setFederatedMode(true);
@@ -1222,6 +1205,21 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
         fetchSqlJob(organizationId, historyJobId),
         fetchSqlJobResults(organizationId, historyJobId, null, 250),
       ]);
+      applyQueryText(job.query, { immediateState: true });
+      setFederatedMode(job.workbenchMode === 'dataset');
+      setModeTouched(true);
+      if (job.workbenchMode === 'dataset') {
+        setFederatedSources(
+          job.selectedDatasets.map((dataset) => ({
+            id: nextFederatedSourceId(),
+            datasetId: dataset.datasetId,
+          })),
+        );
+        setSelectedConnectionId('');
+      } else {
+        setFederatedSources([]);
+        setSelectedConnectionId(job.connectionId || '');
+      }
       setJobId(job.id);
       setJobState(job);
       setJobResults(results);
@@ -1234,7 +1232,7 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
       setExecutionError(toDisplayError(error, 'sql.execution'));
       setActiveTab('results');
     }
-  }, [organizationId, appendLog]);
+  }, [organizationId, appendLog, applyQueryText]);
 
   useEffect(() => {
     if (!sharedHistoryJobId) {
@@ -1264,18 +1262,24 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     const basePayload = {
       workspaceId: organizationId,
       projectId: selectedProjectId || null,
+      workbenchMode,
       connectionId: federatedMode ? null : (selectedConnectionId || null),
+      selectedDatasets: federatedMode
+        ? federatedSources
+            .filter((source) => source.datasetId)
+            .map((source) => {
+              const dataset = source.datasetId ? datasetById[source.datasetId] : null;
+              const sqlAlias = resolveDatasetSqlAlias(dataset);
+              return {
+                alias: sqlAlias,
+                sqlAlias,
+                datasetId: source.datasetId as string,
+              };
+            })
+        : [],
       name: savedQueryName.trim(),
       description: null,
-      query: injectFederatedDirectives(
-        queryTextRef.current,
-        federatedMode
-          ? federatedSources.map((source) => ({
-              alias: normalizeFederatedAlias(source.alias),
-              datasetId: source.datasetId,
-            }))
-          : [],
-      ),
+      query: queryTextRef.current,
       tags: savedQueryTags.split(',').map((tag) => tag.trim()).filter(Boolean),
       defaultParams: parameterValues,
       isShared: shareEnabled,
@@ -1298,12 +1302,14 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     selectedProjectId,
     selectedConnectionId,
     federatedMode,
+    workbenchMode,
     federatedSources,
     savedQueryTags,
     parameterValues,
     shareEnabled,
     jobState?.id,
     selectedSavedQueryId,
+    datasetById,
     saveQueryMutation,
     updateQueryMutation,
   ]);
@@ -1325,12 +1331,12 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     }
     assistantMutation.mutate({
       workspaceId: organizationId,
-      connectionId: selectedConnectionId || null,
+      connectionId: federatedMode ? null : (selectedConnectionId || null),
       mode: assistantMode,
       prompt: assistantPrompt,
       query: queryTextRef.current,
     });
-  }, [organizationId, assistantPrompt, assistantMutation, selectedConnectionId, assistantMode]);
+  }, [organizationId, assistantPrompt, assistantMutation, federatedMode, selectedConnectionId, assistantMode]);
 
   const applyAssistantSuggestion = useCallback(() => {
     if (!assistantSuggestion.trim()) {
@@ -1382,19 +1388,16 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
     if (!fallbackDataset?.id) {
       toast({
         title: 'No datasets',
-        description: 'Create a structured dataset before adding federated sources.',
+        description: 'Create a structured dataset before querying in dataset mode.',
         variant: 'destructive',
       });
       return;
     }
-    const baseAlias = normalizeFederatedAlias(fallbackDataset.name || 'dataset');
-    const alias = baseAlias || `dataset_${federatedSources.length + 1}`;
     setFederatedSources((current) => [
       ...current,
       {
         id: nextFederatedSourceId(),
         datasetId: fallbackDataset.id,
-        alias,
       },
     ]);
   }, [federatedSources, availableFederatedDatasets, toast]);
@@ -1421,29 +1424,23 @@ export default function SqlWorkbenchPage({ params }: SqlWorkbenchPageProps) {
 
   const insertFederatedTemplate = useCallback(() => {
     const validSources = federatedSources
-      .map((source, index) => ({
-        alias: normalizeFederatedAlias(source.alias) || `source_${index + 1}`,
+      .map((source) => ({
         datasetId: source.datasetId,
+        dataset: source.datasetId ? datasetById[source.datasetId] : null,
       }))
-      .filter((source) => source.datasetId);
+      .filter((source) => source.datasetId && source.dataset);
     if (validSources.length < 2) {
       toast({
-        title: 'Add more sources',
-        description: 'Pick at least 2 sources before generating a federated template.',
+        title: 'Add more datasets',
+        description: 'Pick at least 2 datasets before generating a join template.',
         variant: 'destructive',
       });
       return;
     }
-    const directives = buildFederatedDirectives();
-    const left = validSources[0].alias;
-    const right = validSources[1].alias;
-    const leftDataset = validSources[0].datasetId ? datasetById[validSources[0].datasetId] : null;
-    const rightDataset = validSources[1].datasetId ? datasetById[validSources[1].datasetId] : null;
-    const leftReference = leftDataset ? datasetReferencePreview(leftDataset, left) : `${left}.public.accounts`;
-    const rightReference = rightDataset ? datasetReferencePreview(rightDataset, right) : `${right}.public.accounts`;
-    const template = `${directives}
--- Federated SQL syntax:
---   <dataset_alias>.<schema?>.<table>
+    const leftReference = datasetReferencePreview(validSources[0].dataset as DatasetCatalogItem);
+    const rightReference = datasetReferencePreview(validSources[1].dataset as DatasetCatalogItem);
+    const template = `-- Query datasets through their dataset SQL names:
+--   <dataset_sql_alias>
 SELECT TOP 100
   l.id,
   r.id
@@ -1452,8 +1449,8 @@ JOIN ${rightReference} AS r
   ON l.id = r.id
 ORDER BY l.id DESC;`;
     applyQueryText(template, { immediateState: true });
-    appendLog('info', 'Inserted federated query template.');
-  }, [federatedSources, buildFederatedDirectives, toast, applyQueryText, appendLog, datasetById]);
+    appendLog('info', 'Inserted dataset SQL template.');
+  }, [federatedSources, toast, applyQueryText, appendLog, datasetById]);
 
   const runProfilingQuery = useCallback((column: string, mode: 'top' | 'nulls' | 'distribution') => {
     const trimmedQuery = queryTextRef.current.trim().replace(/;$/, '');
@@ -1520,214 +1517,279 @@ ORDER BY [${column}] ASC;`;
       <aside className="surface-panel rounded-2xl p-4 shadow-soft">
         <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-[color:var(--text-primary)]">
           <Database className="h-4 w-4" />
-          Connections & Schema
+          Query Context
         </div>
-        <div className="space-y-3">
-          <Select
-            value={selectedConnectionId}
-            onChange={(event) => setSelectedConnectionId(event.target.value)}
-            disabled={federatedMode}
-          >
-            <option value="">Select connection</option>
-            {availableConnectors.map((connector) => (
-              <option key={connector.id} value={connector.id}>
-                {connector.name}
-              </option>
-            ))}
-          </Select>
-          {!federatedMode ? (
-            <label className="flex items-center gap-2 text-xs text-[color:var(--text-secondary)]">
-              <input
-                type="checkbox"
-                checked={runAgainstDatasetMode}
-                onChange={(event) => setRunAgainstDatasetMode(event.target.checked)}
-              />
-              Run against dataset mode
-            </label>
-          ) : null}
-          {lastEnsuredDatasetId ? (
-            <p className="text-[11px] text-[color:var(--text-muted)]">
-              Last ensured dataset: <span className="font-mono">{lastEnsuredDatasetId}</span>
-            </p>
-          ) : null}
-          <label className="flex items-center gap-2 text-xs text-[color:var(--text-secondary)]">
-            <input
-              type="checkbox"
-              checked={federatedMode}
-              onChange={(event) => {
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-2 rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-1">
+            <Button
+              type="button"
+              size="sm"
+              variant={federatedMode ? 'default' : 'ghost'}
+              onClick={() => {
                 setModeTouched(true);
-                setFederatedMode(event.target.checked);
+                setFederatedMode(true);
               }}
               disabled={!policyQuery.data?.allowFederation}
-            />
-            Federated mode
-          </label>
-          {!policyQuery.data?.allowFederation ? (
-            <p className="text-xs text-[color:var(--text-muted)]">
-              Federation disabled by workspace policy.
-            </p>
-          ) : null}
+            >
+              Datasets
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={!federatedMode ? 'default' : 'ghost'}
+              onClick={() => {
+                setModeTouched(true);
+                setFederatedMode(false);
+              }}
+            >
+              Direct SQL
+            </Button>
+          </div>
+
           {federatedMode ? (
-            <div className="space-y-3 rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-3">
-              <p className="text-xs text-[color:var(--text-secondary)]">
-                Configure structured datasets for federation-first SQL, assign aliases, then reference them as
-                {' '}
-                <span className="font-mono">alias.schema.table</span>
-                .
-              </p>
-              <div className="max-h-[42vh] space-y-2 overflow-auto pr-1">
-                {federatedSources.map((source, index) => (
-                  <div key={source.id} className="space-y-2 rounded-lg border border-[color:var(--panel-border)] p-2">
-                    <div className="grid gap-2 sm:grid-cols-[1fr_120px_auto]">
-                      <Select
-                        value={source.datasetId || ''}
-                        onChange={(event) =>
-                          updateFederatedSource(source.id, { datasetId: event.target.value })
-                        }
-                      >
-                        <option value="">Select dataset</option>
-                        {availableFederatedDatasets.map((dataset) => (
-                          <option key={`federated-${source.id}-${dataset.id}`} value={dataset.id}>
-                            {dataset.name}
-                          </option>
-                        ))}
-                      </Select>
-                      <Input
-                        value={source.alias}
-                        onChange={(event) => updateFederatedSource(source.id, { alias: event.target.value })}
-                        placeholder={`source_${index + 1}`}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => removeFederatedSource(source.id)}
-                        disabled={federatedSources.length <= 1}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+            <div className="space-y-3">
+              <div className="rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-3">
+                <p className="text-sm font-semibold text-[color:var(--text-primary)]">Datasets</p>
+                <p className="mt-1 text-xs text-[color:var(--text-secondary)]">
+                  Query governed datasets by their SQL name. Langbridge resolves them to the underlying sources through the federated layer.
+                </p>
+              </div>
+              <Input
+                value={datasetSearch}
+                onChange={(event) => setDatasetSearch(event.target.value)}
+                placeholder="Search datasets"
+              />
+              <div className="space-y-2 rounded-xl border border-[color:var(--panel-border)] p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-[color:var(--text-primary)]">Selected datasets</p>
+                  <div className="flex gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={addFederatedSource}>
+                      <Plus className="mr-1 h-4 w-4" />
+                      Add
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={insertFederatedTemplate}>
+                      <Wand2 className="mr-1 h-4 w-4" />
+                      Template
+                    </Button>
+                  </div>
+                </div>
+                {federatedSources.length === 0 ? (
+                  <p className="text-xs text-[color:var(--text-muted)]">Choose one or more datasets to create a query context.</p>
+                ) : null}
+                <div className="space-y-2">
+                  {federatedSources.map((source) => (
+                    <div key={source.id} className="space-y-2 rounded-lg border border-[color:var(--panel-border)] p-2">
+                      <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                        <Select
+                          value={source.datasetId || ''}
+                          onChange={(event) =>
+                            updateFederatedSource(source.id, { datasetId: event.target.value })
+                          }
+                        >
+                          <option value="">Select dataset</option>
+                          {availableFederatedDatasets.map((dataset) => (
+                            <option key={`selected-${source.id}-${dataset.id}`} value={dataset.id}>
+                              {dataset.name}
+                            </option>
+                          ))}
+                        </Select>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeFederatedSource(source.id)}
+                          disabled={federatedSources.length <= 1}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <p className="text-[11px] text-[color:var(--text-muted)]">
+                        {(source.datasetId && datasetById[source.datasetId]?.name) || 'No dataset selected'}
+                        {' '}
+                        <span className="font-mono">
+                          {source.datasetId && datasetById[source.datasetId]
+                            ? datasetReferencePreview(datasetById[source.datasetId])
+                            : 'dataset_name'}
+                        </span>
+                      </p>
                     </div>
-                    <p className="text-[11px] text-[color:var(--text-muted)]">
-                      {(source.datasetId && datasetById[source.datasetId]?.name) || 'No dataset selected'}
-                      {' '}
-                      <span className="font-mono">
-                        {source.datasetId && datasetById[source.datasetId]
-                          ? datasetReferencePreview(
-                              datasetById[source.datasetId],
-                              normalizeFederatedAlias(source.alias) || `source_${index + 1}`,
-                            )
-                          : `${normalizeFederatedAlias(source.alias) || `source_${index + 1}`}.public.accounts`}
-                      </span>
+                  ))}
+                </div>
+                {federatedSourceValidation.length > 0 ? (
+                  <div className="space-y-1 rounded-lg border border-amber-400/40 bg-amber-400/10 p-2 text-xs text-amber-200">
+                    {federatedSourceValidation.slice(0, 3).map((issue) => (
+                      <p key={issue}>{issue}</p>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-[color:var(--text-muted)]">
+                    SQL uses dataset names like <span className="font-mono">dataset_1</span>.
+                  </p>
+                )}
+              </div>
+              <div className="max-h-[46vh] space-y-3 overflow-auto rounded-xl border border-[color:var(--panel-border)] p-3">
+                {datasetGroups.length === 0 ? (
+                  <p className="text-xs text-[color:var(--text-muted)]">
+                    {datasetSearch.trim()
+                      ? 'No datasets matched your search.'
+                      : 'No SQL-ready datasets found for this workspace scope.'}
+                  </p>
+                ) : null}
+                {datasetGroups.map((group) => (
+                  <div key={group.key} className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+                      {group.label}
                     </p>
+                    {group.items.map((dataset) => {
+                      const selected = selectedDatasetIds.has(dataset.id);
+                      return (
+                        <button
+                          type="button"
+                          key={dataset.id}
+                          className={`w-full rounded-xl border p-3 text-left ${
+                            selected
+                              ? 'border-[color:var(--accent)] bg-[color:var(--panel-alt)]'
+                              : 'border-[color:var(--panel-border)] hover:bg-[color:var(--panel-alt)]'
+                          }`}
+                          onClick={() => {
+                            const existing = federatedSources.find((source) => source.datasetId === dataset.id);
+                            if (existing) {
+                              return;
+                            }
+                            setFederatedSources((current) => [
+                              ...current,
+                              {
+                                id: nextFederatedSourceId(),
+                                datasetId: dataset.id,
+                              },
+                            ]);
+                          }}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-semibold text-[color:var(--text-primary)]">{dataset.name}</p>
+                              <p className="mt-1 text-xs text-[color:var(--text-secondary)]">
+                                {dataset.connectorKind || dataset.sourceKind} · {dataset.storageKind}
+                              </p>
+                            </div>
+                            <span className="rounded-full bg-[color:var(--chip-bg)] px-2 py-1 text-[10px] text-[color:var(--text-secondary)]">
+                              {selected ? 'Selected' : 'Add'}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-[11px] text-[color:var(--text-muted)]">
+                            SQL name: <span className="font-mono">{dataset.sqlAlias}</span>
+                          </p>
+                        </button>
+                      );
+                    })}
                   </div>
                 ))}
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={addFederatedSource}>
-                  <Plus className="mr-1 h-4 w-4" />
-                  Add dataset
-                </Button>
-                <Button type="button" variant="outline" size="sm" onClick={insertFederatedTemplate}>
-                  <Wand2 className="mr-1 h-4 w-4" />
-                  Insert template
-                </Button>
-              </div>
-              {federatedSourceValidation.length > 0 ? (
-                <div className="space-y-1 rounded-lg border border-amber-400/40 bg-amber-400/10 p-2 text-xs text-amber-200">
-                  {federatedSourceValidation.slice(0, 3).map((issue) => (
-                    <p key={issue}>{issue}</p>
-                  ))}
-                </div>
-              ) : (
+              {!policyQuery.data?.allowFederation ? (
                 <p className="text-xs text-[color:var(--text-muted)]">
-                  Tip: keep aliases short like
-                  {' '}
-                  <span className="font-mono">crm</span>
-                  ,
-                  {' '}
-                  <span className="font-mono">billing</span>
-                  ,
-                  {' '}
-                  <span className="font-mono">erp</span>
-                  .
+                  Dataset mode is disabled by workspace policy.
                 </p>
-              )}
+              ) : null}
             </div>
           ) : (
-            <div className="max-h-[55vh] space-y-2 overflow-auto pr-1 text-sm">
-              {schemaBrowserError ? <ErrorPanel {...schemaBrowserError} /> : null}
-              {Object.values(schemaMap).length === 0 ? (
-                <p className="text-xs text-[color:var(--text-muted)]">No schemas loaded.</p>
+            <div className="space-y-3">
+              <div className="rounded-xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-3">
+                <p className="text-sm font-semibold text-[color:var(--text-primary)]">Direct SQL</p>
+                <p className="mt-1 text-xs text-[color:var(--text-secondary)]">
+                  Query SQL databases directly. API connectors, file uploads, and non-database sources are excluded here.
+                </p>
+              </div>
+              <Select
+                value={selectedConnectionId}
+                onChange={(event) => setSelectedConnectionId(event.target.value)}
+              >
+                <option value="">Select SQL database</option>
+                {availableConnectors.map((connector) => (
+                  <option key={connector.id} value={connector.id}>
+                    {connector.name}
+                  </option>
+                ))}
+              </Select>
+              {lastEnsuredDatasetId ? (
+                <p className="text-[11px] text-[color:var(--text-muted)]">
+                  Last ensured dataset: <span className="font-mono">{lastEnsuredDatasetId}</span>
+                </p>
               ) : null}
-              {Object.values(schemaMap).map((schemaNode) => (
-                <div key={schemaNode.schema} className="rounded-xl border border-[color:var(--panel-border)] p-2">
-                  <button
-                    type="button"
-                    className="w-full text-left font-medium text-[color:var(--text-primary)]"
-                    onClick={() => {
-                      setSelectedSchema(schemaNode.schema);
-                      void loadSchemaTables(schemaNode.schema);
-                    }}
-                  >
-                    {schemaNode.schema}
-                  </button>
-                  {selectedSchema === schemaNode.schema ? (
-                    <div className="mt-2 space-y-1 text-xs text-[color:var(--text-secondary)]">
-                      {schemaNode.loading ? <p>Loading tables...</p> : null}
-                      {schemaNode.tables.map((table) => {
-                        const key = `${schemaNode.schema}.${table}`;
-                        return (
-                          <div key={key} className="rounded-lg bg-[color:var(--panel-alt)] p-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <button
-                                type="button"
-                                className="font-medium"
-                                onClick={() => {
-                                  setSelectedTable(key);
-                                  void loadTableColumns(schemaNode.schema, table);
-                                }}
-                              >
-                                {table}
-                              </button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => {
-                                  void ensureDatasetForPhysicalTable(schemaNode.schema, table).catch((error) => {
-                                    setSchemaBrowserError(toDisplayError(error, 'dataset.form'));
-                                  });
-                                }}
-                              >
-                                Ensure dataset
-                              </Button>
-                            </div>
-                            {selectedTable === key ? (
-                              <div className="mt-1 space-y-1">
-                                {(columnsMap[key] || []).map((column) => (
-                                  <button
-                                    type="button"
-                                    key={`${key}.${column.name}`}
-                                    className="block w-full rounded px-1 py-0.5 text-left hover:bg-[color:var(--chip-bg)]"
-                                    onClick={() =>
-                                      applyQueryText(
-                                        `${queryTextRef.current}\n${schemaNode.schema}.${table}.${column.name}`,
-                                        { immediateState: true },
-                                      )
-                                    }
-                                  >
-                                    {column.name} <span className="text-[color:var(--text-muted)]">{column.type}</span>
-                                  </button>
-                                ))}
+              <div className="max-h-[55vh] space-y-2 overflow-auto pr-1 text-sm">
+                {schemaBrowserError ? <ErrorPanel {...schemaBrowserError} /> : null}
+                {Object.values(schemaMap).length === 0 ? (
+                  <p className="text-xs text-[color:var(--text-muted)]">No schemas loaded.</p>
+                ) : null}
+                {Object.values(schemaMap).map((schemaNode) => (
+                  <div key={schemaNode.schema} className="rounded-xl border border-[color:var(--panel-border)] p-2">
+                    <button
+                      type="button"
+                      className="w-full text-left font-medium text-[color:var(--text-primary)]"
+                      onClick={() => {
+                        setSelectedSchema(schemaNode.schema);
+                        void loadSchemaTables(schemaNode.schema);
+                      }}
+                    >
+                      {schemaNode.schema}
+                    </button>
+                    {selectedSchema === schemaNode.schema ? (
+                      <div className="mt-2 space-y-1 text-xs text-[color:var(--text-secondary)]">
+                        {schemaNode.loading ? <p>Loading tables...</p> : null}
+                        {schemaNode.tables.map((table) => {
+                          const key = `${schemaNode.schema}.${table}`;
+                          return (
+                            <div key={key} className="rounded-lg bg-[color:var(--panel-alt)] p-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <button
+                                  type="button"
+                                  className="font-medium"
+                                  onClick={() => {
+                                    setSelectedTable(key);
+                                    void loadTableColumns(schemaNode.schema, table);
+                                  }}
+                                >
+                                  {table}
+                                </button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => {
+                                    void ensureDatasetForPhysicalTable(schemaNode.schema, table).catch((error) => {
+                                      setSchemaBrowserError(toDisplayError(error, 'dataset.form'));
+                                    });
+                                  }}
+                                >
+                                  Publish dataset
+                                </Button>
                               </div>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
+                              {selectedTable === key ? (
+                                <div className="mt-1 space-y-1">
+                                  {(columnsMap[key] || []).map((column) => (
+                                    <button
+                                      type="button"
+                                      key={`${key}.${column.name}`}
+                                      className="block w-full rounded px-1 py-0.5 text-left hover:bg-[color:var(--chip-bg)]"
+                                      onClick={() =>
+                                        applyQueryText(
+                                          `${queryTextRef.current}\n${schemaNode.schema}.${table}.${column.name}`,
+                                          { immediateState: true },
+                                        )
+                                      }
+                                    >
+                                      {column.name} <span className="text-[color:var(--text-muted)]">{column.type}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -1807,7 +1869,12 @@ ORDER BY [${column}] ASC;`;
             }}
           />
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-[color:var(--text-secondary)]">
-            <span className="rounded-full bg-[color:var(--chip-bg)] px-3 py-1">Mode: {federatedMode ? 'Federated' : 'Single source'}</span>
+            <span className="rounded-full bg-[color:var(--chip-bg)] px-3 py-1">Mode: {federatedMode ? 'Datasets' : 'Direct SQL'}</span>
+            {federatedMode ? (
+              <span className="rounded-full bg-[color:var(--chip-bg)] px-3 py-1">Datasets: {federatedSources.filter((source) => source.datasetId).length}</span>
+            ) : selectedConnector ? (
+              <span className="rounded-full bg-[color:var(--chip-bg)] px-3 py-1">Connector: {selectedConnector.name}</span>
+            ) : null}
             <span className="rounded-full bg-[color:var(--chip-bg)] px-3 py-1">Dialect: {queryDialect}</span>
             {jobState ? <span className="rounded-full bg-[color:var(--chip-bg)] px-3 py-1">Status: {jobState.status}</span> : null}
             {jobState?.durationMs != null ? <span className="rounded-full bg-[color:var(--chip-bg)] px-3 py-1">Duration: {jobState.durationMs}ms</span> : null}
@@ -2035,8 +2102,12 @@ ORDER BY [${column}] ASC;`;
                   >
                     <div className="flex flex-wrap items-center gap-2 text-xs text-[color:var(--text-secondary)]">
                       <span className="rounded-full bg-[color:var(--chip-bg)] px-2 py-1">Status: {item.status}</span>
-                      <span className="rounded-full bg-[color:var(--chip-bg)] px-2 py-1">Mode: {item.executionMode}</span>
-                      {item.connectionId ? <span className="rounded-full bg-[color:var(--chip-bg)] px-2 py-1">Conn: {item.connectionId}</span> : null}
+                      <span className="rounded-full bg-[color:var(--chip-bg)] px-2 py-1">Mode: {item.workbenchMode === 'dataset' ? 'Datasets' : 'Direct SQL'}</span>
+                      {item.workbenchMode === 'dataset' ? (
+                        <span className="rounded-full bg-[color:var(--chip-bg)] px-2 py-1">Datasets: {item.selectedDatasets.length}</span>
+                      ) : item.connectionId ? (
+                        <span className="rounded-full bg-[color:var(--chip-bg)] px-2 py-1">Connector: {item.connectionId}</span>
+                      ) : null}
                     </div>
                     <div className="mt-2 grid gap-1 text-xs text-[color:var(--text-secondary)] md:grid-cols-2">
                       <p>Job: {item.id}</p>
@@ -2099,7 +2170,11 @@ ORDER BY [${column}] ASC;`;
                         }`}
                       >
                         <p className="font-semibold text-[color:var(--text-primary)]">{saved.name}</p>
-                        <p className="text-xs text-[color:var(--text-secondary)]">{saved.tags.join(', ') || 'No tags'}</p>
+                        <p className="text-xs text-[color:var(--text-secondary)]">
+                          {saved.workbenchMode === 'dataset' ? 'Datasets' : 'Direct SQL'}
+                          {' · '}
+                          {saved.tags.join(', ') || 'No tags'}
+                        </p>
                         <p className="mt-1 text-[10px] text-[color:var(--text-muted)]">
                           Updated: {formatDate(saved.updatedAt)}
                         </p>

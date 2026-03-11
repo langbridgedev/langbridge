@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Any
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .base import _Base
 
@@ -142,10 +143,24 @@ class DatasetRelationIdentity(_Base):
     storage_kind: DatasetStorageKind
 
 
+def _validate_sql_alias(value: str | None) -> str | None:
+    if value is None:
+        return None
+    alias = value.strip().lower()
+    if not alias:
+        return None
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", alias):
+        raise ValueError(
+            "sql_alias must start with a letter or underscore and contain only lowercase letters, numbers, or underscores."
+        )
+    return alias
+
+
 class DatasetCreateRequest(_Base):
     workspace_id: UUID
     project_id: UUID | None = None
     name: str = Field(..., min_length=1, max_length=255)
+    sql_alias: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=1024)
     change_summary: str | None = Field(default=None, max_length=1024)
     tags: list[str] = Field(default_factory=list)
@@ -168,6 +183,11 @@ class DatasetCreateRequest(_Base):
     columns: list[DatasetColumnRequest] = Field(default_factory=list)
     policy: DatasetPolicyRequest | None = None
     status: DatasetStatus = DatasetStatus.PUBLISHED
+
+    @field_validator("sql_alias")
+    @classmethod
+    def _normalize_sql_alias(cls, value: str | None) -> str | None:
+        return _validate_sql_alias(value)
 
     @model_validator(mode="after")
     def _validate_shape(self) -> "DatasetCreateRequest":
@@ -261,6 +281,7 @@ class DatasetUpdateRequest(_Base):
     workspace_id: UUID
     project_id: UUID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=255)
+    sql_alias: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=1024)
     change_summary: str | None = Field(default=None, max_length=1024)
     tags: list[str] | None = None
@@ -283,6 +304,11 @@ class DatasetUpdateRequest(_Base):
     policy: DatasetPolicyRequest | None = None
     status: DatasetStatus | None = None
 
+    @field_validator("sql_alias")
+    @classmethod
+    def _normalize_sql_alias(cls, value: str | None) -> str | None:
+        return _validate_sql_alias(value)
+
 
 class DatasetResponse(_Base):
     id: UUID
@@ -291,6 +317,7 @@ class DatasetResponse(_Base):
     connection_id: UUID | None = None
     owner_id: UUID | None = None
     name: str
+    sql_alias: str
     description: str | None = None
     tags: list[str] = Field(default_factory=list)
     dataset_type: DatasetType
@@ -383,6 +410,7 @@ class DatasetCsvIngestResponse(_Base):
 class DatasetCatalogItem(_Base):
     id: UUID
     name: str
+    sql_alias: str
     dataset_type: DatasetType
     source_kind: DatasetSourceKind
     connector_kind: str | None = None

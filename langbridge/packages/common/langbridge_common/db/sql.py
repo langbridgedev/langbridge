@@ -45,6 +45,8 @@ class SqlJobRecord(Base):
         nullable=True,
         index=True,
     )
+    workbench_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="dataset", index=True)
+    selected_datasets_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     execution_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="single")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
 
@@ -170,6 +172,8 @@ class SqlSavedQueryRecord(Base):
         nullable=True,
         index=True,
     )
+    workbench_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="dataset", index=True)
+    selected_datasets_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     query_text: Mapped[str] = mapped_column(Text, nullable=False)

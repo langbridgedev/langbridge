@@ -1,4 +1,5 @@
 export type SqlExecutionMode = 'single' | 'federated';
+export type SqlWorkbenchMode = 'dataset' | 'direct_sql';
 export type SqlDialect =
   | 'tsql'
   | 'postgres'
@@ -16,9 +17,21 @@ export type SqlJobStatus =
   | 'cancelled'
   | 'awaiting_approval';
 
+export interface SqlSelectedDataset {
+  alias?: string | null;
+  sqlAlias?: string | null;
+  datasetId: string;
+  datasetName?: string | null;
+  canonicalReference?: string | null;
+  connectorId?: string | null;
+  sourceKind?: string | null;
+  storageKind?: string | null;
+}
+
 export interface SqlExecuteRequestPayload {
   workspaceId: string;
   projectId?: string | null;
+  workbenchMode?: SqlWorkbenchMode;
   connectionId?: string | null;
   federated?: boolean;
   query: string;
@@ -27,7 +40,8 @@ export interface SqlExecuteRequestPayload {
   requestedLimit?: number;
   requestedTimeoutSeconds?: number;
   explain?: boolean;
-  federatedDatasets?: Array<{ alias: string; datasetId: string }>;
+  selectedDatasets?: SqlSelectedDataset[];
+  federatedDatasets?: Array<{ alias?: string | null; sqlAlias?: string | null; datasetId: string }>;
 }
 
 export interface SqlExecuteResponsePayload {
@@ -66,9 +80,12 @@ export interface SqlJobRecord {
   workspaceId: string;
   projectId?: string | null;
   userId: string;
+  workbenchMode: SqlWorkbenchMode;
   connectionId?: string | null;
+  selectedDatasets: SqlSelectedDataset[];
   executionMode: SqlExecutionMode;
   status: SqlJobStatus;
+  query: string;
   queryHash: string;
   isExplain: boolean;
   isFederated: boolean;
@@ -111,7 +128,9 @@ export interface SqlSavedQueryRecord {
   projectId?: string | null;
   createdBy: string;
   updatedBy: string;
+  workbenchMode: SqlWorkbenchMode;
   connectionId?: string | null;
+  selectedDatasets: SqlSelectedDataset[];
   name: string;
   description?: string | null;
   query: string;
@@ -128,7 +147,9 @@ export interface SqlSavedQueryRecord {
 export interface SqlSavedQueryCreatePayload {
   workspaceId: string;
   projectId?: string | null;
+  workbenchMode?: SqlWorkbenchMode;
   connectionId?: string | null;
+  selectedDatasets?: SqlSelectedDataset[];
   name: string;
   description?: string | null;
   query: string;
@@ -141,7 +162,9 @@ export interface SqlSavedQueryCreatePayload {
 export interface SqlSavedQueryUpdatePayload {
   workspaceId: string;
   projectId?: string | null;
+  workbenchMode?: SqlWorkbenchMode;
   connectionId?: string | null;
+  selectedDatasets?: SqlSelectedDataset[];
   name?: string;
   description?: string | null;
   query?: string;

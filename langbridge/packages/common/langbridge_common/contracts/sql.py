@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Any
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .base import _Base
 
@@ -13,6 +14,11 @@ from .base import _Base
 class SqlExecutionMode(str, Enum):
     single = "single"
     federated = "federated"
+
+
+class SqlWorkbenchMode(str, Enum):
+    dataset = "dataset"
+    direct_sql = "direct_sql"
 
 
 class SqlJobStatus(str, Enum):
@@ -47,34 +53,98 @@ class SqlColumnMetadata(_Base):
     type: str | None = None
 
 
-class SqlFederatedDatasetReference(_Base):
-    alias: str = Field(..., min_length=1, max_length=128)
+class SqlSelectedDataset(_Base):
+    alias: str | None = Field(default=None, min_length=1, max_length=128)
+    sql_alias: str | None = Field(default=None, min_length=1, max_length=128)
     dataset_id: UUID
+    dataset_name: str | None = Field(default=None, max_length=255)
+    canonical_reference: str | None = Field(default=None, max_length=512)
+    connector_id: UUID | None = None
+    source_kind: str | None = Field(default=None, max_length=32)
+    storage_kind: str | None = Field(default=None, max_length=32)
+
+    @field_validator("alias")
+    @classmethod
+    def _validate_alias(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        alias = value.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", alias):
+            raise ValueError(
+                "alias must start with a letter or underscore and contain only letters, numbers, or underscores."
+            )
+        return alias
+
+    @field_validator("sql_alias")
+    @classmethod
+    def _validate_sql_alias(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        alias = value.strip().lower()
+        if not re.fullmatch(r"[a-z_][a-z0-9_]*", alias):
+            raise ValueError(
+                "sql_alias must start with a letter or underscore and contain only lowercase letters, numbers, or underscores."
+            )
+        return alias
+
+    @model_validator(mode="after")
+    def _hydrate_alias_fields(self) -> "SqlSelectedDataset":
+        if not self.sql_alias and self.alias:
+            self.sql_alias = self.alias.strip().lower()
+        if not self.alias and self.sql_alias:
+            self.alias = self.sql_alias
+        return self
+
+
+class SqlFederatedDatasetReference(SqlSelectedDataset):
+    pass
 
 
 class SqlExecuteRequest(_Base):
     workspace_id: UUID
     project_id: UUID | None = None
+    workbench_mode: SqlWorkbenchMode = SqlWorkbenchMode.dataset
     connection_id: UUID | None = None
-    federated: bool = False
+    federated: bool | None = None
     query: str = Field(..., min_length=1)
     query_dialect: SqlDialect = SqlDialect.tsql
     params: dict[str, Any] = Field(default_factory=dict)
     requested_limit: int | None = Field(default=None, ge=1)
     requested_timeout_seconds: int | None = Field(default=None, ge=1)
     explain: bool = False
-    federated_datasets: list[SqlFederatedDatasetReference] = Field(default_factory=list)
+    selected_datasets: list[SqlSelectedDataset] = Field(default_factory=list)
+    federated_datasets: list[SqlSelectedDataset] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_target(self) -> "SqlExecuteRequest":
-        if not self.federated and self.connection_id is None:
-            raise ValueError("connection_id is required for single datasource execution.")
-        if self.federated and self.connection_id is not None:
-            raise ValueError("connection_id must be omitted for federated execution mode.")
-        if self.federated and not self.federated_datasets:
-            raise ValueError("federated execution requires at least one federated dataset.")
+        if not self.selected_datasets and self.federated_datasets:
+            self.selected_datasets = list(self.federated_datasets)
+
+        if "workbench_mode" not in self.model_fields_set:
+            if self.federated is not None:
+                self.workbench_mode = (
+                    SqlWorkbenchMode.dataset if self.federated else SqlWorkbenchMode.direct_sql
+                )
+            elif self.connection_id is not None:
+                self.workbench_mode = SqlWorkbenchMode.direct_sql
+            elif self.selected_datasets:
+                self.workbench_mode = SqlWorkbenchMode.dataset
+
+        if self.workbench_mode == SqlWorkbenchMode.direct_sql:
+            if self.connection_id is None:
+                raise ValueError("connection_id is required for direct SQL execution.")
+            if self.selected_datasets:
+                raise ValueError("selected_datasets must be omitted for direct SQL execution.")
+        else:
+            if self.connection_id is not None:
+                raise ValueError("connection_id must be omitted for dataset execution mode.")
+            if not self.selected_datasets:
+                raise ValueError("dataset execution requires at least one selected dataset.")
+
         if not self.query.strip():
             raise ValueError("query must not be empty.")
+
+        self.federated = self.workbench_mode == SqlWorkbenchMode.dataset
         return self
 
 
@@ -109,9 +179,12 @@ class SqlJobResponse(_Base):
     workspace_id: UUID
     project_id: UUID | None = None
     user_id: UUID
+    workbench_mode: SqlWorkbenchMode = SqlWorkbenchMode.dataset
     connection_id: UUID | None = None
+    selected_datasets: list[SqlSelectedDataset] = Field(default_factory=list)
     execution_mode: SqlExecutionMode
     status: SqlJobStatus
+    query: str
     query_hash: str
     is_explain: bool = False
     is_federated: bool = False
@@ -151,7 +224,9 @@ class SqlHistoryResponse(_Base):
 class SqlSavedQueryCreateRequest(_Base):
     workspace_id: UUID
     project_id: UUID | None = None
+    workbench_mode: SqlWorkbenchMode = SqlWorkbenchMode.dataset
     connection_id: UUID | None = None
+    selected_datasets: list[SqlSelectedDataset] = Field(default_factory=list)
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=1024)
     query: str = Field(..., min_length=1)
@@ -160,11 +235,27 @@ class SqlSavedQueryCreateRequest(_Base):
     is_shared: bool = False
     last_sql_job_id: UUID | None = None
 
+    @model_validator(mode="after")
+    def _validate_mode(self) -> "SqlSavedQueryCreateRequest":
+        if self.workbench_mode == SqlWorkbenchMode.direct_sql:
+            if self.connection_id is None:
+                raise ValueError("connection_id is required for direct SQL saved queries.")
+            if self.selected_datasets:
+                raise ValueError("selected_datasets must be omitted for direct SQL saved queries.")
+        else:
+            if self.connection_id is not None:
+                raise ValueError("connection_id must be omitted for dataset saved queries.")
+            if not self.selected_datasets:
+                raise ValueError("dataset saved queries require at least one selected dataset.")
+        return self
+
 
 class SqlSavedQueryUpdateRequest(_Base):
     workspace_id: UUID
     project_id: UUID | None = None
+    workbench_mode: SqlWorkbenchMode | None = None
     connection_id: UUID | None = None
+    selected_datasets: list[SqlSelectedDataset] | None = None
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=1024)
     query: str | None = Field(default=None, min_length=1)
@@ -180,7 +271,9 @@ class SqlSavedQueryResponse(_Base):
     project_id: UUID | None = None
     created_by: UUID
     updated_by: UUID
+    workbench_mode: SqlWorkbenchMode = SqlWorkbenchMode.dataset
     connection_id: UUID | None = None
+    selected_datasets: list[SqlSelectedDataset] = Field(default_factory=list)
     name: str
     description: str | None = None
     query: str

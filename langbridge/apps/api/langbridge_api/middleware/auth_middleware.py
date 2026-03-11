@@ -1,26 +1,28 @@
-
 import logging
 import secrets
 import uuid
-from typing import Optional, Any
+from typing import Any
 
 from fastapi import status
+from dependency_injector.wiring import Provide, inject
 from jose import JWTError
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response, JSONResponse
-from dependency_injector.wiring import Provide, inject
 
 from langbridge.apps.api.langbridge_api.ioc import Container
-from langbridge.apps.api.langbridge_api.services.auth.token_service import TokenService
-from langbridge.apps.api.langbridge_api.services.auth.token_service import TokenService
-from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.apps.api.langbridge_api.auth.jwt import verify_jwt
-from langbridge.packages.common.langbridge_common.contracts.auth import UserResponse
 from langbridge.apps.api.langbridge_api.services.auth.auth_service import AuthService
 from langbridge.apps.api.langbridge_api.services.service_utils import (
     reset_internal_service_call,
     set_internal_service_call,
+)
+from langbridge.packages.common.langbridge_common.config import settings
+from langbridge.packages.common.langbridge_common.contracts.auth import UserResponse
+from langbridge.packages.common.langbridge_common.db.session_context import (
+    get_session,
+    reset_session,
+    set_session,
 )
 
 PATHS_TO_EXCLUDE = [
@@ -56,6 +58,35 @@ class AuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         super().__init__(app)
         self.logger = logging.getLogger(__name__)
+
+    async def _get_user_for_request(
+        self,
+        *,
+        request: Request,
+        username: str,
+        auth_service: AuthService | Any,
+    ) -> UserResponse:
+        container: Container = request.app.state.container  # type: ignore[attr-defined]
+
+        resolved_auth_service = auth_service
+        temporary_session = None
+        session_token = None
+
+        if not hasattr(resolved_auth_service, "get_user_by_username"):
+            try:
+                get_session()
+            except RuntimeError:
+                session_factory = container.async_session_factory()
+                temporary_session = session_factory()
+                session_token = set_session(temporary_session)
+            resolved_auth_service = container.auth_service()
+
+        try:
+            return await resolved_auth_service.get_user_by_username(username)
+        finally:
+            if temporary_session is not None and session_token is not None:
+                reset_session(session_token)
+                await temporary_session.close()
 
     @inject
     async def dispatch(
@@ -129,7 +160,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Set user context
         try:
             request.state.username = username
-            user: UserResponse = await auth_service.get_user_by_username(username)
+            user = await self._get_user_for_request(
+                request=request,
+                username=username,
+                auth_service=auth_service,
+            )
             request.state.user = user
             if hasattr(request.state, "request_context"):
                 request.state.request_context.user = user

@@ -136,7 +136,10 @@ class DatasetExecutionResolver:
             dataset=dataset,
             logical_table_name=logical_table_name,
         )
-        logical_schema_name = logical_schema if logical_schema is not None else dataset.schema_name
+        logical_schema_name = self._logical_schema_name(
+            dataset=dataset,
+            logical_schema=logical_schema,
+        )
         resolved_table_key = table_key or self._table_key(
             schema_name=logical_schema_name,
             table_name=logical_table,
@@ -415,6 +418,22 @@ class DatasetExecutionResolver:
             return candidate
         base_name = re.sub(r"[^a-zA-Z0-9_]+", "_", (dataset.name or "dataset").strip()).strip("_")
         return base_name.lower() or f"dataset_{dataset.id.hex[:8]}"
+
+    @staticmethod
+    def _logical_schema_name(
+        *,
+        dataset: DatasetRecord,
+        logical_schema: str | None,
+    ) -> str | None:
+        if logical_schema is not None:
+            return logical_schema
+        dataset_schema = (dataset.schema_name or "").strip() or None
+        if (
+            str(dataset.dataset_type or "").upper() == "FILE"
+            and dataset_schema == "api_connector"
+        ):
+            return None
+        return dataset_schema
 
     @staticmethod
     def _table_key(*, schema_name: str | None, table_name: str) -> str:

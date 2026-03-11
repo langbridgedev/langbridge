@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -578,6 +579,7 @@ class DatasetJobRequestHandler(BaseMessageHandler):
             created_by=request.user_id,
             updated_by=request.user_id,
             name=final_name,
+            sql_alias=self._dataset_sql_alias(final_name),
             description=None,
             tags_json=self._normalize_tags(list(request.tags or [])),
             dataset_type="TABLE",
@@ -709,6 +711,16 @@ class DatasetJobRequestHandler(BaseMessageHandler):
         if "auto-generated" not in lowered:
             normalized.append("auto-generated")
         return normalized
+
+    @staticmethod
+    def _dataset_sql_alias(name: str) -> str:
+        alias = re.sub(r"[^a-z0-9_]+", "_", str(name or "").strip().lower())
+        alias = re.sub(r"_+", "_", alias).strip("_")
+        if not alias:
+            return "dataset"
+        if alias[0].isdigit():
+            return f"dataset_{alias}"
+        return alias
 
     async def _load_dataset_bundle(
         self,

@@ -60,6 +60,7 @@ def _build_service(
     *,
     policy: SqlWorkspacePolicyRecord,
     connector: object | None = None,
+    datasets: list[object] | None = None,
     job_record: SqlJobRecord | None = None,
     dispatch_side_effect: Exception | None = None,
 ) -> tuple[SqlService, SimpleNamespace, SimpleNamespace, SimpleNamespace]:
@@ -83,6 +84,17 @@ def _build_service(
         add=MagicMock(),
     )
     connector_repository = SimpleNamespace(get_by_id=AsyncMock(return_value=connector))
+    datasets_by_id = {getattr(dataset, "id"): dataset for dataset in (datasets or [])}
+    dataset_repository = SimpleNamespace(
+        get_by_ids_for_workspace=AsyncMock(
+            side_effect=lambda *, workspace_id, dataset_ids: [
+                dataset
+                for dataset_id in dataset_ids
+                if (dataset := datasets_by_id.get(dataset_id)) is not None
+                and getattr(dataset, "workspace_id", None) == workspace_id
+            ]
+        )
+    )
     organization_repository = SimpleNamespace(
         get_by_id=AsyncMock(return_value=object()),
         get_member_role=AsyncMock(return_value="owner"),
@@ -100,6 +112,7 @@ def _build_service(
         sql_saved_query_repository=sql_saved_query_repository,
         sql_workspace_policy_repository=sql_workspace_policy_repository,
         connector_repository=connector_repository,
+        dataset_repository=dataset_repository,
         organization_repository=organization_repository,
         user_repository=user_repository,
         sql_job_request_service=sql_job_request_service,
@@ -126,6 +139,7 @@ async def test_execute_sql_applies_policy_limits_and_dispatches_job() -> None:
         description=None,
         connector_type="mssql",
         config_json={},
+        is_managed=False,
         organizations=[SimpleNamespace(id=workspace_id)],
         access_policy_json=None,
     )
@@ -169,10 +183,26 @@ async def test_execute_sql_dispatches_federated_datasets() -> None:
     policy = _policy(workspace_id)
     policy.allow_federation = True
     dataset_id = uuid.uuid4()
+    dataset = SimpleNamespace(
+        id=dataset_id,
+        workspace_id=workspace_id,
+        project_id=None,
+        name="shop_orders",
+        sql_alias="dataset_1",
+        connection_id=uuid.uuid4(),
+        source_kind="database",
+        storage_kind="table",
+        execution_capabilities_json={
+            "supports_structured_scan": True,
+            "supports_sql_federation": True,
+        },
+        relation_identity_json={"canonical_reference": "public.orders"},
+    )
 
     service, _sql_job_repository, sql_job_request_service, _ = _build_service(
         policy=policy,
         connector=None,
+        datasets=[dataset],
     )
 
     await service.execute_sql(
@@ -186,9 +216,19 @@ async def test_execute_sql_dispatches_federated_datasets() -> None:
     )
 
     dispatched_request = sql_job_request_service.dispatch_sql_job.call_args.args[0]
+    assert dispatched_request.workbench_mode.value == "dataset"
     assert dispatched_request.execution_mode == "federated"
-    assert dispatched_request.federated_datasets == [
-        {"alias": "shop", "dataset_id": str(dataset_id)}
+    assert [dataset.model_dump(mode="json") for dataset in dispatched_request.selected_datasets] == [
+        {
+            "alias": "dataset_1",
+            "sql_alias": "dataset_1",
+            "dataset_id": str(dataset_id),
+            "dataset_name": "shop_orders",
+            "canonical_reference": "public.orders",
+            "connector_id": str(dataset.connection_id),
+            "source_kind": "database",
+            "storage_kind": "table",
+        }
     ]
     assert "federated_aliases" not in dispatched_request.model_dump(mode="json")
 
@@ -316,6 +356,7 @@ async def test_execute_sql_marks_job_failed_when_dispatch_fails() -> None:
         description=None,
         connector_type="mssql",
         config_json={},
+        is_managed=False,
         organizations=[SimpleNamespace(id=workspace_id)],
         access_policy_json=None,
     )

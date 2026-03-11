@@ -12,7 +12,11 @@ import {
   BarChart3,
   Bot,
   Building2,
+  ChevronLeft,
+  ChevronRight,
   MessageSquareText,
+  BookOpen,
+  LifeBuoy,
   Settings,
   type LucideIcon,
 } from 'lucide-react';
@@ -132,6 +136,7 @@ export function AppShell({ children }: { children: ReactNode }): JSX.Element {
   const { selectedOrganization, selectedProject, selectedOrganizationId } = useWorkspaceScope();
 
   const [openParent, setOpenParent] = useState<string | null>(null);
+  const [isNavCollapsed, setIsNavCollapsed] = useState(false);
 
   const navItems = useMemo(() => {
     const agentsBase = selectedOrganizationId ? `/agents/${selectedOrganizationId}` : '/agents';
@@ -216,15 +221,36 @@ export function AppShell({ children }: { children: ReactNode }): JSX.Element {
   return (
     <div className="min-h-screen bg-[color:var(--shell-bg)] text-[color:var(--text-primary)] transition-colors">
       <div className="flex min-h-screen flex-col lg:flex-row">
-        <aside className="sticky top-0 hidden h-screen w-64 flex-shrink-0 flex-col border-r border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] px-5 py-6 text-sm text-[color:var(--text-secondary)] shadow-soft lg:flex">
-          <Link
-            href="/dashboard"
-            className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border-strong)] bg-[color:var(--panel-alt)] px-4 py-2 text-sm font-semibold text-[color:var(--text-primary)] transition hover:border-[color:var(--border-strong-hover)] hover:text-[color:var(--text-primary)]"
-          >
-            LangBridge
-          </Link>
+        <aside
+          className={cn(
+            'sticky top-0 hidden h-screen flex-shrink-0 flex-col border-r border-[color:var(--panel-border)] bg-[color:var(--panel-bg)] px-3 py-6 text-sm text-[color:var(--text-secondary)] shadow-soft transition-[width,padding] duration-200 lg:flex',
+            isNavCollapsed ? 'w-20' : 'w-64 px-5',
+          )}
+        >
+          <div className={cn('flex items-center gap-2', isNavCollapsed ? 'justify-center' : 'justify-between')}>
+            <Link
+              href="/dashboard"
+              title="LangBridge"
+              className={cn(
+                'inline-flex items-center rounded-full border border-[color:var(--border-strong)] bg-[color:var(--panel-alt)] text-sm font-semibold text-[color:var(--text-primary)] transition hover:border-[color:var(--border-strong-hover)] hover:text-[color:var(--text-primary)]',
+                isNavCollapsed ? 'h-10 w-10 justify-center px-0' : 'gap-2 px-4 py-2',
+              )}
+            >
+              <span className={cn(isNavCollapsed ? 'text-base' : '')}>L</span>
+              <span className={cn(isNavCollapsed && 'sr-only')}>LangBridge</span>
+            </Link>
+            <button
+              type="button"
+              onClick={() => setIsNavCollapsed((current) => !current)}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[color:var(--panel-border)] text-[color:var(--text-secondary)] transition hover:bg-[color:var(--panel-alt)] hover:text-[color:var(--text-primary)]"
+              aria-label={isNavCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+              title={isNavCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            >
+              {isNavCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+            </button>
+          </div>
           <div className="mt-8 flex min-h-0 flex-1 flex-col">
-            <nav className="space-y-1 overflow-y-auto pr-1">
+            <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
             {navItems.map((item) => {
               const hasChildren = Boolean(item.children && item.children.length > 0);
               const isParentActive =
@@ -234,20 +260,23 @@ export function AppShell({ children }: { children: ReactNode }): JSX.Element {
                 );
               const isOpen = openParent === item.href || (hasChildren && isParentActive);
 
-              if (!hasChildren) {
+              if (!hasChildren || isNavCollapsed) {
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
+                    title={item.label}
+                    aria-label={item.label}
                     className={cn(
-                      'flex items-center rounded-xl px-3 py-2 transition hover:bg-[color:var(--panel-alt)] hover:text-[color:var(--text-primary)]',
+                      'flex rounded-xl px-3 py-2 transition hover:bg-[color:var(--panel-alt)] hover:text-[color:var(--text-primary)]',
+                      isNavCollapsed ? 'justify-center' : 'items-center',
                       isParentActive
                         ? 'bg-[color:var(--panel-alt)] font-semibold text-[color:var(--text-primary)]'
                         : 'text-[color:var(--text-secondary)]',
                     )}
                   >
-                    <item.icon className="mr-3 h-4 w-4" />
-                    {item.label}
+                    <item.icon className={cn('h-4 w-4', !isNavCollapsed && 'mr-3')} />
+                    {isNavCollapsed ? <span className="sr-only">{item.label}</span> : item.label}
                   </Link>
                 );
               }
@@ -257,6 +286,7 @@ export function AppShell({ children }: { children: ReactNode }): JSX.Element {
                   <button
                     type="button"
                     onClick={() => setOpenParent((current) => (current === item.href ? null : item.href))}
+                    title={item.label}
                     className={cn(
                       'flex w-full items-center justify-between rounded-xl px-3 py-2 text-left transition hover:bg-[color:var(--panel-alt)] hover:text-[color:var(--text-primary)]',
                       isParentActive
@@ -295,16 +325,32 @@ export function AppShell({ children }: { children: ReactNode }): JSX.Element {
               );
             })}
             </nav>
-            <div className="mt-6 space-y-3 text-xs text-[color:var(--text-muted)]">
-            <Link href="/docs" className="inline-flex items-center gap-2 transition hover:text-[color:var(--text-primary)]">
-              Documentation
-            </Link>
-            <Link
-              href="/support"
-              className="inline-flex items-center gap-2 transition hover:text-[color:var(--text-primary)]"
-            >
-              Support & feedback
-            </Link>
+            <div className="mt-auto pt-6 space-y-3 text-xs text-[color:var(--text-muted)]">
+              <Link
+                href="/docs"
+                title="Documentation"
+                aria-label="Documentation"
+                className={cn(
+                  'inline-flex transition hover:text-[color:var(--text-primary)]',
+                  isNavCollapsed ? 'justify-center rounded-xl px-3 py-2' : 'items-center gap-2',
+                )}
+              >
+                <BookOpen className="h-4 w-4" />
+                <span className={cn(isNavCollapsed && 'sr-only')}>Documentation</span>
+              </Link>
+              <hr />
+              <Link
+                href="/support"
+                title="Support & feedback"
+                aria-label="Support & feedback"
+                className={cn(
+                  'inline-flex transition hover:text-[color:var(--text-primary)]',
+                  isNavCollapsed ? 'justify-center rounded-xl px-3 py-2' : 'items-center gap-2',
+                )}
+              >
+                <LifeBuoy className="h-4 w-4" />
+                <span className={cn(isNavCollapsed && 'sr-only')}>Support & feedback</span>
+              </Link>
             </div>
           </div>
         </aside>

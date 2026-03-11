@@ -62,6 +62,8 @@ def test_shopify_parquet_dataset_resolves_to_structured_saas_dataset() -> None:
     assert connector_kind == "shopify"
     assert source_kind == DatasetSourceKind.SAAS
     assert storage_kind == DatasetStorageKind.PARQUET
+    assert relation_identity.schema_name is None
+    assert relation_identity.qualified_name == "shopify_orders"
     assert relation_identity.storage_kind == DatasetStorageKind.PARQUET
     assert capabilities.supports_sql_federation is True
     assert dataset_supports_structured_federation(

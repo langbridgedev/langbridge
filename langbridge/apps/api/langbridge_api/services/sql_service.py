@@ -37,10 +37,12 @@ from langbridge.packages.common.langbridge_common.contracts.sql import (
     SqlJobResultArtifactResponse,
     SqlJobResultsResponse,
     SqlJobStatus,
+    SqlSelectedDataset,
     SqlSavedQueryCreateRequest,
     SqlSavedQueryListResponse,
     SqlSavedQueryResponse,
     SqlSavedQueryUpdateRequest,
+    SqlWorkbenchMode,
     SqlWorkspacePolicyBounds,
     SqlWorkspacePolicyResponse,
     SqlWorkspacePolicyUpdateRequest,
@@ -59,6 +61,9 @@ from langbridge.packages.common.langbridge_common.errors.application_errors impo
 )
 from langbridge.packages.common.langbridge_common.repositories.connector_repository import (
     ConnectorRepository,
+)
+from langbridge.packages.common.langbridge_common.repositories.dataset_repository import (
+    DatasetRepository,
 )
 from langbridge.packages.common.langbridge_common.repositories.organization_repository import (
     OrganizationRepository,
@@ -79,7 +84,16 @@ from langbridge.packages.common.langbridge_common.utils.sql import (
     fingerprint_query,
     sanitize_sql_error_message,
 )
+from langbridge.packages.common.langbridge_common.utils.datasets import (
+    dataset_supports_structured_federation,
+)
 from langbridge.packages.common.langbridge_common.utils.lineage import LineageNodeType
+from langbridge.packages.connectors.langbridge_connectors.api import (
+    ConnectorRuntimeTypeSqlDialectMap,
+)
+from langbridge.packages.connectors.langbridge_connectors.api.config import (
+    ConnectorRuntimeType,
+)
 
 
 class SqlService:
@@ -91,6 +105,7 @@ class SqlService:
         sql_saved_query_repository: SqlSavedQueryRepository,
         sql_workspace_policy_repository: SqlWorkspacePolicyRepository,
         connector_repository: ConnectorRepository,
+        dataset_repository: DatasetRepository | None = None,
         organization_repository: OrganizationRepository,
         user_repository: UserRepository,
         sql_job_request_service: SqlJobRequestService,
@@ -102,6 +117,7 @@ class SqlService:
         self._sql_saved_query_repository = sql_saved_query_repository
         self._sql_workspace_policy_repository = sql_workspace_policy_repository
         self._connector_repository = connector_repository
+        self._dataset_repository = dataset_repository
         self._organization_repository = organization_repository
         self._user_repository = user_repository
         self._sql_job_request_service = sql_job_request_service
@@ -119,35 +135,30 @@ class SqlService:
         await self._assert_project_access(request.project_id, current_user)
 
         policy = await self._get_or_create_policy_record(request.workspace_id)
-        if request.federated and not policy.allow_federation:
-            raise PermissionDeniedBusinessValidationError(
-                "Federated SQL execution is disabled for this workspace."
-            )
-        if request.federated and not settings.SQL_FEDERATION_ENABLED:
-            raise BusinessValidationError(
-                "Federated SQL execution is not enabled in this deployment."
-            )
-
+        workbench_mode = request.workbench_mode
+        selected_datasets: list[SqlSelectedDataset] = []
         connection_id = request.connection_id
         redaction_rules: dict[str, str] = {}
-        if not request.federated:
-            if connection_id is None:
-                connection_id = policy.default_datasource_id
-            if connection_id is None:
-                raise BusinessValidationError(
-                    "connection_id is required when no default datasource is configured."
-                )
-            connector = await self._connector_repository.get_by_id(connection_id)
-            if connector is None:
-                raise ResourceNotFound("Connection not found.")
-            if not self._connector_is_in_workspace(connector, request.workspace_id):
+        if workbench_mode == SqlWorkbenchMode.dataset:
+            if not policy.allow_federation:
                 raise PermissionDeniedBusinessValidationError(
-                    "Connection does not belong to this workspace."
+                    "Dataset SQL execution is disabled for this workspace."
                 )
-            connector_response = ConnectorResponse.from_connector(
-                connector,
-                organization_id=request.workspace_id,
+            if not settings.SQL_FEDERATION_ENABLED:
+                raise BusinessValidationError(
+                    "Dataset SQL execution is not enabled in this deployment."
+                )
+            connection_id = None
+            selected_datasets = await self._resolve_selected_datasets(
+                workspace_id=request.workspace_id,
                 project_id=request.project_id,
+                selected_datasets=request.selected_datasets,
+            )
+        else:
+            connector_response = await self._get_direct_sql_connector_response(
+                workspace_id=request.workspace_id,
+                project_id=request.project_id,
+                connection_id=connection_id,
             )
             if connector_response.connection_policy:
                 redaction_rules = dict(connector_response.connection_policy.redaction_rules or {})
@@ -197,9 +208,13 @@ class SqlService:
             project_id=request.project_id,
             user_id=current_user.id,
             connection_id=connection_id,
+            workbench_mode=workbench_mode.value,
+            selected_datasets_json=[
+                dataset.model_dump(mode="json") for dataset in selected_datasets
+            ],
             execution_mode=(
                 SqlExecutionMode.federated.value
-                if request.federated
+                if workbench_mode == SqlWorkbenchMode.dataset
                 else SqlExecutionMode.single.value
             ),
             status=SqlJobStatus.queued.value,
@@ -211,7 +226,7 @@ class SqlService:
             requested_timeout_seconds=request.requested_timeout_seconds,
             enforced_timeout_seconds=effective_timeout,
             is_explain=request.explain,
-            is_federated=request.federated,
+            is_federated=workbench_mode == SqlWorkbenchMode.dataset,
             correlation_id=self._request_context_provider.correlation_id,
             policy_snapshot_json={
                 "allow_dml": policy.allow_dml,
@@ -241,10 +256,11 @@ class SqlService:
                     workspace_id=request.workspace_id,
                     project_id=request.project_id,
                     user_id=current_user.id,
+                    workbench_mode=workbench_mode,
                     connection_id=connection_id,
                     execution_mode=(
                         SqlExecutionMode.federated.value
-                        if request.federated
+                        if workbench_mode == SqlWorkbenchMode.dataset
                         else SqlExecutionMode.single.value
                     ),
                     query=request.query,
@@ -260,8 +276,11 @@ class SqlService:
                     allowed_tables=list(policy.allowed_tables_json or []),
                     redaction_rules=redaction_rules,
                     explain=request.explain,
+                    selected_datasets=[
+                        dataset.model_dump(mode="json") for dataset in selected_datasets
+                    ],
                     federated_datasets=[
-                        dataset.model_dump(mode="json") for dataset in request.federated_datasets
+                        dataset.model_dump(mode="json") for dataset in selected_datasets
                     ],
                     correlation_id=self._request_context_provider.correlation_id,
                 )
@@ -484,6 +503,22 @@ class SqlService:
     ) -> SqlSavedQueryResponse:
         await self._assert_workspace_access(request.workspace_id, current_user)
         await self._assert_project_access(request.project_id, current_user)
+        selected_datasets: list[SqlSelectedDataset] = []
+        connection_id = request.connection_id
+        if request.workbench_mode == SqlWorkbenchMode.dataset:
+            connection_id = None
+            selected_datasets = await self._resolve_selected_datasets(
+                workspace_id=request.workspace_id,
+                project_id=request.project_id,
+                selected_datasets=request.selected_datasets,
+            )
+        else:
+            connector_response = await self._get_direct_sql_connector_response(
+                workspace_id=request.workspace_id,
+                project_id=request.project_id,
+                connection_id=request.connection_id,
+            )
+            connection_id = connector_response.id
         now = datetime.now(timezone.utc)
         record = SqlSavedQueryRecord(
             id=uuid.uuid4(),
@@ -491,7 +526,11 @@ class SqlService:
             project_id=request.project_id,
             created_by=current_user.id,
             updated_by=current_user.id,
-            connection_id=request.connection_id,
+            connection_id=connection_id,
+            workbench_mode=request.workbench_mode.value,
+            selected_datasets_json=[
+                dataset.model_dump(mode="json") for dataset in selected_datasets
+            ],
             name=request.name.strip(),
             description=(request.description.strip() if request.description else None),
             query_text=request.query,
@@ -570,18 +609,48 @@ class SqlService:
         if not await self._can_manage_saved_query(record, current_user):
             raise PermissionDeniedBusinessValidationError("You cannot update this saved SQL query.")
 
+        final_project_id = record.project_id
         if request.project_id is not None:
             await self._assert_project_access(request.project_id, current_user)
+            final_project_id = request.project_id
             record.project_id = request.project_id
-        if request.connection_id is not None:
-            connector = await self._connector_repository.get_by_id(request.connection_id)
-            if connector is None:
-                raise ResourceNotFound("Connection not found.")
-            if not self._connector_is_in_workspace(connector, request.workspace_id):
-                raise PermissionDeniedBusinessValidationError(
-                    "Connection does not belong to this workspace."
+
+        final_mode = request.workbench_mode or self._saved_query_workbench_mode(record)
+        final_connection_id = record.connection_id
+        if "connection_id" in request.model_fields_set:
+            final_connection_id = request.connection_id
+        elif request.workbench_mode == SqlWorkbenchMode.dataset:
+            final_connection_id = None
+
+        final_selected_datasets = self._selected_datasets_from_payload(
+            record.selected_datasets_json,
+            query_text=record.query_text,
+        )
+        if request.selected_datasets is not None:
+            final_selected_datasets = list(request.selected_datasets)
+        elif request.workbench_mode == SqlWorkbenchMode.direct_sql:
+            final_selected_datasets = []
+
+        if final_mode == SqlWorkbenchMode.dataset:
+            record.connection_id = None
+            record.selected_datasets_json = [
+                dataset.model_dump(mode="json")
+                for dataset in await self._resolve_selected_datasets(
+                    workspace_id=request.workspace_id,
+                    project_id=final_project_id,
+                    selected_datasets=final_selected_datasets,
                 )
-            record.connection_id = request.connection_id
+            ]
+        else:
+            connector_response = await self._get_direct_sql_connector_response(
+                workspace_id=request.workspace_id,
+                project_id=final_project_id,
+                connection_id=final_connection_id,
+            )
+            record.connection_id = connector_response.id
+            record.selected_datasets_json = []
+        record.workbench_mode = final_mode.value
+
         if request.name is not None:
             record.name = request.name.strip()
         if request.description is not None:
@@ -759,6 +828,199 @@ class SqlService:
         suggestion = "No high-risk patterns detected." if not lint_lines else "\n".join(lint_lines)
         return SqlAssistResponse(mode=request.mode, suggestion=suggestion, warnings=lint_lines)
 
+    async def _get_direct_sql_connector_response(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        project_id: uuid.UUID | None,
+        connection_id: uuid.UUID | None,
+    ) -> ConnectorResponse:
+        if connection_id is None:
+            raise BusinessValidationError("connection_id is required for direct SQL execution.")
+        connector = await self._connector_repository.get_by_id(connection_id)
+        if connector is None:
+            raise ResourceNotFound("Connection not found.")
+        if not self._connector_is_in_workspace(connector, workspace_id):
+            raise PermissionDeniedBusinessValidationError(
+                "Connection does not belong to this workspace."
+            )
+        connector_response = ConnectorResponse.from_connector(
+            connector,
+            organization_id=workspace_id,
+            project_id=project_id,
+        )
+        if not self._supports_direct_sql_connector(connector_response.connector_type):
+            raise BusinessValidationError(
+                "Selected connector does not support direct SQL execution."
+            )
+        return connector_response
+
+    async def _resolve_selected_datasets(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        project_id: uuid.UUID | None,
+        selected_datasets: list[SqlSelectedDataset],
+    ) -> list[SqlSelectedDataset]:
+        if self._dataset_repository is None:
+            raise BusinessValidationError("Dataset repository is required for dataset SQL execution.")
+        if not selected_datasets:
+            raise BusinessValidationError(
+                "Dataset SQL execution requires at least one selected dataset."
+            )
+
+        dataset_records = await self._dataset_repository.get_by_ids_for_workspace(
+            workspace_id=workspace_id,
+            dataset_ids=[item.dataset_id for item in selected_datasets],
+        )
+        datasets_by_id = {dataset.id: dataset for dataset in dataset_records}
+
+        seen_dataset_ids: set[uuid.UUID] = set()
+        snapshots: list[SqlSelectedDataset] = []
+        for item in selected_datasets:
+            if item.dataset_id in seen_dataset_ids:
+                raise BusinessValidationError(
+                    f"Dataset '{item.dataset_id}' is selected more than once."
+                )
+            seen_dataset_ids.add(item.dataset_id)
+
+            dataset = datasets_by_id.get(item.dataset_id)
+            if dataset is None:
+                raise ResourceNotFound(f"Dataset '{item.dataset_id}' was not found.")
+            if not self._dataset_is_in_scope(dataset=dataset, project_id=project_id):
+                raise PermissionDeniedBusinessValidationError(
+                    f"Dataset '{dataset.name}' is not available in the active project scope."
+                )
+            if not dataset_supports_structured_federation(
+                source_kind=dataset.source_kind,
+                storage_kind=dataset.storage_kind,
+                capabilities=dataset.execution_capabilities_json,
+            ):
+                raise BusinessValidationError(
+                    f"Dataset '{dataset.name}' does not support dataset SQL execution."
+                )
+
+            relation_identity = (
+                dataset.relation_identity_json
+                if isinstance(dataset.relation_identity_json, dict)
+                else {}
+            )
+            canonical_reference = relation_identity.get("canonical_reference") or relation_identity.get(
+                "canonicalReference"
+            )
+            resolved_sql_alias = str(
+                getattr(dataset, "sql_alias", None) or item.sql_alias or item.alias or dataset.name
+            ).strip().lower()
+            snapshots.append(
+                SqlSelectedDataset(
+                    alias=resolved_sql_alias,
+                    sql_alias=resolved_sql_alias,
+                    dataset_id=dataset.id,
+                    dataset_name=dataset.name,
+                    canonical_reference=(
+                        str(canonical_reference) if canonical_reference is not None else None
+                    ),
+                    connector_id=dataset.connection_id,
+                    source_kind=dataset.source_kind,
+                    storage_kind=dataset.storage_kind,
+                )
+            )
+        return snapshots
+
+    @staticmethod
+    def _supports_direct_sql_connector(connector_type: str | None) -> bool:
+        if not connector_type:
+            return False
+        normalized_type = str(connector_type).strip().upper()
+        normalized_type = {"MSSQL": "SQLSERVER"}.get(normalized_type, normalized_type)
+        try:
+            runtime_type = ConnectorRuntimeType(normalized_type)
+        except ValueError:
+            return False
+        return (
+            runtime_type in ConnectorRuntimeTypeSqlDialectMap
+            and runtime_type != ConnectorRuntimeType.MONGODB
+        )
+
+    @staticmethod
+    def _dataset_is_in_scope(*, dataset: Any, project_id: uuid.UUID | None) -> bool:
+        if project_id is None:
+            return True
+        dataset_project_id = getattr(dataset, "project_id", None)
+        return dataset_project_id is None or str(dataset_project_id) == str(project_id)
+
+    @staticmethod
+    def _job_workbench_mode(job: SqlJobRecord) -> SqlWorkbenchMode:
+        raw_mode = str(getattr(job, "workbench_mode", "") or "").strip().lower()
+        if raw_mode in {SqlWorkbenchMode.dataset.value, SqlWorkbenchMode.direct_sql.value}:
+            return SqlWorkbenchMode(raw_mode)
+        if getattr(job, "is_federated", False) or getattr(job, "execution_mode", "") == SqlExecutionMode.federated.value:
+            return SqlWorkbenchMode.dataset
+        return SqlWorkbenchMode.direct_sql
+
+    @staticmethod
+    def _saved_query_workbench_mode(record: SqlSavedQueryRecord) -> SqlWorkbenchMode:
+        raw_mode = str(getattr(record, "workbench_mode", "") or "").strip().lower()
+        if raw_mode in {SqlWorkbenchMode.dataset.value, SqlWorkbenchMode.direct_sql.value}:
+            return SqlWorkbenchMode(raw_mode)
+        if record.connection_id is not None:
+            return SqlWorkbenchMode.direct_sql
+        return SqlWorkbenchMode.dataset
+
+    @staticmethod
+    def _selected_datasets_from_payload(
+        payload: list[dict[str, Any]] | None,
+        *,
+        query_text: str | None = None,
+    ) -> list[SqlSelectedDataset]:
+        selected: list[SqlSelectedDataset] = []
+        for item in payload or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                selected.append(SqlSelectedDataset.model_validate(item))
+            except Exception:
+                continue
+        if selected:
+            return selected
+        return SqlService._parse_legacy_selected_datasets(query_text)
+
+    @staticmethod
+    def _parse_legacy_selected_datasets(query_text: str | None) -> list[SqlSelectedDataset]:
+        if not query_text:
+            return []
+        directive_prefix = "-- langbridge:federated-source"
+        selected: list[SqlSelectedDataset] = []
+        seen_aliases: set[str] = set()
+        for line in str(query_text).splitlines():
+            trimmed = line.strip()
+            if not trimmed.startswith(directive_prefix):
+                continue
+            payload = trimmed[len(directive_prefix):].strip()
+            fields: dict[str, str] = {}
+            for part in payload.split():
+                key, separator, value = part.partition("=")
+                if separator and key:
+                    fields[key] = value
+            alias = str(fields.get("alias") or "").strip()
+            dataset_id = fields.get("dataset_id") or fields.get("datasetId")
+            if not alias or not dataset_id:
+                continue
+            try:
+                selected_item = SqlSelectedDataset(
+                    alias=alias,
+                    sql_alias=alias,
+                    dataset_id=dataset_id,
+                )
+            except Exception:
+                continue
+            alias_key = selected_item.alias.lower()
+            if alias_key in seen_aliases:
+                continue
+            seen_aliases.add(alias_key)
+            selected.append(selected_item)
+        return selected
+
     def _to_sql_job_response(
         self,
         job: SqlJobRecord,
@@ -767,14 +1029,21 @@ class SqlService:
     ) -> SqlJobResponse:
         warning_payload = job.warning_json if isinstance(job.warning_json, dict) else None
         error_payload = job.error_json if isinstance(job.error_json, dict) else None
+        selected_datasets = self._selected_datasets_from_payload(
+            job.selected_datasets_json,
+            query_text=job.query_text,
+        )
         return SqlJobResponse(
             id=job.id,
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             user_id=job.user_id,
+            workbench_mode=self._job_workbench_mode(job),
             connection_id=job.connection_id,
+            selected_datasets=selected_datasets,
             execution_mode=SqlExecutionMode(job.execution_mode),
             status=SqlJobStatus(job.status),
+            query=job.query_text,
             query_hash=job.query_hash,
             is_explain=job.is_explain,
             is_federated=job.is_federated,
@@ -834,7 +1103,14 @@ class SqlService:
             project_id=record.project_id,
             created_by=record.created_by,
             updated_by=record.updated_by,
+            workbench_mode=SqlWorkbenchMode(
+                str(record.workbench_mode or SqlWorkbenchMode.dataset.value)
+            ),
             connection_id=record.connection_id,
+            selected_datasets=SqlService._selected_datasets_from_payload(
+                record.selected_datasets_json,
+                query_text=record.query_text,
+            ),
             name=record.name,
             description=record.description,
             query=record.query_text,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -324,12 +325,13 @@ class ConnectorSyncRuntime:
                 created_by=user_id,
                 updated_by=user_id,
                 name=dataset_name,
+                sql_alias=self._dataset_sql_alias(dataset_name),
                 description=self._dataset_description(connector_record.name, resource_name, parent_resource_name),
                 tags_json=self._dataset_tags(connector_type=connector_type, resource_name=resource_name),
                 dataset_type="FILE",
                 dialect="duckdb",
                 catalog_name=None,
-                schema_name="api_connector",
+                schema_name=None,
                 table_name=dataset_name,
                 storage_uri=storage_uri,
                 sql_text=None,
@@ -366,7 +368,7 @@ class ConnectorSyncRuntime:
             )
             dataset.dataset_type = "FILE"
             dataset.dialect = "duckdb"
-            dataset.schema_name = "api_connector"
+            dataset.schema_name = None
             dataset.table_name = dataset_name
             dataset.storage_uri = storage_uri
             dataset.file_config_json = file_config
@@ -507,6 +509,8 @@ class ConnectorSyncRuntime:
 
         file_config = dict(dataset.file_config_json or {})
         sync_meta = file_config.get("connector_sync") if isinstance(file_config.get("connector_sync"), dict) else {}
+        if sync_meta is None:
+            sync_meta = {}
         storage_uri = str(file_config.get("storage_uri") or dataset.storage_uri or "").strip()
 
         edges: list[LineageEdgeRecord] = []
@@ -735,6 +739,16 @@ class ConnectorSyncRuntime:
         return f"Managed dataset synced from connector '{connector_name}' resource '{resource_name}'."
 
     @staticmethod
+    def _dataset_sql_alias(name: str) -> str:
+        alias = _RESOURCE_SANITIZER.sub("_", str(name or "").strip().lower()).strip("_")
+        alias = re.sub(r"_+", "_", alias)
+        if not alias:
+            return "dataset"
+        if alias[0].isdigit():
+            return f"dataset_{alias}"
+        return alias
+
+    @staticmethod
     def _dataset_tags(
         *,
         connector_type: ConnectorRuntimeType,
@@ -812,6 +826,7 @@ class ConnectorSyncRuntime:
 
     @staticmethod
     def _rows_to_table(*, rows: list[dict[str, Any]], existing_schema: pa.Schema | None) -> pa.Table:
+        ConnectorSyncRuntime._ensure_pyarrow_compatible_pandas_stub()
         normalized_rows = ConnectorSyncRuntime._normalize_rows_for_arrow(rows)
         if normalized_rows:
             try:
@@ -828,6 +843,12 @@ class ConnectorSyncRuntime:
                 schema=existing_schema,
             )
         return pa.table({})
+
+    @staticmethod
+    def _ensure_pyarrow_compatible_pandas_stub() -> None:
+        pandas_module = sys.modules.get("pandas")
+        if pandas_module is not None and not hasattr(pandas_module, "__version__"):
+            setattr(pandas_module, "__version__", "0.0.0")
 
     @staticmethod
     def _normalize_rows_for_arrow(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -86,6 +86,7 @@ export interface DatasetRecord {
   connectionId?: string | null;
   ownerId?: string | null;
   name: string;
+  sqlAlias: string;
   description?: string | null;
   tags: string[];
   datasetType: DatasetType;
@@ -120,6 +121,7 @@ export interface DatasetListResponse {
 export interface DatasetCatalogItem {
   id: string;
   name: string;
+  sqlAlias: string;
   datasetType: DatasetType;
   sourceKind: DatasetSourceKind;
   connectorKind?: string | null;

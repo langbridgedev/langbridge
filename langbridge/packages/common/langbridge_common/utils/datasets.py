@@ -140,17 +140,35 @@ def build_dataset_relation_identity(
 ) -> DatasetRelationIdentity:
     if existing_payload:
         try:
-            return DatasetRelationIdentity.model_validate(dict(existing_payload))
+            parsed = DatasetRelationIdentity.model_validate(dict(existing_payload))
+            if _should_suppress_synthetic_schema(
+                source_kind=source_kind,
+                storage_kind=storage_kind,
+                schema_name=parsed.schema_name,
+            ):
+                return parsed.model_copy(
+                    update={
+                        "qualified_name": parsed.table_name or parsed.relation_name,
+                        "catalog_name": None,
+                        "schema_name": None,
+                    }
+                )
+            return parsed
         except Exception:
             pass
 
+    normalized_schema_name = None if _should_suppress_synthetic_schema(
+        source_kind=source_kind,
+        storage_kind=storage_kind,
+        schema_name=schema_name,
+    ) else schema_name
     normalized_table_name = str(table_name or "").strip() or _normalized_relation_name(
         dataset_name=dataset_name,
         storage_uri=storage_uri,
     )
     qualified_name = _qualified_name(
         catalog_name=catalog_name,
-        schema_name=schema_name,
+        schema_name=normalized_schema_name,
         table_name=table_name or normalized_table_name,
     )
     if dataset_id is not None:
@@ -167,7 +185,7 @@ def build_dataset_relation_identity(
         relation_name=normalized_table_name,
         qualified_name=qualified_name,
         catalog_name=_string_or_none(catalog_name),
-        schema_name=_string_or_none(schema_name),
+        schema_name=_string_or_none(normalized_schema_name),
         table_name=_string_or_none(table_name or normalized_table_name),
         storage_uri=_string_or_none(storage_uri),
         dataset_id=_coerce_uuid(dataset_id),
@@ -303,6 +321,18 @@ def _connector_sync_meta(file_config: Mapping[str, Any] | None) -> Mapping[str, 
     if isinstance(payload, Mapping):
         return payload
     return {}
+
+
+def _should_suppress_synthetic_schema(
+    *,
+    source_kind: DatasetSourceKind,
+    storage_kind: DatasetStorageKind,
+    schema_name: str | None,
+) -> bool:
+    return (
+        storage_kind in {DatasetStorageKind.CSV, DatasetStorageKind.PARQUET, DatasetStorageKind.JSON}
+        and str(schema_name or "").strip().lower() == "api_connector"
+    )
 
 
 def _normalize_enum_value(value: Any) -> str | None:
