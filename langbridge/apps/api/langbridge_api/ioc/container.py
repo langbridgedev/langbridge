@@ -283,7 +283,7 @@ class Container(containers.DeclarativeContainer):
 
     connector_schema_service = providers.Factory(
         ConnectorSchemaService,
-        async_session_factory=async_session_factory,
+        connector_repository=connector_repository,
     )
     agent_service = providers.Factory(
         AgentService,

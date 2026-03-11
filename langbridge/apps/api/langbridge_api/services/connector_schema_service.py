@@ -1,10 +1,6 @@
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
 from uuid import UUID
-
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from langbridge.packages.connectors.langbridge_connectors.api import (
     BaseConnectorConfig,
@@ -39,33 +35,13 @@ _SYSTEM_SCHEMA_NAMES = {
 
 
 class ConnectorSchemaService:
-    def __init__(
-        self,
-        connector_repository: ConnectorRepository | None = None,
-        async_session_factory: Callable[[], AsyncSession] | None = None,
-    ) -> None:
+    def __init__(self, connector_repository: ConnectorRepository) -> None:
         self._connector_repository = connector_repository
-        self._async_session_factory = async_session_factory
         self._sql_connector_factory = SqlConnectorFactory()
         self._logger = logging.getLogger(__name__)
 
-    @asynccontextmanager
-    async def _connector_repository_scope(self) -> AsyncIterator[ConnectorRepository]:
-        if self._async_session_factory is None:
-            if self._connector_repository is None:
-                raise RuntimeError("ConnectorSchemaService requires a repository or session factory.")
-            yield self._connector_repository
-            return
-
-        session = self._async_session_factory()
-        try:
-            yield ConnectorRepository(session=session)
-        finally:
-            await session.close()
-
     async def _get_connector(self, connector_id: UUID) -> Connector:
-        async with self._connector_repository_scope() as connector_repository:
-            connector = await connector_repository.get_by_id(connector_id)
+        connector = await self._connector_repository.get_by_id(connector_id)
         if not connector:
             raise BusinessValidationError("Connector not found")
         return connector

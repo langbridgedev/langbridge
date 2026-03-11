@@ -12,10 +12,6 @@ from langbridge.packages.common.langbridge_common.db.session_context import (
 )
 
 READ_ONLY_METHODS: Final[set[str]] = {"GET", "HEAD", "OPTIONS"}
-CONNECTOR_SCHEMA_ROUTE_SEGMENTS: Final[tuple[str, ...]] = (
-    "/source/",
-    "/catalog",
-)
 
 
 class UnitOfWorkMiddleware(BaseHTTPMiddleware):
@@ -35,26 +31,11 @@ class UnitOfWorkMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.logger = logging.getLogger(__name__)
 
-    @staticmethod
-    def _should_skip_request_session(request: Request) -> bool:
-        path = request.url.path
-        if not path.startswith("/api/v1/connectors/"):
-            return False
-        return any(segment in path for segment in CONNECTOR_SCHEMA_ROUTE_SEGMENTS)
-
     async def dispatch(
         self,
         request: Request,
         call_next: RequestResponseEndpoint,
     ) -> Response:
-        if self._should_skip_request_session(request):
-            self.logger.debug(
-                "UoW: skipping request-scoped session for connector schema route %s %s",
-                request.method,
-                request.url.path,
-            )
-            return await call_next(request)
-
         container: Container = request.app.state.container  # type: ignore[attr-defined]
 
         session_factory = container.async_session_factory()
