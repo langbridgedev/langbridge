@@ -6,6 +6,7 @@ import yaml from 'js-yaml';
 
 import { useToast } from '@/components/ui/toast';
 import { useWorkspaceScope } from '@/context/workspaceScope';
+import { createClientId } from '@/lib/utils';
 import { fetchAgentDefinitions } from '@/orchestration/agents';
 import type { AgentDefinition } from '@/orchestration/agents/types';
 import { enqueueDashboardCopilotJob } from '@/orchestration/copilot';
@@ -1440,10 +1441,7 @@ function buildEmptyWidget(sequence: number, existingWidgets: BiWidget[]): BiWidg
 }
 
 function makeLocalId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return Math.random().toString(36).slice(2, 11);
+  return createClientId();
 }
 
 function toPersistedWidget(widget: BiWidget): PersistedBiWidget {

@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useWorkspaceScope } from '@/context/workspaceScope';
+import { createClientId } from '@/lib/utils';
 import { fetchDatasetCatalog, type DatasetCatalogItem } from '@/orchestration/datasets';
 import { ApiError } from '@/orchestration/http';
 import { fetchAgentJobState } from '@/orchestration/jobs';
@@ -165,7 +166,7 @@ export default function SemanticModelCreatePage({ params }: Props): JSX.Element 
   const addRelationship = (): void => {
     if (datasets.length < 2) return setError('Select at least two datasets before adding a relationship.');
     const [left, right] = datasets;
-    setRelationships((current) => [...current, { id: crypto.randomUUID(), name: `${left.key}_to_${right.key}`, sourceDataset: left.key, sourceField: left.dimensions[0]?.name || '', targetDataset: right.key, targetField: right.dimensions[0]?.name || '', type: 'many_to_one' }]);
+    setRelationships((current) => [...current, { id: createClientId(), name: `${left.key}_to_${right.key}`, sourceDataset: left.key, sourceField: left.dimensions[0]?.name || '', targetDataset: right.key, targetField: right.dimensions[0]?.name || '', type: 'many_to_one' }]);
   };
 
   const refreshDraft = async (): Promise<void> => {
@@ -480,12 +481,12 @@ export default function SemanticModelCreatePage({ params }: Props): JSX.Element 
                           <div className="space-y-2"><Label>Source dataset</Label><Input value={d.datasetName} disabled /></div>
                         </div>
                         <div className="mt-3 space-y-2"><Label>Description</Label><Input value={d.description} onChange={(e) => patchDataset(d.id, (current) => ({ ...current, description: e.target.value }))} /></div>
-                        <FieldSection title="Dimensions" action="Add dimension" onAdd={() => patchDataset(d.id, (c) => ({ ...c, dimensions: [...c.dimensions, { id: crypto.randomUUID(), name: '', expression: '', type: 'string', primaryKey: false }] }))}>
+                        <FieldSection title="Dimensions" action="Add dimension" onAdd={() => patchDataset(d.id, (c) => ({ ...c, dimensions: [...c.dimensions, { id: createClientId(), name: '', expression: '', type: 'string', primaryKey: false }] }))}>
                           {d.dimensions.map((f) => (
                             <FieldRow key={f.id} name={f.name} type={f.type} expression={f.expression || ''} onType={(value) => patchDataset(d.id, (c) => ({ ...c, dimensions: c.dimensions.map((x) => x.id === f.id ? { ...x, type: value } : x) }))} onName={(value) => patchDataset(d.id, (c) => ({ ...c, dimensions: c.dimensions.map((x) => x.id === f.id ? { ...x, name: value } : x) }))} onExpression={(value) => patchDataset(d.id, (c) => ({ ...c, dimensions: c.dimensions.map((x) => x.id === f.id ? { ...x, expression: value } : x) }))} onRemove={() => patchDataset(d.id, (c) => ({ ...c, dimensions: c.dimensions.filter((x) => x.id !== f.id) }))} />
                           ))}
                         </FieldSection>
-                        <FieldSection title="Measures" action="Add measure" onAdd={() => patchDataset(d.id, (c) => ({ ...c, measures: [...c.measures, { id: crypto.randomUUID(), name: '', expression: '', type: 'decimal', aggregation: 'sum' }] }))}>
+                        <FieldSection title="Measures" action="Add measure" onAdd={() => patchDataset(d.id, (c) => ({ ...c, measures: [...c.measures, { id: createClientId(), name: '', expression: '', type: 'decimal', aggregation: 'sum' }] }))}>
                           {d.measures.map((f) => (
                             <FieldRow key={f.id} name={f.name} type={f.type} expression={f.expression || ''} onType={(value) => patchDataset(d.id, (c) => ({ ...c, measures: c.measures.map((x) => x.id === f.id ? { ...x, type: value } : x) }))} onName={(value) => patchDataset(d.id, (c) => ({ ...c, measures: c.measures.map((x) => x.id === f.id ? { ...x, name: value } : x) }))} onExpression={(value) => patchDataset(d.id, (c) => ({ ...c, measures: c.measures.map((x) => x.id === f.id ? { ...x, expression: value } : x) }))} onRemove={() => patchDataset(d.id, (c) => ({ ...c, measures: c.measures.filter((x) => x.id !== f.id) }))} />
                           ))}
@@ -647,10 +648,10 @@ function fromCatalog(item: DatasetCatalogItem, keys: string[]): Ds {
     const type = normalize(col.dataType);
     const pk = Boolean(col.primaryKey || isPk(col.name, item.name));
     const idish = col.name === 'id' || col.name.endsWith('_id');
-    if (['integer', 'decimal', 'float'].includes(type) && !pk && !idish) meas.push({ id: crypto.randomUUID(), name: col.name, expression: col.name, type, aggregation: 'sum' });
-    else dims.push({ id: crypto.randomUUID(), name: col.name, expression: col.name, type, primaryKey: pk });
+    if (['integer', 'decimal', 'float'].includes(type) && !pk && !idish) meas.push({ id: createClientId(), name: col.name, expression: col.name, type, aggregation: 'sum' });
+    else dims.push({ id: createClientId(), name: col.name, expression: col.name, type, primaryKey: pk });
   }
-  return { id: crypto.randomUUID(), datasetId: item.id, datasetName: item.name, key: uniqueKey(item.sqlAlias || item.name || 'dataset', keys), description: '', dimensions: dims, measures: meas };
+  return { id: createClientId(), datasetId: item.id, datasetName: item.name, key: uniqueKey(item.sqlAlias || item.name || 'dataset', keys), description: '', dimensions: dims, measures: meas };
 }
 
 function parseYaml(text: string, catalog: DatasetCatalogItem[]): { datasets: Ds[]; relationships: Rel[] } {
@@ -661,14 +662,14 @@ function parseYaml(text: string, catalog: DatasetCatalogItem[]): { datasets: Ds[
     const item = record(value) ? value : {};
     const datasetId = str(item.dataset_id) || str(item.datasetId) || '';
     const match = catalog.find((entry) => entry.id === datasetId);
-    return { id: crypto.randomUUID(), datasetId, datasetName: match?.name || str(item.relation_name) || key, key, description: str(item.description) || '', dimensions: parseDims(item.dimensions), measures: parseMeas(item.measures) };
+    return { id: createClientId(), datasetId, datasetName: match?.name || str(item.relation_name) || key, key, description: str(item.description) || '', dimensions: parseDims(item.dimensions), measures: parseMeas(item.measures) };
   });
   const rels = Array.isArray(raw.relationships) ? raw.relationships.map(parseRel).filter(Boolean) as Rel[] : [];
   return { datasets, relationships: rels };
 }
 
-function parseDims(value: unknown): Dim[] { return Array.isArray(value) ? value.map((x) => record(x) ? { id: crypto.randomUUID(), name: str(x.name) || '', expression: str(x.expression) || '', type: str(x.type) || 'string', primaryKey: Boolean(x.primary_key ?? x.primaryKey) } : null).filter(Boolean) as Dim[] : []; }
-function parseMeas(value: unknown): Mea[] { return Array.isArray(value) ? value.map((x) => record(x) ? { id: crypto.randomUUID(), name: str(x.name) || '', expression: str(x.expression) || '', type: str(x.type) || 'decimal', aggregation: str(x.aggregation) || 'sum' } : null).filter(Boolean) as Mea[] : []; }
+function parseDims(value: unknown): Dim[] { return Array.isArray(value) ? value.map((x) => record(x) ? { id: createClientId(), name: str(x.name) || '', expression: str(x.expression) || '', type: str(x.type) || 'string', primaryKey: Boolean(x.primary_key ?? x.primaryKey) } : null).filter(Boolean) as Dim[] : []; }
+function parseMeas(value: unknown): Mea[] { return Array.isArray(value) ? value.map((x) => record(x) ? { id: createClientId(), name: str(x.name) || '', expression: str(x.expression) || '', type: str(x.type) || 'decimal', aggregation: str(x.aggregation) || 'sum' } : null).filter(Boolean) as Mea[] : []; }
 
 function parseRel(value: unknown): Rel | null {
   if (!record(value)) return null;
@@ -686,7 +687,7 @@ function parseRel(value: unknown): Rel | null {
     sourceField ||= lf || '';
     targetField ||= rf || '';
   }
-  return { id: crypto.randomUUID(), name: str(value.name) || `${sourceDataset}_to_${targetDataset}`, sourceDataset, sourceField, targetDataset, targetField, type: str(value.type) || 'many_to_one' };
+  return { id: createClientId(), name: str(value.name) || `${sourceDataset}_to_${targetDataset}`, sourceDataset, sourceField, targetDataset, targetField, type: str(value.type) || 'many_to_one' };
 }
 
 function toModel(name: string, description: string, datasets: Ds[], relationships: Rel[]): Record<string, unknown> {

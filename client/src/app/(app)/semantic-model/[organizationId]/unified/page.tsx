@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useWorkspaceScope } from '@/context/workspaceScope';
-import { cn, formatRelativeDate } from '@/lib/utils';
+import { cn, createClientId, formatRelativeDate } from '@/lib/utils';
 import { ApiError } from '@/orchestration/http';
 import {
   createSemanticModel,
@@ -1212,8 +1212,5 @@ function readString(value: unknown): string | null {
 }
 
 function createId(prefix: string): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Math.random().toString(36).slice(2, 11)}`;
+  return createClientId(prefix);
 }

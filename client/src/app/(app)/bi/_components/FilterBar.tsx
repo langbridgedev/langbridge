@@ -4,6 +4,7 @@ import { Filter, Plus, RotateCcw, Sparkles, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
+import { createClientId } from '@/lib/utils';
 
 import type { BiWidget, FieldOption, FilterDraft } from '../types';
 import { FieldSelect } from './FieldSelect';
@@ -246,8 +247,5 @@ export function FilterBar({
 }
 
 function makeLocalId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return Math.random().toString(36).slice(2, 11);
+  return createClientId();
 }
