@@ -10,6 +10,7 @@ from langbridge.packages.common.langbridge_common.utils.storage_uri import resol
 from langbridge.packages.common.langbridge_common.db.dataset import DatasetRecord
 from langbridge.packages.common.langbridge_common.errors.application_errors import BusinessValidationError
 from langbridge.packages.common.langbridge_common.repositories.dataset_repository import DatasetRepository
+from langbridge.packages.runtime.providers import DatasetMetadataProvider
 from langbridge.packages.common.langbridge_common.utils.datasets import (
     build_dataset_execution_capabilities,
     build_dataset_relation_identity,
@@ -30,8 +31,14 @@ from langbridge.packages.semantic.langbridge_semantic.model import Dataset as Se
 
 
 class DatasetExecutionResolver:
-    def __init__(self, *, dataset_repository: DatasetRepository | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        dataset_repository: DatasetRepository | None = None,
+        dataset_provider: DatasetMetadataProvider | None = None,
+    ) -> None:
         self._dataset_repository = dataset_repository
+        self._dataset_provider = dataset_provider
 
     async def build_workflow_for_dataset(
         self,
@@ -225,8 +232,10 @@ class DatasetExecutionResolver:
         *,
         dataset: DatasetRecord,
     ) -> tuple[FederationWorkflow, str, str]:
-        if self._dataset_repository is None:
-            raise BusinessValidationError("Dataset repository is required for federated dataset execution.")
+        if self._dataset_provider is None and self._dataset_repository is None:
+            raise BusinessValidationError(
+                "Dataset metadata provider is required for federated dataset execution."
+            )
 
         plan = dataset.federated_plan_json if isinstance(dataset.federated_plan_json, Mapping) else {}
         plan_tables = self._normalize_plan_tables(plan.get("tables"))
@@ -303,12 +312,20 @@ class DatasetExecutionResolver:
         dataset_id: uuid.UUID,
         table_key: str,
     ) -> DatasetRecord:
-        if self._dataset_repository is None:
-            raise BusinessValidationError("Dataset repository is required for dataset-backed execution.")
-        dataset = await self._dataset_repository.get_for_workspace(
-            dataset_id=dataset_id,
-            workspace_id=workspace_id,
-        )
+        if self._dataset_provider is not None:
+            dataset = await self._dataset_provider.get_dataset(
+                workspace_id=workspace_id,
+                dataset_id=dataset_id,
+            )
+        elif self._dataset_repository is not None:
+            dataset = await self._dataset_repository.get_for_workspace(
+                dataset_id=dataset_id,
+                workspace_id=workspace_id,
+            )
+        else:
+            raise BusinessValidationError(
+                "Dataset metadata provider is required for dataset-backed execution."
+            )
         if dataset is None:
             raise BusinessValidationError(
                 f"Dataset '{dataset_id}' referenced by table '{table_key}' was not found."

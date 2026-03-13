@@ -13,6 +13,10 @@ from langbridge.packages.common.langbridge_common.db.session_context import (
 
 READ_ONLY_METHODS: Final[set[str]] = {"GET", "HEAD", "OPTIONS"}
 
+AUTH_GET_ROUTES: Final[set[str]] = {
+    "/api/v1/github/callback",
+    "/api/v1/google/callback"
+}
 
 class UnitOfWorkMiddleware(BaseHTTPMiddleware):
     """

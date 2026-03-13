@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 from datetime import datetime, timezone
 
@@ -53,6 +51,12 @@ from langbridge.packages.messaging.langbridge_messaging.contracts.jobs.connector
     ConnectorSyncJobRequestMessage,
 )
 from langbridge.packages.messaging.langbridge_messaging.handler import BaseMessageHandler
+from langbridge.packages.runtime.context import RuntimeContext
+from langbridge.packages.runtime.services.runtime_host import (
+    RuntimeHost,
+    RuntimeProviders,
+    RuntimeServices,
+)
 
 
 class ConnectorSyncJobRequestHandler(BaseMessageHandler):
@@ -125,6 +129,17 @@ class ConnectorSyncJobRequestHandler(BaseMessageHandler):
         if job_record.started_at is None:
             job_record.started_at = datetime.now(timezone.utc)
 
+        runtime = RuntimeHost(
+            context=RuntimeContext.build(
+                tenant_id=request.workspace_id,
+                workspace_id=request.workspace_id,
+                user_id=request.user_id,
+                request_id=str(job_record.id),
+            ),
+            providers=RuntimeProviders(),
+            services=RuntimeServices(dataset_sync=self._runtime),
+        )
+
         active_state = None
         summaries: list[dict] = []
         try:
@@ -154,7 +169,7 @@ class ConnectorSyncJobRequestHandler(BaseMessageHandler):
                 active_state.error_message = None
                 active_state.updated_at = datetime.now(timezone.utc)
 
-                summary = await self._runtime.sync_resource(
+                summary = await runtime.sync_dataset(
                     workspace_id=request.workspace_id,
                     project_id=request.project_id,
                     user_id=request.user_id,

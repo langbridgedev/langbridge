@@ -957,3 +957,6 @@ class ConnectorSyncRuntime:
             "removed_columns": removed_columns,
             "type_changes": type_changes,
         }
+
+
+DatasetSyncService = ConnectorSyncRuntime

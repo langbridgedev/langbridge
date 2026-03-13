@@ -11,9 +11,6 @@ from langbridge.apps.api.langbridge_api.services.connector_service import Connec
 from langbridge.apps.api.langbridge_api.services.semantic.semantic_model_service import (
     SemanticModelService,
 )
-from langbridge.apps.worker.langbridge_worker.semantic_query_execution_service import (
-    SemanticQueryExecutionService,
-)
 from langbridge.packages.common.langbridge_common.contracts.connectors import ConnectorResponse
 from langbridge.packages.common.langbridge_common.contracts.semantic import (
     SemanticModelRecordResponse,
@@ -36,6 +33,7 @@ from langbridge.packages.connectors.langbridge_connectors.api.connector import (
     QueryResult,
     SqlConnector,
 )
+from langbridge.packages.runtime.services import SemanticQueryExecutionService
 from langbridge.packages.semantic.langbridge_semantic.loader import (
     SemanticModelError,
     load_semantic_model,
@@ -406,6 +404,5 @@ class SemanticQueryService:
                     if not column_name:
                         continue
                     item["full_path"] = f"{base}.{column_name}"
-
 
 

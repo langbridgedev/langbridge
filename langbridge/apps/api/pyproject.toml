@@ -13,6 +13,7 @@ dependencies = [
   "langbridge-semantic @ file:../../packages/semantic",
   "langbridge-orchestrator @ file:../../packages/orchestrator",
   "langbridge-messaging @ file:../../packages/messaging",
+  "langbridge-runtime @ file:../../packages/runtime",
 ]
 
 [tool.setuptools.packages.find]

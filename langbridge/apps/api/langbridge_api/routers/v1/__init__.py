@@ -14,6 +14,7 @@ from .copilot import router as copilot_router
 from .messages import router as messages_router
 from .jobs import router as jobs_router
 from .runtimes import router as runtimes_router
+from .runtime_metadata import router as runtime_metadata_router
 from .edge_tasks import router as edge_tasks_router
 from .sql import router as sql_router
 from .datasets import router as datasets_router
@@ -31,6 +32,7 @@ v1_routes: List[APIRouter] = [
     messages_router,
     jobs_router,
     runtimes_router,
+    runtime_metadata_router,
     edge_tasks_router,
     sql_router,
     datasets_router,
@@ -49,6 +51,7 @@ __all__ = [
     "messages_router",
     "jobs_router",
     "runtimes_router",
+    "runtime_metadata_router",
     "edge_tasks_router",
     "sql_router",
     "datasets_router",

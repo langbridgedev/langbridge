@@ -108,6 +108,9 @@ from langbridge.apps.api.langbridge_api.services.message.job_event_consumer impo
     JobEventConsumer,
 )
 from langbridge.apps.api.langbridge_api.services.runtime_auth_service import RuntimeAuthService
+from langbridge.apps.api.langbridge_api.services.runtime_metadata_service import (
+    RuntimeMetadataService,
+)
 from langbridge.apps.api.langbridge_api.services.runtime_registry_service import (
     RuntimeRegistryService,
 )
@@ -124,13 +127,17 @@ from langbridge.apps.api.langbridge_api.services.task_dispatch_service import (
 from langbridge.apps.api.langbridge_api.services.thread_service import ThreadService
 from langbridge.apps.api.langbridge_api.services.sql_service import SqlService
 from langbridge.apps.api.langbridge_api.services.storage import create_dashboard_snapshot_storage
-from langbridge.apps.worker.langbridge_worker.secrets import SecretProviderRegistry
-from langbridge.apps.worker.langbridge_worker.tools import FederatedQueryTool
-from langbridge.apps.worker.langbridge_worker.semantic_query_execution_service import (
-    SemanticQueryExecutionService,
-)
 from langbridge.packages.messaging.langbridge_messaging.broker.redis import RedisBroker
 from langbridge.packages.messaging.langbridge_messaging.flusher.flusher import MessageFlusher
+from langbridge.packages.runtime.execution import FederatedQueryTool
+from langbridge.packages.runtime.providers import (
+    RepositoryConnectorMetadataProvider,
+    RepositoryDatasetMetadataProvider,
+    RepositorySemanticModelMetadataProvider,
+    SecretRegistryCredentialProvider,
+)
+from langbridge.packages.runtime.security import SecretProviderRegistry
+from langbridge.packages.runtime.services import SemanticQueryExecutionService
 from langbridge.apps.api.langbridge_api.request_context import get_request_context
 
 
@@ -238,10 +245,28 @@ class Container(containers.DeclarativeContainer):
         group=settings.REDIS_API_CONSUMER_GROUP,
     )
     secret_provider_registry = providers.Singleton(SecretProviderRegistry)
+    credential_provider = providers.Factory(
+        SecretRegistryCredentialProvider,
+        registry=secret_provider_registry,
+    )
+    connector_metadata_provider = providers.Factory(
+        RepositoryConnectorMetadataProvider,
+        connector_repository=connector_repository,
+    )
+    dataset_metadata_provider = providers.Factory(
+        RepositoryDatasetMetadataProvider,
+        dataset_repository=dataset_repository,
+        dataset_column_repository=dataset_column_repository,
+        dataset_policy_repository=dataset_policy_repository,
+    )
+    semantic_model_metadata_provider = providers.Factory(
+        RepositorySemanticModelMetadataProvider,
+        semantic_model_repository=semantic_model_repository,
+    )
     federated_query_tool = providers.Factory(
         FederatedQueryTool,
-        connector_repository=connector_repository,
-        secret_provider_registry=secret_provider_registry,
+        connector_provider=connector_metadata_provider,
+        credential_provider=credential_provider,
     )
 
     environment_service = providers.Factory(
@@ -320,6 +345,15 @@ class Container(containers.DeclarativeContainer):
         runtime_registration_token_repository=runtime_registration_token_repository,
         runtime_auth_service=runtime_auth_service,
     )
+    runtime_metadata_service = providers.Factory(
+        RuntimeMetadataService,
+        dataset_repository=dataset_repository,
+        dataset_column_repository=dataset_column_repository,
+        dataset_policy_repository=dataset_policy_repository,
+        connector_repository=connector_repository,
+        semantic_model_repository=semantic_model_repository,
+        connector_sync_state_repository=connector_sync_state_repository,
+    )
     edge_task_gateway_service = providers.Factory(
         EdgeTaskGatewayService,
         edge_task_repository=edge_task_repository,
@@ -363,6 +397,8 @@ class Container(containers.DeclarativeContainer):
         SemanticQueryExecutionService,
         semantic_model_repository=semantic_model_repository,
         dataset_repository=dataset_repository,
+        semantic_model_provider=semantic_model_metadata_provider,
+        dataset_provider=dataset_metadata_provider,
         federated_query_tool=federated_query_tool,
         logger=logging.getLogger("langbridge.semantic_query"),
     )

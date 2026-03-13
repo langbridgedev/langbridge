@@ -9,12 +9,11 @@ from typing import Any
 
 import yaml
 
-from langbridge.apps.worker.langbridge_worker.dataset_execution import (
+from langbridge.packages.runtime.services.dataset_execution import (
     DatasetExecutionResolver,
     build_binding_for_dataset,
     synthetic_file_connector_id,
 )
-from langbridge.apps.worker.langbridge_worker.tools.federated_query_tool import FederatedQueryTool
 from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.packages.common.langbridge_common.contracts.semantic import (
     SemanticQueryResponse,
@@ -37,6 +36,11 @@ from langbridge.packages.connectors.langbridge_connectors.api import (
     get_connector_config_factory,
 )
 from langbridge.packages.connectors.langbridge_connectors.api.config import ConnectorRuntimeType
+from langbridge.packages.runtime.execution.federated_query_tool import FederatedQueryTool
+from langbridge.packages.runtime.providers import (
+    DatasetMetadataProvider,
+    SemanticModelMetadataProvider,
+)
 from langbridge.packages.semantic.langbridge_semantic.loader import (
     SemanticModelError,
     load_semantic_model,
@@ -104,14 +108,19 @@ class SemanticQueryExecutionService:
         dataset_repository: DatasetRepository | None,
         federated_query_tool: FederatedQueryTool | None,
         logger: logging.Logger,
+        dataset_provider: DatasetMetadataProvider | None = None,
+        semantic_model_provider: SemanticModelMetadataProvider | None = None,
     ) -> None:
         self._semantic_model_repository = semantic_model_repository
         self._dataset_repository = dataset_repository
+        self._dataset_provider = dataset_provider
+        self._semantic_model_provider = semantic_model_provider
         self._federated_query_tool = federated_query_tool
         self._logger = logger
         self._engine = SemanticQueryEngine()
         self._dataset_execution_resolver = DatasetExecutionResolver(
-            dataset_repository=dataset_repository
+            dataset_repository=dataset_repository,
+            dataset_provider=dataset_provider,
         )
 
     @staticmethod
@@ -384,14 +393,12 @@ class SemanticQueryExecutionService:
         semantic_model_id: uuid.UUID,
         semantic_query: SemanticQuery,
     ) -> StandardQueryExecutionResult:
-        if self._semantic_model_repository is None:
-            raise BusinessValidationError("Semantic model repository is required for semantic query execution.")
         if self._federated_query_tool is None:
             raise BusinessValidationError("Federated query tool is not configured on this worker.")
 
-        semantic_model_record = await self._semantic_model_repository.get_for_scope(
-            model_id=semantic_model_id,
+        semantic_model_record = await self._get_semantic_model_record(
             organization_id=organization_id,
+            semantic_model_id=semantic_model_id,
         )
         if semantic_model_record is None:
             raise BusinessValidationError("Semantic model not found.")
@@ -453,11 +460,6 @@ class SemanticQueryExecutionService:
         relationships: Iterable[Any] | None = None,
         metrics: Mapping[str, Any] | None = None,
     ) -> tuple[SemanticModel, dict[str, uuid.UUID]]:
-        if self._semantic_model_repository is None:
-            raise BusinessValidationError("Semantic model repository is required for unified query execution.")
-        if self._dataset_repository is None:
-            raise BusinessValidationError("Dataset repository is required for unified query execution.")
-
         normalized_model_ids = self._normalize_model_ids(semantic_model_ids)
         source_model_defs_by_id = {
             source_model.id: source_model
@@ -467,9 +469,9 @@ class SemanticQueryExecutionService:
         table_connector_map: dict[str, uuid.UUID] = {}
         seen_keys: set[str] = set()
         for semantic_model_id in normalized_model_ids:
-            semantic_model_record = await self._semantic_model_repository.get_for_scope(
-                model_id=semantic_model_id,
+            semantic_model_record = await self._get_semantic_model_record(
                 organization_id=organization_id,
+                semantic_model_id=semantic_model_id,
             )
             if semantic_model_record is None:
                 raise BusinessValidationError(
@@ -531,9 +533,9 @@ class SemanticQueryExecutionService:
                     raise BusinessValidationError(
                         f"Unified semantic model dataset '{dataset_key}' contains an invalid dataset_id."
                     ) from exc
-                dataset = await self._dataset_repository.get_for_workspace(
+                dataset = await self._get_dataset_record(
+                    organization_id=organization_id,
                     dataset_id=dataset_id,
-                    workspace_id=organization_id,
                 )
                 if dataset is None:
                     raise BusinessValidationError(
@@ -584,8 +586,6 @@ class SemanticQueryExecutionService:
         source_semantic_model: SemanticModel,
         table_connector_map: Mapping[str, uuid.UUID],
     ) -> dict[str, Any]:
-        if self._dataset_repository is None:
-            raise BusinessValidationError("Dataset repository is required for unified query execution.")
         from langbridge.packages.federation.models import (
             FederationWorkflow,
             VirtualDataset,
@@ -609,9 +609,9 @@ class SemanticQueryExecutionService:
                 raise BusinessValidationError(
                     f"Unified semantic model dataset '{dataset_key}' has an invalid dataset_id."
                 ) from exc
-            dataset = await self._dataset_repository.get_for_workspace(
+            dataset = await self._get_dataset_record(
+                organization_id=organization_id,
                 dataset_id=referenced_dataset_id,
-                workspace_id=organization_id,
             )
             if dataset is None:
                 raise BusinessValidationError(
@@ -654,6 +654,42 @@ class SemanticQueryExecutionService:
         payload = workflow.model_dump(mode="json")
         payload["dataset"]["relationships"] = relationships
         return payload
+
+    async def _get_semantic_model_record(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        semantic_model_id: uuid.UUID,
+    ) -> Any | None:
+        if self._semantic_model_provider is not None:
+            return await self._semantic_model_provider.get_semantic_model(
+                organization_id=organization_id,
+                semantic_model_id=semantic_model_id,
+            )
+        if self._semantic_model_repository is None:
+            raise BusinessValidationError("Semantic model repository is required for semantic query execution.")
+        return await self._semantic_model_repository.get_for_scope(
+            model_id=semantic_model_id,
+            organization_id=organization_id,
+        )
+
+    async def _get_dataset_record(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        dataset_id: uuid.UUID,
+    ) -> Any | None:
+        if self._dataset_provider is not None:
+            return await self._dataset_provider.get_dataset(
+                workspace_id=organization_id,
+                dataset_id=dataset_id,
+            )
+        if self._dataset_repository is None:
+            raise BusinessValidationError("Dataset repository is required for semantic query execution.")
+        return await self._dataset_repository.get_for_workspace(
+            dataset_id=dataset_id,
+            workspace_id=organization_id,
+        )
 
     @staticmethod
     def build_unified_execution_connector_id(*, organization_id: uuid.UUID) -> uuid.UUID:
@@ -774,10 +810,6 @@ class SemanticQueryExecutionService:
             except Exception:
                 return None
         return None
-
-
-
-
 
 
 

@@ -2,7 +2,6 @@
 import logging
 import secrets
 import uuid
-from typing import Optional, Any
 
 from fastapi import status
 from jose import JWTError
@@ -12,8 +11,6 @@ from starlette.responses import Response, JSONResponse
 from dependency_injector.wiring import Provide, inject
 
 from langbridge.apps.api.langbridge_api.ioc import Container
-from langbridge.apps.api.langbridge_api.services.auth.token_service import TokenService
-from langbridge.apps.api.langbridge_api.services.auth.token_service import TokenService
 from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.apps.api.langbridge_api.auth.jwt import verify_jwt
 from langbridge.packages.common.langbridge_common.contracts.auth import UserResponse

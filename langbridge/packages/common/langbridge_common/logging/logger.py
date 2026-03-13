@@ -3,6 +3,7 @@ Logging utilities with OpenTelemetry defaults for logs and traces.
 """
 import logging
 import os
+import tempfile
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 from langbridge.packages.common.langbridge_common.config import settings
@@ -79,12 +80,23 @@ def _build_file_handler(
         with open(path, "w", encoding="utf-8"):
             pass
 
-    file_handler = RotatingFileHandler(
-        path,
-        maxBytes=10 * 1024 * 1024,  # 10 MB
-        backupCount=5,
-        encoding="utf-8",
-    )
+    try:
+        file_handler = RotatingFileHandler(
+            path,
+            maxBytes=10 * 1024 * 1024,  # 10 MB
+            backupCount=5,
+            encoding="utf-8",
+        )
+    except OSError:
+        fallback_dir = os.path.join(tempfile.gettempdir(), "langbridge-logs")
+        os.makedirs(fallback_dir, exist_ok=True)
+        fallback_path = os.path.join(fallback_dir, log_file)
+        file_handler = RotatingFileHandler(
+            fallback_path,
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
     file_handler.setFormatter(formatter)
     return file_handler
 

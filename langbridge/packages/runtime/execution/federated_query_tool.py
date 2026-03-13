@@ -1,12 +1,9 @@
-﻿from __future__ import annotations
-
-import logging
+﻿import logging
 from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
 
-from langbridge.apps.worker.langbridge_worker.secrets import SecretProviderRegistry
 from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.packages.common.langbridge_common.contracts.connectors import ConnectorResponse
 from langbridge.packages.common.langbridge_common.db.connector import APIConnector, DatabaseConnector
@@ -22,6 +19,12 @@ from langbridge.packages.federation.connectors import DuckDbFileRemoteSource, Re
 from langbridge.packages.federation.executor import ArtifactStore
 from langbridge.packages.federation.models import FederationWorkflow, SMQQuery
 from langbridge.packages.federation.service import FederatedQueryService
+from langbridge.packages.runtime.providers import (
+    ConnectorMetadataProvider,
+    CredentialProvider,
+    SecretRegistryCredentialProvider,
+)
+from langbridge.packages.runtime.security.secrets import SecretProviderRegistry
 from langbridge.packages.semantic.langbridge_semantic.loader import load_semantic_model
 
 
@@ -49,10 +52,16 @@ class FederatedQueryToolRequest(BaseModel):
 class FederatedQueryTool:
     def __init__(
         self,
-        connector_repository: ConnectorRepository,
+        connector_repository: ConnectorRepository | None = None,
         secret_provider_registry: SecretProviderRegistry | None = None,
+        connector_provider: ConnectorMetadataProvider | None = None,
+        credential_provider: CredentialProvider | None = None,
     ) -> None:
         self._connector_repository = connector_repository
+        self._connector_provider = connector_provider
+        self._credential_provider = credential_provider or SecretRegistryCredentialProvider(
+            registry=secret_provider_registry or SecretProviderRegistry()
+        )
         self._secret_provider_registry = secret_provider_registry or SecretProviderRegistry()
         self._logger = logging.getLogger(__name__)
         self._sql_connector_factory = SqlConnectorFactory()
@@ -154,13 +163,21 @@ class FederatedQueryTool:
                     raise ValueError(
                         f"Source id '{binding.source_id}' maps to multiple connector ids in workflow '{workflow.id}'."
                     )
-            connector = await self._connector_repository.get_by_id(connector_id)
+            connector = None
+            if self._connector_provider is not None:
+                connector = await self._connector_provider.get_connector(connector_id)
+            elif self._connector_repository is not None:
+                connector = await self._connector_repository.get_by_id(connector_id)
             if connector is None:
                 raise ValueError(f"Connector '{connector_id}' not found for source '{source_id}'.")
             if type(connector) is APIConnector:
                 raise ValueError(f"Connector '{connector_id}' for source '{source_id}' is an API connector, which is not supported for federation sources.")
 
-            connector_response = ConnectorResponse.from_connector(connector)
+            connector_response = (
+                connector
+                if isinstance(connector, ConnectorResponse)
+                else ConnectorResponse.from_connector(connector)
+            )
             resolved_config = self._resolve_connector_config(connector_response)
             runtime_type = ConnectorRuntimeType((connector_response.connector_type or "").upper())
             sql_connector = await self._create_sql_connector(
@@ -213,7 +230,10 @@ class FederatedQueryTool:
                         runtime_config.setdefault(key, value)
 
         for secret_name, secret_ref in connector.secret_references.items():
-            runtime_config[secret_name] = self._secret_provider_registry.resolve(secret_ref)
+            runtime_config[secret_name] = self._credential_provider.resolve_secret(secret_ref)
 
         resolved_payload["config"] = runtime_config
         return resolved_payload
+
+
+FederatedQueryExecutor = FederatedQueryTool

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langbridge-runtime"
+version = "0.1.0"
+description = "Langbridge execution runtime"
+requires-python = ">=3.10"
+dependencies = [
+  "langbridge-common @ file:../common",
+  "langbridge-connectors @ file:../connectors",
+  "langbridge-semantic @ file:../semantic",
+  "langbridge-orchestrator @ file:../orchestrator",
+  "langbridge-messaging @ file:../messaging",
+]
+
+[tool.setuptools.packages.find]
+where = ["../../.."]
+include = ["langbridge.packages.runtime*"]

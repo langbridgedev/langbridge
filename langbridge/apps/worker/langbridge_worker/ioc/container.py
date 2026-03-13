@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Any
 
 from dependency_injector import containers, providers
@@ -44,10 +42,16 @@ from langbridge.packages.common.langbridge_common.repositories.thread_message_re
     ThreadMessageRepository,
 )
 from langbridge.packages.common.langbridge_common.repositories.thread_repository import ThreadRepository
+from langbridge.packages.runtime.execution import FederatedQueryTool
+from langbridge.packages.runtime.providers import (
+    RepositoryConnectorMetadataProvider,
+    RepositoryDatasetMetadataProvider,
+    RepositorySemanticModelMetadataProvider,
+    SecretRegistryCredentialProvider,
+)
+from langbridge.packages.runtime.security import SecretProviderRegistry
 from langbridge.packages.messaging.langbridge_messaging.broker.redis import RedisBroker
 from langbridge.packages.messaging.langbridge_messaging.flusher.flusher import MessageFlusher
-from langbridge.apps.worker.langbridge_worker.secrets import SecretProviderRegistry
-from langbridge.apps.worker.langbridge_worker.tools import FederatedQueryTool
 
 
 class WorkerContainer(containers.DeclarativeContainer):
@@ -118,10 +122,28 @@ class WorkerContainer(containers.DeclarativeContainer):
         message_bus=message_broker,
     )
     secret_provider_registry = providers.Singleton(SecretProviderRegistry)
+    credential_provider = providers.Factory(
+        SecretRegistryCredentialProvider,
+        registry=secret_provider_registry,
+    )
+    connector_metadata_provider = providers.Factory(
+        RepositoryConnectorMetadataProvider,
+        connector_repository=connector_repository,
+    )
+    dataset_metadata_provider = providers.Factory(
+        RepositoryDatasetMetadataProvider,
+        dataset_repository=dataset_repository,
+        dataset_column_repository=dataset_column_repository,
+        dataset_policy_repository=dataset_policy_repository,
+    )
+    semantic_model_metadata_provider = providers.Factory(
+        RepositorySemanticModelMetadataProvider,
+        semantic_model_repository=semantic_model_repository,
+    )
     federated_query_tool = providers.Factory(
         FederatedQueryTool,
-        connector_repository=connector_repository,
-        secret_provider_registry=secret_provider_registry,
+        connector_provider=connector_metadata_provider,
+        credential_provider=credential_provider,
     )
 
 
