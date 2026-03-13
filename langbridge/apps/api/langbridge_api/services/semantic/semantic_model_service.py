@@ -32,7 +32,10 @@ from langbridge.packages.common.langbridge_common.repositories.organization_repo
 from langbridge.packages.common.langbridge_common.repositories.semantic_model_repository import SemanticModelRepository
 from langbridge.packages.common.langbridge_common.utils.lineage import LineageNodeType
 from langbridge.packages.semantic.langbridge_semantic.errors import SemanticModelError
-from langbridge.packages.semantic.langbridge_semantic.loader import load_semantic_model
+from langbridge.packages.semantic.langbridge_semantic.loader import (
+    load_semantic_model,
+    load_unified_semantic_model,
+)
 
 TYPE_NUMERIC = {"number", "decimal", "numeric", "int", "integer", "float", "double", "real", "bigint"}
 TYPE_BOOLEAN = {"boolean", "bool"}
@@ -252,7 +255,7 @@ class SemanticModelService:
             if payload is None:
                 raise BusinessValidationError("Semantic model YAML could not be parsed.")
             try:
-                load_semantic_model(payload)
+                self._validate_model_payload(payload)
             except SemanticModelError as exc:
                 raise BusinessValidationError(f"Semantic model failed validation: {exc}") from exc
 
@@ -299,7 +302,7 @@ class SemanticModelService:
             if payload is None:
                 raise BusinessValidationError("Semantic model YAML could not be parsed.")
             try:
-                load_semantic_model(payload)
+                self._validate_model_payload(payload)
             except SemanticModelError as exc:
                 raise BusinessValidationError(f"Semantic model failed validation: {exc}") from exc
         else:
@@ -580,7 +583,7 @@ class SemanticModelService:
         payload = SemanticModelService._parse_model_payload(model)
         if payload is None:
             return "standard"
-        has_unified_shape = isinstance(payload.get("semantic_models"), list) or isinstance(payload.get("source_models"), list)
+        has_unified_shape = isinstance(payload.get("source_models"), list) or isinstance(payload.get("sourceModels"), list)
         return "unified" if has_unified_shape else "standard"
 
     @staticmethod
@@ -620,6 +623,13 @@ class SemanticModelService:
         except Exception:
             return None
         return None
+
+    @staticmethod
+    def _validate_model_payload(payload: Mapping[str, Any]) -> None:
+        if "source_models" in payload or "sourceModels" in payload:
+            load_unified_semantic_model(payload)
+            return
+        load_semantic_model(payload)
 
     @staticmethod
     def _extract_source_dataset_ids_from_payload(payload: Mapping[str, Any]) -> list[UUID]:

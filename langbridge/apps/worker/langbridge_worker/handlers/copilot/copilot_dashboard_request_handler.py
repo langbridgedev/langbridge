@@ -704,7 +704,8 @@ Keep widgets practical and diverse, max 6 widgets.
                 project_id=request.project_id,
                 semantic_query=semantic_query,
                 semantic_model_ids=unified_config.semantic_model_ids,
-                joins=unified_config.joins,
+                source_models=unified_config.source_models,
+                relationships=unified_config.relationships,
                 metrics=unified_config.metrics,
             )
             return execution.response
@@ -814,3 +815,4 @@ Keep widgets practical and diverse, max 6 widgets.
                     )
                 ]
         return []
+

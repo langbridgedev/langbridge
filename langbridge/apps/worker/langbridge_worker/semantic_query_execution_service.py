@@ -18,6 +18,7 @@ from langbridge.apps.worker.langbridge_worker.tools.federated_query_tool import 
 from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.packages.common.langbridge_common.contracts.semantic import (
     SemanticQueryResponse,
+    UnifiedSemanticSourceModelRequest,
     UnifiedSemanticQueryResponse,
 )
 from langbridge.packages.common.langbridge_common.errors.application_errors import (
@@ -39,6 +40,7 @@ from langbridge.packages.connectors.langbridge_connectors.api.config import Conn
 from langbridge.packages.semantic.langbridge_semantic.loader import (
     SemanticModelError,
     load_semantic_model,
+    load_unified_semantic_model,
 )
 from langbridge.packages.semantic.langbridge_semantic.model import SemanticModel
 from langbridge.packages.semantic.langbridge_semantic.query import SemanticQuery, SemanticQueryEngine
@@ -57,6 +59,14 @@ _DATE_RANGE_PRESETS = {
     "month_to_date",
     "year_to_date",
 }
+
+
+def _normalize_unified_relationship_payload(relationship: Any) -> dict[str, Any]:
+    if hasattr(relationship, "model_dump"):
+        return relationship.model_dump(exclude_none=True)
+    if isinstance(relationship, Mapping):
+        return dict(relationship)
+    return dict(relationship)
 _YEAR_PATTERN = re.compile(r"^\d{4}$")
 _YEAR_MONTH_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 _ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -69,7 +79,8 @@ _DATE_MEMBER_HINTS = ("date", "time", "timestamp", "_at", "_ts")
 @dataclass(frozen=True)
 class UnifiedModelConfig:
     semantic_model_ids: list[uuid.UUID]
-    joins: list[dict[str, Any]] | None = None
+    source_models: list[UnifiedSemanticSourceModelRequest] | None = None
+    relationships: list[dict[str, Any]] | None = None
     metrics: dict[str, Any] | None = None
 
 
@@ -299,8 +310,9 @@ class SemanticQueryExecutionService:
         project_id: uuid.UUID | None,
         semantic_query: SemanticQuery,
         semantic_model_ids: Iterable[uuid.UUID],
-        joins: Iterable[Any] | None,
-        metrics: Mapping[str, Any] | None,
+        source_models: Iterable[UnifiedSemanticSourceModelRequest] | None = None,
+        relationships: Iterable[Any] | None = None,
+        metrics: Mapping[str, Any] | None = None,
     ) -> UnifiedQueryExecutionResult:
         if self._federated_query_tool is None:
             raise BusinessValidationError("Federated query tool is not configured on this worker.")
@@ -308,7 +320,8 @@ class SemanticQueryExecutionService:
         semantic_model, table_connector_map = await self._build_unified_model_and_map(
             organization_id=organization_id,
             semantic_model_ids=semantic_model_ids,
-            joins=joins,
+            source_models=source_models,
+            relationships=relationships,
             metrics=metrics,
         )
         execution_connector_id = self.build_unified_execution_connector_id(
@@ -436,8 +449,9 @@ class SemanticQueryExecutionService:
         *,
         organization_id: uuid.UUID,
         semantic_model_ids: Iterable[uuid.UUID],
-        joins: Iterable[Any] | None,
-        metrics: Mapping[str, Any] | None,
+        source_models: Iterable[UnifiedSemanticSourceModelRequest] | None = None,
+        relationships: Iterable[Any] | None = None,
+        metrics: Mapping[str, Any] | None = None,
     ) -> tuple[SemanticModel, dict[str, uuid.UUID]]:
         if self._semantic_model_repository is None:
             raise BusinessValidationError("Semantic model repository is required for unified query execution.")
@@ -445,8 +459,13 @@ class SemanticQueryExecutionService:
             raise BusinessValidationError("Dataset repository is required for unified query execution.")
 
         normalized_model_ids = self._normalize_model_ids(semantic_model_ids)
-        source_models: list[UnifiedSourceModel] = []
+        source_model_defs_by_id = {
+            source_model.id: source_model
+            for source_model in (source_models or [])
+        }
+        loaded_source_models: list[UnifiedSourceModel] = []
         table_connector_map: dict[str, uuid.UUID] = {}
+        seen_keys: set[str] = set()
         for semantic_model_id in normalized_model_ids:
             semantic_model_record = await self._semantic_model_repository.get_for_scope(
                 model_id=semantic_model_id,
@@ -465,13 +484,36 @@ class SemanticQueryExecutionService:
                     candidate = raw_payload.get("tables")
                 if isinstance(candidate, Mapping):
                     raw_datasets = candidate
-            source_models.append(
+            source_model_def = source_model_defs_by_id.get(semantic_model_id)
+            source_key = self._build_source_model_key(
+                preferred_name=(
+                    source_model_def.alias
+                    if source_model_def is not None and source_model_def.alias
+                    else semantic_model_record.name
+                ),
+                model_id=semantic_model_id,
+                seen_keys=seen_keys,
+            )
+            loaded_source_models.append(
                 UnifiedSourceModel(
+                    model_id=semantic_model_record.id,
+                    key=source_key,
                     model=semantic_model,
                     connector_id=semantic_model_record.connector_id,
+                    name=(
+                        source_model_def.name
+                        if source_model_def is not None and source_model_def.name
+                        else semantic_model_record.name
+                    ),
+                    description=(
+                        source_model_def.description
+                        if source_model_def is not None and source_model_def.description
+                        else semantic_model_record.description
+                    ),
                 )
             )
             for dataset_key, semantic_dataset in semantic_model.datasets.items():
+                materialized_dataset_key = f"{source_key}__{dataset_key}"
                 raw_dataset = raw_datasets.get(dataset_key) if isinstance(raw_datasets, Mapping) else None
                 dataset_payload = raw_dataset if isinstance(raw_dataset, Mapping) else {}
                 dataset_ref = (
@@ -499,19 +541,17 @@ class SemanticQueryExecutionService:
                     )
                 dataset_type = str(dataset.dataset_type or "").upper()
                 if dataset_type == "FILE":
-                    table_connector_map[dataset_key] = synthetic_file_connector_id(dataset.id)
+                    table_connector_map[materialized_dataset_key] = synthetic_file_connector_id(dataset.id)
                 elif dataset.connection_id is not None:
-                    table_connector_map[dataset_key] = dataset.connection_id
+                    table_connector_map[materialized_dataset_key] = dataset.connection_id
                 else:
                     raise BusinessValidationError(
                         f"Dataset '{dataset.id}' referenced by unified semantic dataset '{dataset_key}' has no execution binding."
                     )
 
-        joins_payload = [
-            join.model_dump(by_alias=True, exclude_none=True)
-            if hasattr(join, "model_dump")
-            else dict(join)
-            for join in (joins or [])
+        relationships_payload = [
+            _normalize_unified_relationship_payload(relationship)
+            for relationship in (relationships or [])
         ]
         metrics_payload: dict[str, Any] = {}
         for metric_name, metric_value in (metrics or {}).items():
@@ -526,8 +566,8 @@ class SemanticQueryExecutionService:
 
         try:
             semantic_model, _ = build_unified_semantic_model(
-                source_models=source_models,
-                joins=joins_payload,
+                source_models=loaded_source_models,
+                relationships=relationships_payload,
                 metrics=metrics_payload or None,
             )
             return semantic_model, table_connector_map
@@ -638,6 +678,22 @@ class SemanticQueryExecutionService:
         return ordered_unique
 
     @staticmethod
+    def _build_source_model_key(
+        *,
+        preferred_name: str | None,
+        model_id: uuid.UUID,
+        seen_keys: set[str],
+    ) -> str:
+        base = re.sub(r"[^0-9A-Za-z_]+", "_", str(preferred_name or "").strip()).strip("_")
+        if not base:
+            base = f"model_{model_id.hex[:8]}"
+        candidate = base
+        if candidate in seen_keys:
+            candidate = f"{base}_{model_id.hex[:8]}"
+        seen_keys.add(candidate)
+        return candidate
+
+    @staticmethod
     def load_model_payload(content_yaml: str) -> SemanticModel:
         try:
             return load_semantic_model(content_yaml)
@@ -659,44 +715,40 @@ class SemanticQueryExecutionService:
                     "Unified semantic model is missing source_models metadata required for execution."
                 )
             return None
+        try:
+            unified_model = load_unified_semantic_model(payload)
+        except SemanticModelError as exc:
+            raise BusinessValidationError(
+                f"Unified semantic model failed validation: {exc}"
+            ) from exc
 
-        semantic_model_ids: list[uuid.UUID] = []
-        seen: set[uuid.UUID] = set()
-        for entry in source_models_raw:
-            if not isinstance(entry, Mapping):
-                continue
-            raw_id = entry.get("id")
-            if raw_id is None:
-                continue
-            try:
-                model_id = uuid.UUID(str(raw_id))
-            except (TypeError, ValueError) as exc:
-                raise BusinessValidationError(
-                    "Unified semantic model contains an invalid source model id."
-                ) from exc
-            if model_id in seen:
-                continue
-            seen.add(model_id)
-            semantic_model_ids.append(model_id)
-
+        semantic_model_ids = [
+            source_model.id
+            for source_model in unified_model.source_models
+        ]
         if not semantic_model_ids:
             raise BusinessValidationError(
                 "Unified semantic model is missing source model ids."
             )
 
-        joins: list[dict[str, Any]] | None = None
-        relationships_raw = payload.get("relationships")
-        if isinstance(relationships_raw, list):
-            joins = [dict(item) for item in relationships_raw if isinstance(item, Mapping)]
-
-        metrics: dict[str, Any] | None = None
-        metrics_raw = payload.get("metrics")
-        if isinstance(metrics_raw, Mapping):
-            metrics = dict(metrics_raw)
+        relationships = [
+            relationship.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for relationship in (unified_model.relationships or [])
+        ] or None
+        metrics = {
+            metric_name: metric.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for metric_name, metric in (unified_model.metrics or {}).items()
+        } or None
 
         return UnifiedModelConfig(
             semantic_model_ids=semantic_model_ids,
-            joins=joins,
+            source_models=[
+                UnifiedSemanticSourceModelRequest.model_validate(
+                    source_model.model_dump(mode="json", by_alias=True, exclude_none=True)
+                )
+                for source_model in unified_model.source_models
+            ],
+            relationships=relationships,
             metrics=metrics,
         )
 
@@ -722,3 +774,13 @@ class SemanticQueryExecutionService:
             except Exception:
                 return None
         return None
+
+
+
+
+
+
+
+
+
+

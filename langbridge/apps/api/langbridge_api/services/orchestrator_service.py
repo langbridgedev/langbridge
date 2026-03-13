@@ -73,6 +73,7 @@ from langbridge.packages.semantic.langbridge_semantic.unified_query import (
     apply_tenant_aware_context,
     build_unified_semantic_model,
 )
+from langbridge.packages.semantic.langbridge_semantic.loader import load_unified_semantic_model
 from langbridge.apps.api.langbridge_api.services.thread_service import ThreadService
 
 @dataclass(slots=True)
@@ -89,7 +90,8 @@ class _AgentToolConfig:
 @dataclass(slots=True, frozen=True)
 class _UnifiedSqlModelConfig:
     source_model_ids: list[uuid.UUID]
-    joins: list[dict[str, Any]]
+    source_models: list[dict[str, Any]]
+    relationships: list[dict[str, Any]]
     metrics: dict[str, Any]
 
 
@@ -472,20 +474,46 @@ class OrchestratorService:
             if source_entry is None:
                 raise BusinessValidationError(
                     f"Unified source semantic model '{source_model_id}' was not found."
-                )
+            )
             source_entries.append(source_entry)
+
+        source_model_defs_by_id = {}
+        for source_model in unified_config.source_models:
+            raw_id = source_model.get("id")
+            if raw_id is None:
+                continue
+            try:
+                source_model_defs_by_id[uuid.UUID(str(raw_id))] = source_model
+            except (TypeError, ValueError):
+                continue
 
         source_models: list[UnifiedSourceModel] = [
             UnifiedSourceModel(
+                model_id=source_entry.id,
+                key=str(
+                    (source_model_defs_by_id.get(source_entry.id) or {}).get("alias")
+                    or source_entry.name
+                    or source_entry.id
+                ),
                 model=load_semantic_model(source_entry.content_yaml),
                 connector_id=source_entry.connector_id,
+                name=str(
+                    (source_model_defs_by_id.get(source_entry.id) or {}).get("name")
+                    or source_entry.name
+                    or ""
+                ) or None,
+                description=str(
+                    (source_model_defs_by_id.get(source_entry.id) or {}).get("description")
+                    or source_entry.description
+                    or ""
+                ) or None,
             )
             for source_entry in source_entries
         ]
 
         unified_model, table_connector_map = build_unified_semantic_model(
             source_models=source_models,
-            joins=unified_config.joins,
+            relationships=unified_config.relationships,
             metrics=unified_config.metrics or None,
             name=entry.name,
             description=entry.description,
@@ -615,37 +643,33 @@ class OrchestratorService:
                 )
             return None
 
-        source_model_ids: list[uuid.UUID] = []
-        seen: set[uuid.UUID] = set()
-        for source_model in source_models_raw:
-            if not isinstance(source_model, dict):
-                continue
-            raw_id = source_model.get("id")
-            if raw_id is None:
-                continue
-            try:
-                model_id = uuid.UUID(str(raw_id))
-            except (TypeError, ValueError) as exc:
-                raise BusinessValidationError(
-                    "Unified semantic model contains an invalid source model id."
-                ) from exc
-            if model_id in seen:
-                continue
-            seen.add(model_id)
-            source_model_ids.append(model_id)
+        try:
+            unified_model = load_unified_semantic_model(payload)
+        except Exception as exc:
+            raise BusinessValidationError(
+                f"Unified semantic model failed validation: {exc}"
+            ) from exc
 
+        source_model_ids = [source_model.id for source_model in unified_model.source_models]
         if not source_model_ids:
             raise BusinessValidationError("Unified semantic model is missing source model ids.")
 
-        relationships_raw = payload.get("relationships")
-        joins = [dict(item) for item in relationships_raw if isinstance(item, dict)] if isinstance(relationships_raw, list) else []
-
-        metrics_raw = payload.get("metrics")
-        metrics = dict(metrics_raw) if isinstance(metrics_raw, dict) else {}
+        relationships = [
+            relationship.model_dump(by_alias=True, exclude_none=True)
+            for relationship in (unified_model.relationships or [])
+        ]
+        metrics = {
+            metric_name: metric.model_dump(by_alias=True, exclude_none=True)
+            for metric_name, metric in (unified_model.metrics or {}).items()
+        }
 
         return _UnifiedSqlModelConfig(
             source_model_ids=source_model_ids,
-            joins=joins,
+            source_models=[
+                source_model.model_dump(by_alias=True, exclude_none=True)
+                for source_model in unified_model.source_models
+            ],
+            relationships=relationships,
             metrics=metrics,
         )
 
@@ -1402,3 +1426,5 @@ class OrchestratorService:
             except re.error:
                 continue
         return summary
+
+

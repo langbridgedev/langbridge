@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -19,6 +20,7 @@ from langbridge.packages.common.langbridge_common.contracts.semantic import (
     SemanticQueryMetaResponse,
     SemanticQueryRequest,
     SemanticQueryResponse,
+    UnifiedSemanticSourceModelRequest,
     UnifiedSemanticQueryMetaRequest,
     UnifiedSemanticQueryMetaResponse,
     UnifiedSemanticQueryRequest,
@@ -44,6 +46,16 @@ from langbridge.packages.semantic.langbridge_semantic.unified_query import (
     UnifiedSourceModel,
     build_unified_semantic_model,
 )
+
+_KEY_SANITIZER = re.compile(r"[^0-9A-Za-z_]+")
+
+
+def _normalize_unified_relationship_payload(relationship: Any) -> dict[str, Any]:
+    if hasattr(relationship, "model_dump"):
+        return relationship.model_dump(exclude_none=True)
+    if isinstance(relationship, Mapping):
+        return dict(relationship)
+    return dict(relationship)
 
 
 class SemanticQueryService:
@@ -119,7 +131,8 @@ class SemanticQueryService:
             project_id=request.project_id,
             semantic_query=semantic_query,
             semantic_model_ids=request.semantic_model_ids,
-            joins=request.joins,
+            source_models=request.source_models,
+            relationships=request.relationships,
             metrics=request.metrics,
         )
         return execution.response
@@ -158,7 +171,8 @@ class SemanticQueryService:
         unified_model, _ = await self._build_unified_model_and_map(
             organization_id=request.organization_id,
             semantic_model_ids=request.semantic_model_ids,
-            joins=request.joins,
+            source_models=request.source_models,
+            relationships=request.relationships,
             metrics=request.metrics,
         )
 
@@ -177,20 +191,20 @@ class SemanticQueryService:
         *,
         organization_id: UUID,
         semantic_model_ids: Iterable[UUID],
-        joins: Iterable[Any] | None,
+        source_models: Iterable[UnifiedSemanticSourceModelRequest] | None,
+        relationships: Iterable[Any] | None,
         metrics: Mapping[str, Any] | None,
     ) -> tuple[SemanticModel, dict[str, UUID]]:
         normalized_model_ids = self._normalize_model_ids(semantic_model_ids)
-        source_models = await self._load_source_models(
+        loaded_source_models = await self._load_source_models(
             organization_id=organization_id,
             semantic_model_ids=normalized_model_ids,
+            source_model_defs=source_models,
         )
 
-        joins_payload = [
-            join.model_dump(by_alias=True, exclude_none=True)
-            if hasattr(join, "model_dump")
-            else dict(join)
-            for join in joins or []
+        relationships_payload = [
+            _normalize_unified_relationship_payload(relationship)
+            for relationship in relationships or []
         ]
         metrics_payload: dict[str, Any] = {}
         for metric_name, metric_value in (metrics or {}).items():
@@ -205,8 +219,8 @@ class SemanticQueryService:
 
         try:
             return build_unified_semantic_model(
-                source_models=source_models,
-                joins=joins_payload,
+                source_models=loaded_source_models,
+                relationships=relationships_payload,
                 metrics=metrics_payload or None,
             )
         except (SemanticModelError, ValueError) as exc:
@@ -219,17 +233,45 @@ class SemanticQueryService:
         *,
         organization_id: UUID,
         semantic_model_ids: list[UUID],
+        source_model_defs: Iterable[UnifiedSemanticSourceModelRequest] | None,
     ) -> list[UnifiedSourceModel]:
+        source_model_defs_by_id = {
+            source_model.id: source_model
+            for source_model in (source_model_defs or [])
+        }
         source_models: list[UnifiedSourceModel] = []
+        seen_keys: set[str] = set()
         for semantic_model_id in semantic_model_ids:
             model_record: SemanticModelRecordResponse = await self._semantic_model_service.get_model(
                 model_id=semantic_model_id,
                 organization_id=organization_id,
             )
+            source_model_def = source_model_defs_by_id.get(semantic_model_id)
+            source_key = self._build_source_model_key(
+                preferred_name=(
+                    source_model_def.alias
+                    if source_model_def is not None and source_model_def.alias
+                    else model_record.name
+                ),
+                model_id=semantic_model_id,
+                seen_keys=seen_keys,
+            )
             source_models.append(
                 UnifiedSourceModel(
+                    model_id=model_record.id,
+                    key=source_key,
                     model=self._load_model_payload(model_record.content_yaml),
                     connector_id=model_record.connector_id,
+                    name=(
+                        source_model_def.name
+                        if source_model_def is not None and source_model_def.name
+                        else model_record.name
+                    ),
+                    description=(
+                        source_model_def.description
+                        if source_model_def is not None and source_model_def.description
+                        else model_record.description
+                    ),
                 )
             )
         return source_models
@@ -319,6 +361,22 @@ class SemanticQueryService:
         return ordered_unique
 
     @staticmethod
+    def _build_source_model_key(
+        *,
+        preferred_name: str | None,
+        model_id: UUID,
+        seen_keys: set[str],
+    ) -> str:
+        base = _KEY_SANITIZER.sub("_", str(preferred_name or "").strip()).strip("_")
+        if not base:
+            base = f"model_{model_id.hex[:8]}"
+        candidate = base
+        if candidate in seen_keys:
+            candidate = f"{base}_{model_id.hex[:8]}"
+        seen_keys.add(candidate)
+        return candidate
+
+    @staticmethod
     def _attach_full_column_paths(payload: dict[str, Any]) -> None:
         datasets = payload.get("datasets")
         if not isinstance(datasets, dict):
@@ -348,3 +406,6 @@ class SemanticQueryService:
                     if not column_name:
                         continue
                     item["full_path"] = f"{base}.{column_name}"
+
+
+

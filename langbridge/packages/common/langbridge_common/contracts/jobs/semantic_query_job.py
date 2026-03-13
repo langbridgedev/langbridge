@@ -5,8 +5,9 @@ from pydantic import model_validator
 
 from langbridge.packages.common.langbridge_common.contracts.base import _Base
 from langbridge.packages.common.langbridge_common.contracts.semantic.semantic_query import (
-    UnifiedSemanticJoinRequest,
+    UnifiedSemanticRelationshipRequest,
     UnifiedSemanticMetricRequest,
+    UnifiedSemanticSourceModelRequest,
 )
 
 from .type import JobType
@@ -21,7 +22,8 @@ class CreateSemanticQueryJobRequest(_Base):
     semantic_model_id: uuid.UUID | None = None
     connector_id: uuid.UUID | None = None
     semantic_model_ids: list[uuid.UUID] | None = None
-    joins: list[UnifiedSemanticJoinRequest] | None = None
+    source_models: list[UnifiedSemanticSourceModelRequest] | None = None
+    relationships: list[UnifiedSemanticRelationshipRequest] | None = None
     metrics: dict[str, UnifiedSemanticMetricRequest] | None = None
     query: dict[str, Any]
 

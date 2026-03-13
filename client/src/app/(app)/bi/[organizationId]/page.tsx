@@ -42,11 +42,12 @@ import type {
   SemanticQueryPayload,
   SemanticQueryRequestPayload,
   SemanticQueryResponse,
-  UnifiedSemanticJoinPayload,
   UnifiedSemanticMetricPayload,
   UnifiedSemanticQueryMetaRequestPayload,
   UnifiedSemanticQueryMetaResponse,
   UnifiedSemanticQueryRequestPayload,
+  UnifiedSemanticRelationshipPayload,
+  UnifiedSemanticSourceModelPayload,
 } from '@/orchestration/semanticQuery/types';
 
 import { BiAiInput } from '../_components/BiAiInput';
@@ -85,7 +86,8 @@ type SelectedModelConfig =
   | {
       kind: 'unified';
       semanticModelIds: string[];
-      joins?: UnifiedSemanticJoinPayload[];
+      sourceModels?: UnifiedSemanticSourceModelPayload[];
+      relationships?: UnifiedSemanticRelationshipPayload[];
       metrics?: Record<string, UnifiedSemanticMetricPayload>;
     };
 
@@ -198,7 +200,8 @@ export default function BiStudioPage({ params }: BiStudioPageProps) {
           organizationId,
           projectId: projectScope,
           semanticModelIds: selectedModelConfig.semanticModelIds,
-          joins: selectedModelConfig.joins,
+          sourceModels: selectedModelConfig.sourceModels,
+          relationships: selectedModelConfig.relationships,
           metrics: selectedModelConfig.metrics,
         };
         return fetchUnifiedSemanticQueryMeta(organizationId, payload);
@@ -1752,7 +1755,8 @@ function buildWidgetQueryRequestInput(input: {
         organizationId: input.organizationId,
         projectId: input.projectId,
         semanticModelIds: input.selectedModelConfig.semanticModelIds,
-        joins: input.selectedModelConfig.joins,
+        sourceModels: input.selectedModelConfig.sourceModels,
+        relationships: input.selectedModelConfig.relationships,
         metrics: input.selectedModelConfig.metrics,
         query,
       },
@@ -1895,60 +1899,80 @@ function parseSelectedModelConfig(model: SemanticModelRecord | null): SelectedMo
     : Array.isArray(parsed.sourceModels)
       ? parsed.sourceModels
       : null;
-  const hasUnifiedShape = Array.isArray(parsed.semantic_models) || Array.isArray(parsed.semanticModels) || sourceModels;
-  if (!hasUnifiedShape) {
+  if (!sourceModels) {
     return { kind: 'standard' };
   }
-  const semanticModelIds = (sourceModels || [])
-    .map((entry) => (isRecord(entry) ? readString(entry.id) : null))
+  const parsedSourceModels = parseUnifiedSourceModels(sourceModels);
+  const semanticModelIds = parsedSourceModels
+    .map((entry) => entry.id)
     .filter((entry): entry is string => Boolean(entry));
-  const joins = parseUnifiedJoins(parsed.relationships);
+  const relationships = parseUnifiedRelationships(parsed.relationships);
   const metrics = parseUnifiedMetrics(parsed.metrics);
   return {
     kind: 'unified',
     semanticModelIds,
-    joins: joins.length > 0 ? joins : undefined,
+    sourceModels: parsedSourceModels.length > 0 ? parsedSourceModels : undefined,
+    relationships: relationships.length > 0 ? relationships : undefined,
     metrics: metrics && Object.keys(metrics).length > 0 ? metrics : undefined,
   };
 }
 
-function parseUnifiedJoins(value: unknown): UnifiedSemanticJoinPayload[] {
+function parseUnifiedSourceModels(value: unknown): UnifiedSemanticSourceModelPayload[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  const joins: UnifiedSemanticJoinPayload[] = [];
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const id = readString(entry.id);
+    const alias = readString(entry.alias);
+    if (!id || !alias) {
+      return [];
+    }
+    return [
+      {
+        id,
+        alias,
+        name: readString(entry.name) ?? undefined,
+        description: readString(entry.description) ?? undefined,
+      },
+    ];
+  });
+}
+
+function parseUnifiedRelationships(value: unknown): UnifiedSemanticRelationshipPayload[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const relationships: UnifiedSemanticRelationshipPayload[] = [];
   value.forEach((entry) => {
     if (!isRecord(entry)) {
       return;
     }
-    const sourceDataset = readString(entry.source_dataset) ?? readString(entry.sourceDataset) ?? readString(entry.from_) ?? readString(entry.from);
-    const targetDataset = readString(entry.target_dataset) ?? readString(entry.targetDataset) ?? readString(entry.to);
+    const sourceSemanticModelId =
+      readString(entry.source_semantic_model_id) ?? readString(entry.sourceSemanticModelId);
+    const targetSemanticModelId =
+      readString(entry.target_semantic_model_id) ?? readString(entry.targetSemanticModelId);
     const sourceField = readString(entry.source_field) ?? readString(entry.sourceField);
     const targetField = readString(entry.target_field) ?? readString(entry.targetField);
-    const operator = readString(entry.operator) ?? '=';
-    const on =
-      readString(entry.join_on) ??
-      readString(entry.on) ??
-      (sourceDataset && sourceField && targetDataset && targetField
-        ? `${sourceDataset}.${sourceField} ${operator} ${targetDataset}.${targetField}`
-        : null);
-    if (!sourceDataset || !targetDataset || !on) {
+    if (!sourceSemanticModelId || !targetSemanticModelId || !sourceField || !targetField) {
       return;
     }
-    joins.push({
+    relationships.push({
       name: readString(entry.name),
-      sourceDataset,
+      sourceSemanticModelId,
       sourceField,
-      targetDataset,
+      targetSemanticModelId,
       targetField,
-      operator,
-      from: sourceDataset,
-      to: targetDataset,
-      type: readString(entry.type) ?? 'inner',
-      on,
+      operator: readString(entry.operator) ?? '=',
+      relationshipType:
+        readString(entry.relationship_type) ??
+        readString(entry.relationshipType) ??
+        'inner',
     });
   });
-  return joins;
+  return relationships;
 }
 
 function parseUnifiedMetrics(value: unknown): Record<string, UnifiedSemanticMetricPayload> | null {

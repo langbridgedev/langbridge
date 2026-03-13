@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -8,11 +8,75 @@ import yaml
 
 from langbridge.packages.semantic.langbridge_semantic.errors import SemanticModelError
 from langbridge.packages.semantic.langbridge_semantic.model import Metric, Relationship, SemanticModel
+from langbridge.packages.semantic.langbridge_semantic.unified_model import (
+    UnifiedSemanticModel,
+    UnifiedSemanticModelSource,
+    UnifiedSemanticRelationship,
+)
 
 
 def load_semantic_model(source: str | Mapping[str, Any] | Path) -> SemanticModel:
+    payload = _load_mapping(source)
+    return parse_semantic_model_payload(payload)
+
+
+def load_unified_semantic_model(source: str | Mapping[str, Any] | Path) -> UnifiedSemanticModel:
+    payload = _load_mapping(source)
+    return parse_unified_semantic_model_payload(payload)
+
+
+def parse_semantic_model_payload(payload: Mapping[str, Any]) -> SemanticModel:
+    if (
+        "source_models" in payload
+        or "sourceModels" in payload
+        or "semantic_models" in payload
+    ):
+        raise SemanticModelError(
+            "Unified semantic model payloads must be loaded with load_unified_semantic_model()."
+        )
+    if "datasets" in payload or "tables" in payload:
+        return _parse_standard_payload(payload)
+    raise SemanticModelError("Semantic model payload must define datasets.")
+
+
+def parse_unified_semantic_model_payload(payload: Mapping[str, Any]) -> UnifiedSemanticModel:
+    if "datasets" in payload or "tables" in payload:
+        raise SemanticModelError(
+            "Unified semantic models cannot define datasets, tables, dimensions, or measures."
+        )
+    if "joins" in payload:
+        raise SemanticModelError(
+            "Unified semantic models must define relationships instead of joins."
+        )
+    if "semantic_models" in payload:
+        raise SemanticModelError(
+            "Unified semantic models must reference source_models instead of embedding semantic_models."
+        )
+
+    source_models_raw = payload.get("source_models") or payload.get("sourceModels")
+    if not isinstance(source_models_raw, list) or not source_models_raw:
+        raise SemanticModelError("Unified semantic model must define at least one source model.")
+
+    relationships = _parse_unified_relationships(payload.get("relationships"))
+    metrics = _parse_metrics(payload.get("metrics"))
+
+    normalized = {
+        "version": str(payload.get("version") or "1.0"),
+        "name": payload.get("name"),
+        "description": payload.get("description"),
+        "source_models": _parse_source_models(source_models_raw),
+        "relationships": relationships,
+        "metrics": metrics,
+    }
+    try:
+        return UnifiedSemanticModel.model_validate(normalized)
+    except Exception as exc:
+        raise SemanticModelError(f"Invalid unified semantic model: {exc}") from exc
+
+
+def _load_mapping(source: str | Mapping[str, Any] | Path) -> dict[str, Any]:
     if isinstance(source, Path):
-        return load_semantic_model(source.read_text(encoding="utf-8"))
+        return _load_mapping(source.read_text(encoding="utf-8"))
     if isinstance(source, Mapping):
         payload = dict(source)
     else:
@@ -23,16 +87,7 @@ def load_semantic_model(source: str | Mapping[str, Any] | Path) -> SemanticModel
 
     if not isinstance(payload, Mapping):
         raise SemanticModelError("Semantic model payload must be a mapping.")
-
-    return parse_semantic_model_payload(payload)
-
-
-def parse_semantic_model_payload(payload: Mapping[str, Any]) -> SemanticModel:
-    if "semantic_models" in payload:
-        return _parse_unified_payload(payload)
-    if "datasets" in payload or "tables" in payload:
-        return _parse_standard_payload(payload)
-    raise SemanticModelError("Semantic model payload must define datasets or semantic_models.")
+    return dict(payload)
 
 
 def _parse_standard_payload(payload: Mapping[str, Any]) -> SemanticModel:
@@ -49,50 +104,16 @@ def _parse_standard_payload(payload: Mapping[str, Any]) -> SemanticModel:
     return SemanticModel.model_validate(normalized)
 
 
-def _parse_unified_payload(payload: Mapping[str, Any]) -> SemanticModel:
-    raw_models = payload.get("semantic_models") or []
-    if not isinstance(raw_models, list) or not raw_models:
-        raise SemanticModelError("Unified semantic model must define at least one semantic model.")
-
-    merged_datasets: dict[str, Any] = {}
-    merged_relationships: list[Relationship] = []
-    merged_metrics: dict[str, Metric] = {}
-    merged_tags: list[str] = []
-
-    for entry in raw_models:
+def _parse_source_models(source_models_raw: list[Any]) -> list[UnifiedSemanticModelSource]:
+    parsed: list[UnifiedSemanticModelSource] = []
+    for entry in source_models_raw:
         if not isinstance(entry, Mapping):
-            raise SemanticModelError("Unified semantic model entries must be mappings.")
-        model = parse_semantic_model_payload(entry)
-        for dataset_key, dataset in model.datasets.items():
-            if dataset_key in merged_datasets:
-                raise SemanticModelError(f"Duplicate dataset key '{dataset_key}' in unified semantic model.")
-            merged_datasets[dataset_key] = dataset
-        if model.relationships:
-            merged_relationships.extend(model.relationships)
-        if model.metrics:
-            for metric_key, metric in model.metrics.items():
-                if metric_key not in merged_metrics:
-                    merged_metrics[metric_key] = metric
-        if model.tags:
-            for tag in model.tags:
-                if tag not in merged_tags:
-                    merged_tags.append(tag)
-
-    merged_relationships.extend(_parse_relationships(payload.get("relationships") or payload.get("joins")))
-    merged_metrics.update(_parse_metrics(payload.get("metrics")))
-
-    normalized = {
-        "version": str(payload.get("version") or "1.0"),
-        "name": payload.get("name"),
-        "description": payload.get("description"),
-        "connector": payload.get("connector"),
-        "dialect": payload.get("dialect"),
-        "tags": _list_or_none(payload.get("tags")) or merged_tags or None,
-        "datasets": merged_datasets,
-        "relationships": merged_relationships or None,
-        "metrics": merged_metrics or None,
-    }
-    return SemanticModel.model_validate(normalized)
+            continue
+        try:
+            parsed.append(UnifiedSemanticModelSource.model_validate(dict(entry)))
+        except Exception as exc:
+            raise SemanticModelError(f"Invalid unified source model: {exc}") from exc
+    return parsed
 
 
 def _normalize_datasets(raw_datasets: Mapping[str, Any]) -> dict[str, Any]:
@@ -120,6 +141,20 @@ def _parse_relationships(value: Any) -> list[Relationship]:
     return relationships
 
 
+def _parse_unified_relationships(value: Any) -> list[UnifiedSemanticRelationship]:
+    if not isinstance(value, list):
+        return []
+    relationships: list[UnifiedSemanticRelationship] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            relationships.append(UnifiedSemanticRelationship.model_validate(dict(item)))
+        except Exception as exc:
+            raise SemanticModelError(f"Invalid unified semantic relationship: {exc}") from exc
+    return relationships
+
+
 def _parse_metrics(value: Any) -> dict[str, Metric]:
     if not isinstance(value, Mapping):
         return {}
@@ -132,10 +167,3 @@ def _parse_metrics(value: Any) -> dict[str, Metric]:
         except Exception as exc:
             raise SemanticModelError(f"Invalid semantic metric '{metric_key}': {exc}") from exc
     return metrics
-
-
-def _list_or_none(value: Any) -> list[str] | None:
-    if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
-        return None
-    items = [str(item) for item in value if str(item).strip()]
-    return items or None

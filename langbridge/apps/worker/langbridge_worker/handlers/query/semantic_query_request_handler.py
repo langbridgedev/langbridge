@@ -534,7 +534,8 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
             project_id=request.project_id,
             semantic_query=semantic_query,
             semantic_model_ids=request.semantic_model_ids,
-            joins=request.joins,
+            source_models=request.source_models,
+            relationships=request.relationships,
             metrics=request.metrics,
         )
         await event_emitter.emit(

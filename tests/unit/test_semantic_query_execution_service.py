@@ -12,6 +12,10 @@ import pytest
 
 from langbridge.apps.worker.langbridge_worker.semantic_query_execution_service import (
     SemanticQueryExecutionService,
+    _normalize_unified_relationship_payload,
+)
+from langbridge.packages.common.langbridge_common.contracts.semantic import (
+    UnifiedSemanticRelationshipRequest,
 )
 from langbridge.packages.common.langbridge_common.errors.application_errors import (
     BusinessValidationError,
@@ -27,6 +31,9 @@ def anyio_backend():
 
 @dataclass
 class _ModelRecord:
+    id: uuid.UUID
+    name: str = 'model'
+    description: str | None = None
     content_json: str | None = None
     content_yaml: str | None = None
     connector_id: uuid.UUID | None = None
@@ -34,34 +41,64 @@ class _ModelRecord:
 
 def test_parse_unified_model_config_from_record_reads_source_models() -> None:
     source_model_id = uuid.uuid4()
+    target_model_id = uuid.uuid4()
     payload = {
         "version": "1.0",
-        "source_models": [{"id": str(source_model_id)}],
-        "relationships": [{"name": "join_1", "from": "orders", "to": "customers", "on": "orders.id = customers.id"}],
-        "metrics": {"gross_margin": {"expression": "orders.revenue - orders.cost"}},
+        "source_models": [{"id": str(source_model_id), "alias": "Sales"}],
+        "relationships": [
+            {
+                "name": "join_1",
+                "source_semantic_model_id": str(source_model_id),
+                "source_field": "customer_id",
+                "target_semantic_model_id": str(target_model_id),
+                "target_field": "customer_id",
+                "relationship_type": "inner",
+            }
+        ],
+        "metrics": {"gross_margin": {"expression": "Sales.revenue - Sales.cost"}},
     }
-    record = _ModelRecord(content_json=json.dumps(payload))
+    record = _ModelRecord(id=uuid.uuid4(), content_json=json.dumps(payload))
 
     config = SemanticQueryExecutionService.parse_unified_model_config_from_record(record)
 
     assert config is not None
     assert config.semantic_model_ids == [source_model_id]
-    assert config.joins == payload["relationships"]
+    assert config.relationships == [
+        {
+            **payload["relationships"][0],
+            "operator": "=",
+        }
+    ]
     assert config.metrics == payload["metrics"]
 
 
 def test_parse_unified_model_config_from_record_returns_none_for_standard_model() -> None:
-    record = _ModelRecord(content_json=json.dumps({"version": "1.0", "tables": {}}))
+    record = _ModelRecord(id=uuid.uuid4(), content_json=json.dumps({"version": "1.0", "tables": {}}))
     assert SemanticQueryExecutionService.parse_unified_model_config_from_record(record) is None
 
 
 def test_parse_unified_model_config_from_record_requires_source_models_metadata() -> None:
     payload = {"version": "1.0", "semantic_models": [{"version": "1.0", "tables": {}}]}
-    record = _ModelRecord(content_json=json.dumps(payload))
+    record = _ModelRecord(id=uuid.uuid4(), content_json=json.dumps(payload))
 
     with pytest.raises(BusinessValidationError, match="source_models"):
         SemanticQueryExecutionService.parse_unified_model_config_from_record(record)
 
+
+def test_normalize_unified_relationship_payload_uses_snake_case_field_names() -> None:
+    relationship = UnifiedSemanticRelationshipRequest(
+        source_semantic_model_id=uuid.uuid4(),
+        source_field="sales.customer_id",
+        target_semantic_model_id=uuid.uuid4(),
+        target_field="marketing.customer_id",
+        relationship_type="inner",
+    )
+
+    normalized = _normalize_unified_relationship_payload(relationship)
+
+    assert "source_semantic_model_id" in normalized
+    assert "sourceSemanticModelId" not in normalized
+    assert normalized["target_field"] == "marketing.customer_id"
 
 def test_build_widget_query_payload_translates_filters_and_time_range() -> None:
     widget = {
@@ -255,6 +292,8 @@ async def test_execute_unified_query_routes_through_federated_tool() -> None:
     repo = _FakeSemanticModelRepository(
         {
             model_id: _ModelRecord(
+                id=model_id,
+                name='Orders',
                 content_yaml=source_model.yml_dump(),
                 connector_id=connector_id,
             )
@@ -289,9 +328,9 @@ async def test_execute_unified_query_routes_through_federated_tool() -> None:
     result = await service.execute_unified_query(
         organization_id=organization_id,
         project_id=None,
-        semantic_query=SemanticQuery(dimensions=["orders.id"], limit=10),
+        semantic_query=SemanticQuery(dimensions=["Orders__orders.id"], limit=10),
         semantic_model_ids=[model_id],
-        joins=None,
+        relationships=None,
         metrics=None,
     )
 
@@ -332,6 +371,8 @@ async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() 
     repo = _FakeSemanticModelRepository(
         {
             model_id: _ModelRecord(
+                id=model_id,
+                name='Inventory',
                 content_yaml=source_model.yml_dump(),
                 content_json=source_model.model_dump_json(exclude_none=True),
                 connector_id=legacy_connector_id,
@@ -380,15 +421,25 @@ async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() 
     result = await service.execute_unified_query(
         organization_id=organization_id,
         project_id=None,
-        semantic_query=SemanticQuery(dimensions=["orders.id"], limit=10),
+        semantic_query=SemanticQuery(dimensions=["Inventory__orders.id"], limit=10),
         semantic_model_ids=[model_id],
-        joins=None,
+        relationships=None,
         metrics=None,
     )
 
     assert result.response.data == [{"orders__id": 1}]
     workflow = tool.calls[0]["workflow"]
-    orders_binding = workflow["dataset"]["tables"]["orders"]
-    inventory_binding = workflow["dataset"]["tables"]["inventory"]
+    orders_binding = workflow["dataset"]["tables"]["Inventory__orders"]
+    inventory_binding = workflow["dataset"]["tables"]["Inventory__inventory"]
     assert orders_binding["metadata"]["source_kind"] == "file"
     assert inventory_binding["connector_id"] == str(warehouse_connector_id)
+
+
+
+
+
+
+
+
+
+

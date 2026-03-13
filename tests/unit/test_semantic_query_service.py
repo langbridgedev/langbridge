@@ -8,8 +8,10 @@ import pytest
 
 from langbridge.apps.api.langbridge_api.services.semantic.semantic_query_service import (
     SemanticQueryService,
+    _normalize_unified_relationship_payload,
 )
 from langbridge.packages.common.langbridge_common.contracts.semantic import (
+    UnifiedSemanticRelationshipRequest,
     UnifiedSemanticQueryRequest,
     UnifiedSemanticQueryResponse,
 )
@@ -78,3 +80,19 @@ async def test_query_unified_request_requires_execution_service() -> None:
                 query={"dimensions": ["orders.id"], "limit": 1},
             )
         )
+
+
+def test_normalize_unified_relationship_payload_uses_snake_case_field_names() -> None:
+    relationship = UnifiedSemanticRelationshipRequest(
+        source_semantic_model_id=uuid.uuid4(),
+        source_field="sales.customer_id",
+        target_semantic_model_id=uuid.uuid4(),
+        target_field="marketing.customer_id",
+        relationship_type="inner",
+    )
+
+    normalized = _normalize_unified_relationship_payload(relationship)
+
+    assert "source_semantic_model_id" in normalized
+    assert "sourceSemanticModelId" not in normalized
+    assert normalized["relationship_type"] == "inner"

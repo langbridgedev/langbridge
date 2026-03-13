@@ -137,17 +137,21 @@ export interface SemanticQueryJobResponse {
   jobStatus: string;
 }
 
-export interface UnifiedSemanticJoinPayload {
+export interface UnifiedSemanticSourceModelPayload {
+  id: string;
+  alias: string;
   name?: string | null;
-  sourceDataset?: string | null;
-  sourceField?: string | null;
-  targetDataset?: string | null;
-  targetField?: string | null;
+  description?: string | null;
+}
+
+export interface UnifiedSemanticRelationshipPayload {
+  name?: string | null;
+  sourceSemanticModelId: string;
+  sourceField: string;
+  targetSemanticModelId: string;
+  targetField: string;
   operator?: string | null;
-  from?: string | null;
-  to?: string | null;
-  type?: string;
-  on?: string | null;
+  relationshipType?: string;
 }
 
 export interface UnifiedSemanticMetricPayload {
@@ -160,7 +164,8 @@ export interface UnifiedSemanticQueryRequestPayload {
   projectId?: string | null;
   connectorId?: string | null;
   semanticModelIds: string[];
-  joins?: UnifiedSemanticJoinPayload[];
+  sourceModels?: UnifiedSemanticSourceModelPayload[];
+  relationships?: UnifiedSemanticRelationshipPayload[];
   metrics?: Record<string, UnifiedSemanticMetricPayload>;
   query: SemanticQueryPayload;
 }
@@ -170,7 +175,8 @@ export interface UnifiedSemanticQueryMetaRequestPayload {
   projectId?: string | null;
   connectorId?: string | null;
   semanticModelIds: string[];
-  joins?: UnifiedSemanticJoinPayload[];
+  sourceModels?: UnifiedSemanticSourceModelPayload[];
+  relationships?: UnifiedSemanticRelationshipPayload[];
   metrics?: Record<string, UnifiedSemanticMetricPayload>;
 }
 

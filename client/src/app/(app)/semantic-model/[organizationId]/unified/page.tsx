@@ -20,8 +20,9 @@ import {
 import type { SemanticModelRecord } from '@/orchestration/semanticModels/types';
 import { runUnifiedSemanticQuery } from '@/orchestration/semanticQuery';
 import type {
-  UnifiedSemanticJoinPayload,
+  UnifiedSemanticRelationshipPayload,
   UnifiedSemanticQueryResponse,
+  UnifiedSemanticSourceModelPayload,
 } from '@/orchestration/semanticQuery/types';
 
 type UnifiedSemanticModelPageProps = {
@@ -41,10 +42,10 @@ interface StructuredJoinDraft {
   id: string;
   name: string;
   type: JoinType;
-  leftTable: string;
+  leftOptionId: string;
   leftColumn: string;
   operator: JoinOperator;
-  rightTable: string;
+  rightOptionId: string;
   rightColumn: string;
 }
 
@@ -56,9 +57,11 @@ interface UnifiedMetricDraft {
 }
 
 interface TableOption {
+  optionId: string;
   tableKey: string;
   modelId: string;
   modelName: string;
+  modelAlias: string;
   columns: string[];
 }
 
@@ -66,6 +69,16 @@ const DEFAULT_VERSION = '1.0';
 const DEFAULT_PREVIEW_QUERY = '{\n  "measures": [],\n  "dimensions": [],\n  "limit": 25\n}';
 const JOIN_TYPES: JoinType[] = ['inner', 'left', 'right', 'full'];
 const JOIN_OPERATORS: JoinOperator[] = ['=', '!=', '>', '>=', '<', '<='];
+
+type UnifiedModelPersistencePayload = {
+  projectId?: string;
+  connectorId?: string | null;
+  name: string;
+  description?: string;
+  modelYaml: string;
+  autoGenerate: false;
+  sourceDatasetIds?: string[];
+};
 
 export default function UnifiedSemanticModelPage({
   params,
@@ -93,6 +106,9 @@ export default function UnifiedSemanticModelPage({
   const [selectedUnifiedModelId, setSelectedUnifiedModelId] = useState<string | null>(null);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [joinDrafts, setJoinDrafts] = useState<StructuredJoinDraft[]>([]);
+  const [sourceModelOverrides, setSourceModelOverrides] = useState<
+    Record<string, UnifiedSemanticSourceModelPayload>
+  >({});
   const [metrics, setMetrics] = useState<UnifiedMetricDraft[]>([]);
   const [formState, setFormState] = useState<FormState>({
     name: '',
@@ -121,6 +137,11 @@ export default function UnifiedSemanticModelPage({
     [unifiedModels, selectedUnifiedModelId],
   );
 
+  const sourceModelPayload = useMemo(
+    () => buildUnifiedSourceModels(selectedSourceModels, sourceModelOverrides),
+    [selectedSourceModels, sourceModelOverrides],
+  );
+
   const organizationName = useMemo(() => {
     if (!organizationId) {
       return 'Select an organization';
@@ -129,61 +150,15 @@ export default function UnifiedSemanticModelPage({
   }, [organizations, organizationId]);
 
   const tableOptions = useMemo<TableOption[]>(() => {
-    const options: TableOption[] = [];
-    selectedSourceModels.forEach((model) => {
-      const payload = safeParseYaml(model.contentYaml || '');
-      if (!payload) {
-        return;
-      }
-      const tables = payload.tables;
-      if (!isRecord(tables)) {
-        return;
-      }
-
-      Object.entries(tables).forEach(([tableKey, value]) => {
-        if (!isRecord(value)) {
-          return;
-        }
-        const dimensions = Array.isArray(value.dimensions) ? value.dimensions : [];
-        const measures = Array.isArray(value.measures) ? value.measures : [];
-        const columns = [
-          ...dimensions
-            .map((dimension) => (isRecord(dimension) ? readString(dimension.name) : null))
-            .filter((name): name is string => Boolean(name)),
-          ...measures
-            .map((measure) => (isRecord(measure) ? readString(measure.name) : null))
-            .filter((name): name is string => Boolean(name)),
-        ];
-
-        options.push({
-          tableKey,
-          modelId: model.id,
-          modelName: model.name,
-          columns: Array.from(new Set(columns)).sort(),
-        });
-      });
-    });
-    return options;
-  }, [selectedSourceModels]);
+    return buildTableOptions(selectedSourceModels, sourceModelPayload);
+  }, [selectedSourceModels, sourceModelPayload]);
 
   const tableOptionLookup = useMemo(() => {
     const lookup = new Map<string, TableOption>();
     tableOptions.forEach((option) => {
-      if (!lookup.has(option.tableKey)) {
-        lookup.set(option.tableKey, option);
-      }
+      lookup.set(option.optionId, option);
     });
     return lookup;
-  }, [tableOptions]);
-
-  const duplicateTableKeys = useMemo(() => {
-    const counts = new Map<string, number>();
-    tableOptions.forEach((option) => {
-      counts.set(option.tableKey, (counts.get(option.tableKey) || 0) + 1);
-    });
-    return Array.from(counts.entries())
-      .filter(([, count]) => count > 1)
-      .map(([tableKey]) => tableKey);
   }, [tableOptions]);
   const loadSourceModels = useCallback(async () => {
     if (!organizationId) {
@@ -249,8 +224,9 @@ export default function UnifiedSemanticModelPage({
     try {
       const payload = buildUnifiedPayload({
         formState,
-        selectedModels: selectedSourceModels,
+        sourceModels: sourceModelPayload,
         joinDrafts,
+        tableOptionLookup,
         metrics,
       });
       return {
@@ -266,12 +242,13 @@ export default function UnifiedSemanticModelPage({
             : 'Unable to build unified model YAML.',
       };
     }
-  }, [formState, selectedSourceModels, joinDrafts, metrics]);
+  }, [formState, sourceModelPayload, joinDrafts, metrics, tableOptionLookup]);
 
   const resetBuilder = useCallback(() => {
     setSelectedUnifiedModelId(null);
     setSelectedModelIds([]);
     setJoinDrafts([]);
+    setSourceModelOverrides({});
     setMetrics([]);
     setFormState({ name: '', description: '', version: DEFAULT_VERSION });
     setPreviewQueryJson(DEFAULT_PREVIEW_QUERY);
@@ -290,20 +267,20 @@ export default function UnifiedSemanticModelPage({
   };
 
   const addJoinDraft = () => {
-    const firstTable = tableOptions[0]?.tableKey || '';
-    const secondTable = tableOptions[1]?.tableKey || firstTable;
-    const firstLeftColumn = tableOptionLookup.get(firstTable)?.columns[0] || '';
-    const firstRightColumn = tableOptionLookup.get(secondTable)?.columns[0] || '';
+    const firstOptionId = tableOptions[0]?.optionId || '';
+    const secondOptionId = tableOptions[1]?.optionId || firstOptionId;
+    const firstLeftColumn = tableOptionLookup.get(firstOptionId)?.columns[0] || '';
+    const firstRightColumn = tableOptionLookup.get(secondOptionId)?.columns[0] || '';
     setJoinDrafts((current) => [
       ...current,
       {
         id: createId('join'),
         name: '',
         type: 'inner',
-        leftTable: firstTable,
+        leftOptionId: firstOptionId,
         leftColumn: firstLeftColumn,
         operator: '=',
-        rightTable: secondTable,
+        rightOptionId: secondOptionId,
         rightColumn: firstRightColumn,
       },
     ]);
@@ -319,14 +296,14 @@ export default function UnifiedSemanticModelPage({
           return draft;
         }
         const next = { ...draft, ...updates };
-        if (updates.leftTable !== undefined) {
-          const leftColumns = tableOptionLookup.get(next.leftTable)?.columns || [];
+        if (updates.leftOptionId !== undefined) {
+          const leftColumns = tableOptionLookup.get(next.leftOptionId)?.columns || [];
           if (!leftColumns.includes(next.leftColumn)) {
             next.leftColumn = leftColumns[0] || '';
           }
         }
-        if (updates.rightTable !== undefined) {
-          const rightColumns = tableOptionLookup.get(next.rightTable)?.columns || [];
+        if (updates.rightOptionId !== undefined) {
+          const rightColumns = tableOptionLookup.get(next.rightOptionId)?.columns || [];
           if (!rightColumns.includes(next.rightColumn)) {
             next.rightColumn = rightColumns[0] || '';
           }
@@ -345,25 +322,50 @@ export default function UnifiedSemanticModelPage({
     const sourceModelIds = readSourceModelIds(payload);
     const availableIds = new Set(sourceModels.map((entry) => entry.id));
     const normalizedSourceIds = sourceModelIds.filter((id) => availableIds.has(id));
+    const loadedSourceModels = parseUnifiedSourceModels(payload);
+    const loadedSourceModelLookup = loadedSourceModels.reduce<
+      Record<string, UnifiedSemanticSourceModelPayload>
+    >((acc, entry) => {
+      acc[entry.id] = entry;
+      return acc;
+    }, {});
 
     const relationshipPayload = Array.isArray(payload.relationships) ? payload.relationships : [];
     let parseFailures = 0;
     const loadedJoinDrafts: StructuredJoinDraft[] = relationshipPayload
       .filter((entry): entry is Record<string, unknown> => isRecord(entry))
       .map((entry) => {
-        const parsedJoin = parseJoinCondition(readString(entry.on) || '');
-        if (!parsedJoin) {
+        const sourceModelId =
+          readString(entry.source_semantic_model_id) ?? readString(entry.sourceSemanticModelId) ?? '';
+        const targetModelId =
+          readString(entry.target_semantic_model_id) ?? readString(entry.targetSemanticModelId) ?? '';
+        const parsedSourceField = parseFieldReference(
+          readString(entry.source_field) ?? readString(entry.sourceField) ?? '',
+        );
+        const parsedTargetField = parseFieldReference(
+          readString(entry.target_field) ?? readString(entry.targetField) ?? '',
+        );
+        if (!sourceModelId || !targetModelId || !parsedSourceField || !parsedTargetField) {
           parseFailures += 1;
         }
         return {
           id: createId('join'),
           name: readString(entry.name) || '',
-          type: normalizeJoinType(readString(entry.type)),
-          leftTable: parsedJoin?.leftTable || readString(entry.from) || '',
-          leftColumn: parsedJoin?.leftColumn || '',
-          operator: normalizeJoinOperator(parsedJoin?.operator),
-          rightTable: parsedJoin?.rightTable || readString(entry.to) || '',
-          rightColumn: parsedJoin?.rightColumn || '',
+          type:
+            normalizeJoinType(
+              readString(entry.relationship_type) ??
+                readString(entry.relationshipType) ??
+                readString(entry.type),
+            ),
+          leftOptionId: sourceModelId && parsedSourceField
+            ? buildTableOptionId(sourceModelId, parsedSourceField.tableKey)
+            : '',
+          leftColumn: parsedSourceField?.fieldName || '',
+          operator: normalizeJoinOperator(readString(entry.operator)),
+          rightOptionId: targetModelId && parsedTargetField
+            ? buildTableOptionId(targetModelId, parsedTargetField.tableKey)
+            : '',
+          rightColumn: parsedTargetField?.fieldName || '',
         };
       });
 
@@ -393,6 +395,7 @@ export default function UnifiedSemanticModelPage({
       version: readString(payload.version) || DEFAULT_VERSION,
     });
     setSelectedModelIds(normalizedSourceIds);
+    setSourceModelOverrides(loadedSourceModelLookup);
     setJoinDrafts(loadedJoinDrafts);
     setMetrics(loadedMetrics);
     setPreviewResult(null);
@@ -400,7 +403,7 @@ export default function UnifiedSemanticModelPage({
 
     if (parseFailures > 0) {
       setNotice(
-        `${parseFailures} join condition${parseFailures > 1 ? 's were' : ' was'} not in simple column format and needs re-selection.`,
+        `${parseFailures} relationship${parseFailures > 1 ? 's could' : ' could'} not be fully resolved and need re-selection.`,
       );
     } else {
       setNotice('Unified model loaded into the builder.');
@@ -417,12 +420,6 @@ export default function UnifiedSemanticModelPage({
       setError('Select at least one source semantic model.');
       return;
     }
-    if (duplicateTableKeys.length > 0) {
-      setError(
-        `Resolve duplicate table keys before saving: ${duplicateTableKeys.join(', ')}.`,
-      );
-      return;
-    }
 
     setSaveLoading(true);
     setError(null);
@@ -431,38 +428,33 @@ export default function UnifiedSemanticModelPage({
     try {
       const payload = buildUnifiedPayload({
         formState,
-        selectedModels: selectedSourceModels,
+        sourceModels: sourceModelPayload,
         joinDrafts,
+        tableOptionLookup,
         metrics,
       });
       const modelYaml = yaml.dump(payload, { noRefs: true, sortKeys: false });
-      const fallbackConnectorId = selectedSourceModels[0].connectorId;
-      const connectorId = selectedUnifiedModel?.connectorId || fallbackConnectorId;
-
-      if (!connectorId) {
-        throw new Error('Unable to infer connector id for unified model persistence.');
-      }
+      const persistencePayload = buildUnifiedModelPersistencePayload({
+        selectedUnifiedModel,
+        selectedSourceModels,
+        selectedProjectId,
+        formState,
+        modelYaml,
+        payloadName: payload.name,
+      });
 
       if (selectedUnifiedModelId) {
-        const updated = await updateSemanticModel(selectedUnifiedModelId, organizationId, {
-          projectId: selectedProjectId ?? undefined,
-          connectorId,
-          name: formState.name || payload.name,
-          description: formState.description || undefined,
-          modelYaml,
-          autoGenerate: false,
-        });
+        const updated = await updateSemanticModel(
+          selectedUnifiedModelId,
+          organizationId,
+          persistencePayload,
+        );
         setSelectedUnifiedModelId(updated.id);
         setNotice('Unified model updated.');
       } else {
         const created = await createSemanticModel(organizationId, {
           organizationId,
-          projectId: selectedProjectId ?? undefined,
-          connectorId,
-          name: formState.name || payload.name,
-          description: formState.description || undefined,
-          modelYaml,
-          autoGenerate: false,
+          ...persistencePayload,
         });
         setSelectedUnifiedModelId(created.id);
         setNotice('Unified model saved.');
@@ -507,7 +499,8 @@ export default function UnifiedSemanticModelPage({
         organizationId,
         projectId: selectedProjectId ?? undefined,
         semanticModelIds: selectedModelIds,
-        joins: buildUnifiedJoinPayload(joinDrafts),
+        sourceModels: sourceModelPayload,
+        relationships: buildUnifiedRelationshipPayload(joinDrafts, tableOptionLookup),
         metrics: buildUnifiedMetricPayload(metrics),
         query: parsedQuery,
       });
@@ -532,7 +525,7 @@ export default function UnifiedSemanticModelPage({
             Cross-source model composer
           </h1>
           <p className="max-w-3xl text-sm">
-            Compose unified models from existing semantic models, define joins with guided dropdowns,
+            Compose unified models from existing semantic models, define cross-model relationships with guided dropdowns,
             and preview cross-source semantic queries executed on the unified query runtime.
           </p>
           <p className="text-xs text-[color:var(--text-muted)]">
@@ -662,31 +655,30 @@ export default function UnifiedSemanticModelPage({
                   </div>
                 )}
 
-                {duplicateTableKeys.length > 0 ? (
-                  <div className="rounded-xl border border-amber-300 bg-amber-100/60 px-3 py-2 text-xs text-amber-900">
-                    Duplicate table keys detected across selected models: {duplicateTableKeys.join(', ')}.
-                    Rename table keys before creating unified joins.
-                  </div>
-                ) : null}
+                <div className="rounded-xl border border-sky-300 bg-sky-100/60 px-3 py-2 text-xs text-sky-900">
+                  Relationships are scoped by source semantic model, so repeated dataset keys across domains are allowed.
+                </div>
               </div>
 
               <div className="space-y-3 rounded-2xl border border-[color:var(--panel-border)] bg-[color:var(--panel-alt)] p-4">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-base font-semibold text-[color:var(--text-primary)]">Join relationships</h3>
+                  <h3 className="text-base font-semibold text-[color:var(--text-primary)]">Model relationships</h3>
                   <Button type="button" size="sm" variant="outline" onClick={addJoinDraft}>
-                    Add join
+                    Add relationship
                   </Button>
                 </div>
 
                 {joinDrafts.length === 0 ? (
                   <p className="text-sm text-[color:var(--text-muted)]">
-                    Add joins by selecting table and column pairs. Manual SQL join expressions are not required.
+                    Add relationships by selecting a source model field and a target model field. Manual SQL join expressions are not required.
                   </p>
                 ) : (
                   <div className="space-y-3">
                     {joinDrafts.map((draft) => {
-                      const leftColumns = tableOptionLookup.get(draft.leftTable)?.columns || [];
-                      const rightColumns = tableOptionLookup.get(draft.rightTable)?.columns || [];
+                      const leftOption = tableOptionLookup.get(draft.leftOptionId);
+                      const rightOption = tableOptionLookup.get(draft.rightOptionId);
+                      const leftColumns = leftOption?.columns || [];
+                      const rightColumns = rightOption?.columns || [];
                       return (
                         <div
                           key={draft.id}
@@ -730,28 +722,28 @@ export default function UnifiedSemanticModelPage({
 
                           <div className="grid gap-3 md:grid-cols-2">
                             <Select
-                              value={draft.leftTable}
+                              value={draft.leftOptionId}
                               onChange={(event) =>
-                                updateJoinDraft(draft.id, { leftTable: event.target.value })
+                                updateJoinDraft(draft.id, { leftOptionId: event.target.value })
                               }
                             >
-                              <option value="">Left table</option>
+                              <option value="">Source dataset</option>
                               {tableOptions.map((option) => (
-                                <option key={`left-${option.modelId}-${option.tableKey}`} value={option.tableKey}>
-                                  {option.tableKey} ({option.modelName})
+                                <option key={`left-${option.optionId}`} value={option.optionId}>
+                                  {option.modelAlias}.{option.tableKey} ({option.modelName})
                                 </option>
                               ))}
                             </Select>
                             <Select
-                              value={draft.rightTable}
+                              value={draft.rightOptionId}
                               onChange={(event) =>
-                                updateJoinDraft(draft.id, { rightTable: event.target.value })
+                                updateJoinDraft(draft.id, { rightOptionId: event.target.value })
                               }
                             >
-                              <option value="">Right table</option>
+                              <option value="">Target dataset</option>
                               {tableOptions.map((option) => (
-                                <option key={`right-${option.modelId}-${option.tableKey}`} value={option.tableKey}>
-                                  {option.tableKey} ({option.modelName})
+                                <option key={`right-${option.optionId}`} value={option.optionId}>
+                                  {option.modelAlias}.{option.tableKey} ({option.modelName})
                                 </option>
                               ))}
                             </Select>
@@ -763,9 +755,9 @@ export default function UnifiedSemanticModelPage({
                               onChange={(event) =>
                                 updateJoinDraft(draft.id, { leftColumn: event.target.value })
                               }
-                              disabled={!draft.leftTable}
+                              disabled={!draft.leftOptionId}
                             >
-                              <option value="">Left column</option>
+                              <option value="">Source field</option>
                               {leftColumns.map((column) => (
                                 <option key={`left-col-${draft.id}-${column}`} value={column}>
                                   {column}
@@ -791,9 +783,9 @@ export default function UnifiedSemanticModelPage({
                               onChange={(event) =>
                                 updateJoinDraft(draft.id, { rightColumn: event.target.value })
                               }
-                              disabled={!draft.rightTable}
+                              disabled={!draft.rightOptionId}
                             >
-                              <option value="">Right column</option>
+                              <option value="">Target field</option>
                               {rightColumns.map((column) => (
                                 <option key={`right-col-${draft.id}-${column}`} value={column}>
                                   {column}
@@ -802,11 +794,11 @@ export default function UnifiedSemanticModelPage({
                             </Select>
                           </div>
                           <p className="text-xs text-[color:var(--text-muted)]">
-                            Condition preview:{' '}
+                            Relationship preview:{' '}
                             <span className="font-mono text-[color:var(--text-secondary)]">
-                              {draft.leftTable && draft.leftColumn && draft.rightTable && draft.rightColumn
-                                ? `${draft.leftTable}.${draft.leftColumn} ${draft.operator} ${draft.rightTable}.${draft.rightColumn}`
-                                : 'Select both tables and columns'}
+                              {leftOption && draft.leftColumn && rightOption && draft.rightColumn
+                                ? `${leftOption.modelAlias}.${leftOption.tableKey}.${draft.leftColumn} ${draft.operator} ${rightOption.modelAlias}.${rightOption.tableKey}.${draft.rightColumn}`
+                                : 'Select both source and target fields'}
                             </span>
                           </p>
                         </div>
@@ -1058,76 +1050,252 @@ function resolveError(error: unknown): string {
 }
 
 function readSourceModelIds(payload: Record<string, unknown>): string[] {
-  const sourceModels = Array.isArray(payload.source_models) ? payload.source_models : [];
-  return sourceModels
-    .map((entry) => {
-      if (!isRecord(entry)) {
-        return null;
+  return parseUnifiedSourceModels(payload).map((entry) => entry.id);
+}
+
+export function collectUnifiedSourceDatasetIds(models: SemanticModelRecord[]): string[] {
+  const seen = new Set<string>();
+  const sourceDatasetIds: string[] = [];
+  models.forEach((model) => {
+    (model.sourceDatasetIds || []).forEach((datasetId) => {
+      if (!datasetId || seen.has(datasetId)) {
+        return;
       }
-      return readString(entry.id);
-    })
-    .filter((entry): entry is string => Boolean(entry));
+      seen.add(datasetId);
+      sourceDatasetIds.push(datasetId);
+    });
+  });
+  return sourceDatasetIds;
+}
+
+export function buildUnifiedModelPersistencePayload(input: {
+  selectedUnifiedModel: SemanticModelRecord | null;
+  selectedSourceModels: SemanticModelRecord[];
+  selectedProjectId?: string | null;
+  formState: FormState;
+  modelYaml: string;
+  payloadName: string;
+}): UnifiedModelPersistencePayload {
+  const { selectedUnifiedModel, selectedSourceModels, selectedProjectId, formState, modelYaml, payloadName } = input;
+  const sourceDatasetIds = collectUnifiedSourceDatasetIds(selectedSourceModels);
+
+  return {
+    projectId: selectedProjectId ?? undefined,
+    connectorId: selectedUnifiedModel?.connectorId ?? undefined,
+    name: formState.name || payloadName,
+    description: formState.description || undefined,
+    modelYaml,
+    autoGenerate: false,
+    sourceDatasetIds: sourceDatasetIds.length > 0 ? sourceDatasetIds : undefined,
+  };
 }
 
 function buildUnifiedPayload(input: {
   formState: FormState;
-  selectedModels: SemanticModelRecord[];
+  sourceModels: UnifiedSemanticSourceModelPayload[];
   joinDrafts: StructuredJoinDraft[];
+  tableOptionLookup: Map<string, TableOption>;
   metrics: UnifiedMetricDraft[];
 }) {
-  const { formState, selectedModels, joinDrafts, metrics } = input;
-  if (selectedModels.length === 0) {
+  const { formState, sourceModels, joinDrafts, tableOptionLookup, metrics } = input;
+  if (sourceModels.length === 0) {
     throw new Error('Select at least one source model.');
   }
 
-  const parsedModels = selectedModels.map((model, index) => {
-    const parsed = safeParseYaml(model.contentYaml || '');
-    if (!parsed) {
-      throw new Error(`Semantic model "${model.name}" has invalid YAML.`);
-    }
-
-    const parsedName = readString(parsed.name);
-    return {
-      ...parsed,
-      name: parsedName || model.name || `model_${index + 1}`,
-    };
-  });
-
-  const name = formState.name || parsedModels[0].name || 'unified_model';
-  const joinPayload = buildUnifiedJoinPayload(joinDrafts);
+  const name = formState.name || sourceModels[0]?.name || sourceModels[0]?.alias || 'unified_model';
+  const relationshipPayload = buildUnifiedYamlRelationshipPayload(joinDrafts, tableOptionLookup);
   const metricPayload = buildUnifiedMetricPayload(metrics);
 
   return {
     name,
     version: formState.version || DEFAULT_VERSION,
     description: formState.description || undefined,
-    source_models: selectedModels.map((model) => ({
-      id: model.id,
-      connector_id: model.connectorId,
-      name: model.name,
+    source_models: sourceModels.map((sourceModel) => ({
+      id: sourceModel.id,
+      alias: sourceModel.alias,
+      name: sourceModel.name || undefined,
+      description: sourceModel.description || undefined,
     })),
-    semantic_models: parsedModels,
-    relationships: joinPayload.length > 0 ? joinPayload : undefined,
+    relationships: relationshipPayload.length > 0 ? relationshipPayload : undefined,
     metrics: Object.keys(metricPayload).length > 0 ? metricPayload : undefined,
   };
 }
 
-function buildUnifiedJoinPayload(joinDrafts: StructuredJoinDraft[]): UnifiedSemanticJoinPayload[] {
-  return joinDrafts
-    .filter(
-      (draft) =>
-        draft.leftTable &&
-        draft.leftColumn &&
-        draft.rightTable &&
-        draft.rightColumn,
-    )
-    .map((draft) => ({
-      name: draft.name || undefined,
-      from: draft.leftTable,
-      to: draft.rightTable,
-      type: draft.type,
-      on: `${draft.leftTable}.${draft.leftColumn} ${draft.operator} ${draft.rightTable}.${draft.rightColumn}`,
-    }));
+function parseUnifiedSourceModels(payload: Record<string, unknown>): UnifiedSemanticSourceModelPayload[] {
+  const sourceModelsValue = Array.isArray(payload.source_models)
+    ? payload.source_models
+    : Array.isArray(payload.sourceModels)
+      ? payload.sourceModels
+      : [];
+  return sourceModelsValue.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const id = readString(entry.id);
+    const alias = readString(entry.alias);
+    if (!id || !alias) {
+      return [];
+    }
+    return [
+      {
+        id,
+        alias,
+        name: readString(entry.name) ?? undefined,
+        description: readString(entry.description) ?? undefined,
+      },
+    ];
+  });
+}
+
+function buildUnifiedSourceModels(
+  selectedModels: SemanticModelRecord[],
+  overrides: Record<string, UnifiedSemanticSourceModelPayload>,
+): UnifiedSemanticSourceModelPayload[] {
+  const seenAliases = new Set<string>();
+  return selectedModels.map((model, index) => {
+    const override = overrides[model.id];
+    const baseAlias = sanitizeSourceModelAlias(override?.alias || model.name || `model_${index + 1}`);
+    let alias = baseAlias || `model_${index + 1}`;
+    let suffix = 2;
+    while (seenAliases.has(alias)) {
+      alias = `${baseAlias || 'model'}_${suffix}`;
+      suffix += 1;
+    }
+    seenAliases.add(alias);
+    return {
+      id: model.id,
+      alias,
+      name: override?.name ?? model.name,
+      description: override?.description ?? model.description ?? undefined,
+    };
+  });
+}
+
+function buildTableOptions(
+  selectedModels: SemanticModelRecord[],
+  sourceModels: UnifiedSemanticSourceModelPayload[],
+): TableOption[] {
+  const aliasLookup = new Map(sourceModels.map((entry) => [entry.id, entry.alias]));
+  const options: TableOption[] = [];
+
+  selectedModels.forEach((model) => {
+    const payload = safeParseYaml(model.contentYaml || '');
+    if (!payload) {
+      return;
+    }
+    const datasets = isRecord(payload.datasets)
+      ? payload.datasets
+      : isRecord(payload.tables)
+        ? payload.tables
+        : null;
+    if (!datasets) {
+      return;
+    }
+
+    Object.entries(datasets).forEach(([tableKey, value]) => {
+      if (!isRecord(value)) {
+        return;
+      }
+      const dimensions = Array.isArray(value.dimensions) ? value.dimensions : [];
+      const measures = Array.isArray(value.measures) ? value.measures : [];
+      const columns = [
+        ...dimensions
+          .map((dimension) => (isRecord(dimension) ? readString(dimension.name) : null))
+          .filter((name): name is string => Boolean(name)),
+        ...measures
+          .map((measure) => (isRecord(measure) ? readString(measure.name) : null))
+          .filter((name): name is string => Boolean(name)),
+      ];
+
+      options.push({
+        optionId: buildTableOptionId(model.id, tableKey),
+        tableKey,
+        modelId: model.id,
+        modelName: model.name,
+        modelAlias: aliasLookup.get(model.id) || model.name,
+        columns: Array.from(new Set(columns)).sort(),
+      });
+    });
+  });
+
+  return options;
+}
+
+function buildUnifiedRelationshipPayload(
+  joinDrafts: StructuredJoinDraft[],
+  tableOptionLookup: Map<string, TableOption>,
+): UnifiedSemanticRelationshipPayload[] {
+  return joinDrafts.flatMap((draft) => {
+    const resolved = resolveRelationshipDraft(draft, tableOptionLookup);
+    if (!resolved) {
+      return [];
+    }
+    return [
+      {
+        name: resolved.name,
+        sourceSemanticModelId: resolved.sourceSemanticModelId,
+        sourceField: resolved.sourceField,
+        targetSemanticModelId: resolved.targetSemanticModelId,
+        targetField: resolved.targetField,
+        relationshipType: resolved.relationshipType,
+        operator: resolved.operator,
+      },
+    ];
+  });
+}
+
+function buildUnifiedYamlRelationshipPayload(
+  joinDrafts: StructuredJoinDraft[],
+  tableOptionLookup: Map<string, TableOption>,
+): Array<Record<string, string>> {
+  return joinDrafts.flatMap((draft) => {
+    const resolved = resolveRelationshipDraft(draft, tableOptionLookup);
+    if (!resolved) {
+      return [];
+    }
+    const output: Record<string, string> = {
+      source_semantic_model_id: resolved.sourceSemanticModelId,
+      source_field: resolved.sourceField,
+      target_semantic_model_id: resolved.targetSemanticModelId,
+      target_field: resolved.targetField,
+      relationship_type: resolved.relationshipType,
+      operator: resolved.operator,
+    };
+    if (resolved.name) {
+      output.name = resolved.name;
+    }
+    return [output];
+  });
+}
+
+function resolveRelationshipDraft(
+  draft: StructuredJoinDraft,
+  tableOptionLookup: Map<string, TableOption>,
+):
+  | {
+      name?: string;
+      sourceSemanticModelId: string;
+      sourceField: string;
+      targetSemanticModelId: string;
+      targetField: string;
+      relationshipType: JoinType;
+      operator: JoinOperator;
+    }
+  | null {
+  const leftOption = tableOptionLookup.get(draft.leftOptionId);
+  const rightOption = tableOptionLookup.get(draft.rightOptionId);
+  if (!leftOption || !rightOption || !draft.leftColumn || !draft.rightColumn) {
+    return null;
+  }
+  return {
+    name: draft.name || undefined,
+    sourceSemanticModelId: leftOption.modelId,
+    sourceField: buildFieldReference(leftOption.tableKey, draft.leftColumn),
+    targetSemanticModelId: rightOption.modelId,
+    targetField: buildFieldReference(rightOption.tableKey, draft.rightColumn),
+    relationshipType: draft.type,
+    operator: draft.operator,
+  };
 }
 
 function buildUnifiedMetricPayload(metrics: UnifiedMetricDraft[]) {
@@ -1146,32 +1314,28 @@ function buildUnifiedMetricPayload(metrics: UnifiedMetricDraft[]) {
   );
 }
 
-function parseJoinCondition(
-  condition: string,
-):
-  | {
-      leftTable: string;
-      leftColumn: string;
-      operator: JoinOperator;
-      rightTable: string;
-      rightColumn: string;
-    }
-  | null {
-  const match = condition.match(
-    /^\s*([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)\s*(=|!=|>=|<=|>|<)\s*([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)\s*$/,
-  );
+function buildTableOptionId(modelId: string, tableKey: string): string {
+  return `${modelId}::${tableKey}`;
+}
+
+function buildFieldReference(tableKey: string, fieldName: string): string {
+  return `${tableKey}.${fieldName}`;
+}
+
+function parseFieldReference(value: string): { tableKey: string; fieldName: string } | null {
+  const match = value.match(/^\s*([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)\s*$/);
   if (!match) {
     return null;
   }
-
-  const operator = normalizeJoinOperator(match[3]);
   return {
-    leftTable: match[1],
-    leftColumn: match[2],
-    operator,
-    rightTable: match[4],
-    rightColumn: match[5],
+    tableKey: match[1],
+    fieldName: match[2],
   };
+}
+
+function sanitizeSourceModelAlias(value: string): string {
+  const normalized = value.replace(/[^0-9A-Za-z_]+/g, '_').replace(/^_+|_+$/g, '');
+  return normalized || 'model';
 }
 function normalizeJoinType(value?: string | null): JoinType {
   if (value === 'left' || value === 'right' || value === 'full') {
