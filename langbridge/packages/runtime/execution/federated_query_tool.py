@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from langbridge.packages.common.langbridge_common.config import settings
-from langbridge.packages.common.langbridge_common.contracts.connectors import ConnectorResponse
+from langbridge.packages.contracts.connectors import ConnectorResponse
 from langbridge.packages.common.langbridge_common.db.connector import APIConnector, DatabaseConnector
 from langbridge.packages.common.langbridge_common.repositories.connector_repository import ConnectorRepository
 from langbridge.packages.connectors.langbridge_connectors.api import (

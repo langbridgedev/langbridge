@@ -7,6 +7,6 @@
 #     monkeypatch.setenv("WORKER_POLL_INTERVAL", "0")
 #     monkeypatch.setenv("WORKER_BROKER", "noop")
 #     monkeypatch.setattr(sys, "argv", ["worker"])
-#     from langbridge.apps.worker.langbridge_worker import main as worker_main
+#     from langbridge.apps.runtime_worker import main as worker_main
 
 #     worker_main.main()

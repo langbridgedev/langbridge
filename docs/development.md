@@ -12,11 +12,11 @@ This page now points to the split development docs.
 
 ## Quick Commands
 
-- API: `uvicorn langbridge.apps.api.langbridge_api.main:app --reload`
-- Worker: `python -m langbridge.apps.worker.langbridge_worker.main`
-- UI: `cd client && npm install && npm run dev`
+- API: `cd ../langbridge-cloud && python scripts/export_control_plane_openapi.py && PYTHONPATH=apps/api uvicorn langbridge_cloud_api.main:app --reload`
+- Worker: `python -m langbridge.apps.runtime_worker.main`
+- Web app: `cd ../langbridge-cloud/apps/web && npm install && npm run dev`
 - Unit tests: `pytest -q tests/unit`
-- Frontend lint: `cd client && npm run lint`
+- Web lint: `cd ../langbridge-cloud/apps/web && npm run lint`
 
 ## Notes
 

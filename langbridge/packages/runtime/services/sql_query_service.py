@@ -8,8 +8,8 @@ import sqlglot
 from sqlglot import exp
 
 from langbridge.packages.common.langbridge_common.config import settings
-from langbridge.packages.common.langbridge_common.contracts.connectors import ConnectorResponse
-from langbridge.packages.common.langbridge_common.contracts.jobs.sql_job import (
+from langbridge.packages.contracts.connectors import ConnectorResponse
+from langbridge.packages.contracts.jobs.sql_job import (
     CreateSqlJobRequest,
 )
 from langbridge.packages.common.langbridge_common.db.sql import (

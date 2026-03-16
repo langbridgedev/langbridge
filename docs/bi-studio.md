@@ -13,10 +13,10 @@ It is intentionally not the primary product surface. Langbridge's core product d
 
 ## UI Entry Points
 
-- `client/src/app/(app)/bi/page.tsx`
-- `client/src/app/(app)/bi/[organizationId]/page.tsx`
-- `client/src/orchestration/semanticQuery/*`
-- `client/src/orchestration/dashboards/*`
+- `langbridge-cloud/apps/web/src/app/(app)/bi/page.tsx`
+- `langbridge-cloud/apps/web/src/app/(app)/bi/[organizationId]/page.tsx`
+- `langbridge-cloud/apps/web/src/orchestration/semanticQuery/*`
+- `langbridge-cloud/apps/web/src/orchestration/dashboards/*`
 
 ## Notes
 

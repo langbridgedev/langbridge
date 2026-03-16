@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from langbridge.packages.common.langbridge_common.contracts.semantic import SemanticQueryResponse
+from langbridge.packages.contracts.semantic import SemanticQueryResponse
 from langbridge.packages.semantic.langbridge_semantic.query import SemanticQuery
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from langbridge.packages.common.langbridge_common.contracts.connectors import (
+from langbridge.packages.contracts.connectors import (
     ConnectorResponse,
     SecretReference,
 )

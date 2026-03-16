@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from langbridge.apps.worker.langbridge_worker import main as worker_main
+from langbridge.apps.runtime_worker import main as worker_main
 from langbridge.packages.messaging.langbridge_messaging.broker.base import (
     MessageReceipt,
     ReceivedMessage,

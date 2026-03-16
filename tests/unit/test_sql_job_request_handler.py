@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from langbridge.apps.worker.langbridge_worker.handlers.query.sql_job_request_handler import (
+from langbridge.apps.runtime_worker.handlers.query.sql_job_request_handler import (
     SqlJobRequestHandler,
 )
 from langbridge.packages.common.langbridge_common.contracts.connectors import (

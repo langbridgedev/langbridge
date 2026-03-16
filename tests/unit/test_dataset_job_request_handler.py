@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from langbridge.apps.worker.langbridge_worker.handlers.query.dataset_job_request_handler import (
+from langbridge.apps.runtime_worker.handlers.query.dataset_job_request_handler import (
     DatasetJobRequestHandler,
 )
 from langbridge.packages.common.langbridge_common.config import settings

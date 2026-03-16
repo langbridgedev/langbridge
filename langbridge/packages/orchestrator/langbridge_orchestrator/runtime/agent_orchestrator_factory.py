@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from langbridge.packages.common.langbridge_common.contracts.semantic import SemanticModelRecordResponse
+from langbridge.packages.contracts.semantic import SemanticModelRecordResponse
 from langbridge.packages.common.langbridge_common.db.dataset import DatasetRecord
 from langbridge.packages.common.langbridge_common.errors.application_errors import BusinessValidationError
 from langbridge.packages.common.langbridge_common.interfaces.agent_events import IAgentEventEmitter

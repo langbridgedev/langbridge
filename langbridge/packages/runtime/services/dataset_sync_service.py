@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from langbridge.packages.common.langbridge_common.config import settings
-from langbridge.packages.common.langbridge_common.contracts.connectors import (
+from langbridge.packages.contracts.connectors import (
     ConnectorSyncMode,
     ConnectorSyncStatus,
 )

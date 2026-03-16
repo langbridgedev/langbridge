@@ -45,67 +45,36 @@ jobs:
           pip install -r langbridge/requirements.txt
           pip install pytest
 
+      - name: Check Runtime Boundary
+        run: python scripts/check_runtime_boundary.py
+
+      - name: Compile runtime worker assembly
+        run: python -m compileall langbridge/apps/runtime_worker
+
       - name: Run backend tests
         run: |
           mkdir -p .cache/ci
           pytest -q tests/unit
 
-  frontend-checks:
-    name: Frontend Lint & Build
+  runtime-package-builds:
+    name: Runtime Package Builds
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: client
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: client/package-lock.json
+          python-version: "3.11"
 
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Lint frontend
-        run: npm run lint
-
-      - name: Build frontend
-        run: npm run build
-
-  docker-build:
-    name: Docker Build (${{ matrix.name }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: api
-            context: .
-            file: langbridge/Dockerfile.api
-          - name: worker
-            context: .
-            file: langbridge/Dockerfile.worker
-          - name: migrate
-            context: .
-            file: langbridge/Dockerfile.migrate
-          - name: client
-            context: ./client
-            file: client/Dockerfile
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build image
+      - name: Install packaging tooling
         run: |
-          docker buildx build \
-            --file "${{ matrix.file }}" \
-            --tag "langbridge-${{ matrix.name }}:ci" \
-            --load \
-            "${{ matrix.context }}"
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build runtime packages
+        run: python scripts/build_runtime_packages.py --version 0.1.0
+
+      - name: Validate built package metadata
+        run: python -m twine check dist/runtime-packages/*

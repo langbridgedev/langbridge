@@ -6,13 +6,20 @@ build-backend = "setuptools.build_meta"
 name = "langbridge-runtime"
 version = "0.1.0"
 description = "Langbridge execution runtime"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "langbridge-common @ file:../common",
-  "langbridge-connectors @ file:../connectors",
-  "langbridge-semantic @ file:../semantic",
-  "langbridge-orchestrator @ file:../orchestrator",
-  "langbridge-messaging @ file:../messaging",
+  "langbridge-contracts==0.1.0",
+  "langbridge-common==0.1.0",
+  "langbridge-connectors==0.1.0",
+  "langbridge-federation==0.1.0",
+  "langbridge-semantic==0.1.0",
+  "langbridge-orchestrator==0.1.0",
+  "langbridge-messaging==0.1.0",
+  "duckdb==1.2.1",
+  "faiss-cpu==1.8.0",
+  "mcp==1.17.0",
+  "qdrant-client==1.9.1",
 ]
 
 [tool.setuptools.packages.find]

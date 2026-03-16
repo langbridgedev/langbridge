@@ -2,22 +2,23 @@
 
 ## Worker Role
 
-Worker is the execution plane runtime for:
+Runtime worker is the execution plane runtime for:
 - SQL jobs
 - Semantic query jobs
-- Agent/copilot job handlers
+- Dataset preview/profile/ingest jobs
+- Connector sync jobs
 - Federated planning/execution integration
 
 ## Run Worker
 
 ```bash
-python -m langbridge.apps.worker.langbridge_worker.main
+python -m langbridge.apps.runtime_worker.main
 ```
 
 Reload mode:
 
 ```bash
-python -m langbridge.apps.worker.langbridge_worker.main --reload
+python -m langbridge.apps.runtime_worker.main --reload
 ```
 
 ## Key Environment Variables
@@ -44,8 +45,8 @@ Worker will register and use edge task pull/ack/result/fail transport.
 
 ## Main Code Paths
 
-- Runtime loop: `langbridge/apps/worker/langbridge_worker/main.py`
-- Dispatcher: `langbridge/apps/worker/langbridge_worker/handlers/dispatcher.py`
-- SQL job handler: `langbridge/apps/worker/langbridge_worker/handlers/query/sql_job_request_handler.py`
-- Semantic handler: `langbridge/apps/worker/langbridge_worker/handlers/query/semantic_query_request_handler.py`
-- Federated tool: `langbridge/apps/worker/langbridge_worker/tools/federated_query_tool.py`
+- Runtime loop: `langbridge/apps/runtime_worker/main.py`
+- Dispatcher: `langbridge/apps/runtime_worker/handlers/dispatcher.py`
+- SQL job handler: `langbridge/apps/runtime_worker/handlers/query/sql_job_request_handler.py`
+- Semantic handler: `langbridge/apps/runtime_worker/handlers/query/semantic_query_request_handler.py`
+- Federated tool: `langbridge/packages/runtime/execution/federated_query_tool.py`

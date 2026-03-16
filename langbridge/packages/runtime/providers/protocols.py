@@ -3,10 +3,13 @@ from __future__ import annotations
 import uuid
 from typing import Any, Protocol
 
-from langbridge.packages.common.langbridge_common.contracts.connectors import SecretReference
-from langbridge.packages.common.langbridge_common.contracts.datasets import DatasetResponse, DatasetColumnResponse, DatasetPolicyResponse
-from langbridge.packages.common.langbridge_common.contracts.semantic import SemanticModelRecordResponse
-from langbridge.packages.common.langbridge_common.contracts.connectors import ConnectorResponse
+from langbridge.packages.contracts.connectors import ConnectorResponse, SecretReference
+from langbridge.packages.contracts.datasets import (
+    DatasetColumnResponse,
+    DatasetPolicyResponse,
+    DatasetResponse,
+)
+from langbridge.packages.contracts.semantic import SemanticModelRecordResponse
 
 
 class DatasetMetadataProvider(Protocol):

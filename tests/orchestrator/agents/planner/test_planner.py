@@ -79,6 +79,15 @@ def test_clarify_route_for_ambiguous_request(planner: PlanningAgent) -> None:
     assert "clarifying_question" in plan.steps[0].input
 
 
+def test_short_entity_query_routes_to_analyst(planner: PlanningAgent) -> None:
+    request = PlannerRequest(question="Show me my customers")
+    plan = planner.plan(request)
+
+    assert plan.route == "SimpleAnalyst"
+    assert len(plan.steps) == 1
+    assert plan.steps[0].agent == "Analyst"
+
+
 def test_max_steps_constraint_respected(planner: PlanningAgent) -> None:
     request = PlannerRequest(
         question="Please visualise quarterly revenue by product line.",

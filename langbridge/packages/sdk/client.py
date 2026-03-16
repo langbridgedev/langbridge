@@ -11,25 +11,25 @@ from typing import Any, Protocol
 import httpx
 from pydantic import Field
 
-from langbridge.packages.common.langbridge_common.contracts.base import _Base
-from langbridge.packages.common.langbridge_common.contracts.datasets import (
+from langbridge.packages.contracts.base import _Base
+from langbridge.packages.contracts.datasets import (
     DatasetListResponse,
     DatasetPreviewColumn,
     DatasetPreviewRequest,
 )
-from langbridge.packages.common.langbridge_common.contracts.jobs.agent_job import (
+from langbridge.packages.contracts.jobs.agent_job import (
     AgentJobStateResponse,
     CreateAgentJobRequest,
     JobEventResponse,
 )
-from langbridge.packages.common.langbridge_common.contracts.jobs.dataset_job import (
+from langbridge.packages.contracts.jobs.dataset_job import (
     CreateDatasetPreviewJobRequest,
 )
-from langbridge.packages.common.langbridge_common.contracts.jobs.sql_job import (
+from langbridge.packages.contracts.jobs.sql_job import (
     CreateSqlJobRequest,
 )
-from langbridge.packages.common.langbridge_common.contracts.jobs.type import JobType
-from langbridge.packages.common.langbridge_common.contracts.sql import (
+from langbridge.packages.contracts.jobs.type import JobType
+from langbridge.packages.contracts.sql import (
     SqlColumnMetadata,
     SqlDialect,
     SqlExecuteRequest,
@@ -38,7 +38,7 @@ from langbridge.packages.common.langbridge_common.contracts.sql import (
     SqlSelectedDataset,
     SqlWorkbenchMode,
 )
-from langbridge.packages.common.langbridge_common.contracts.threads import (
+from langbridge.packages.contracts.threads import (
     ThreadChatRequest,
     ThreadCreateRequest,
     ThreadResponse,

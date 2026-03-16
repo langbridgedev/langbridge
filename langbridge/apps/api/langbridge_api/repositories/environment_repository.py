@@ -1,3 +1,0 @@
-from langbridge.packages.common.langbridge_common.repositories.environment_repository import OrganizationEnvironmentSettingRepository
-
-__all__ = ["OrganizationEnvironmentSettingRepository"]

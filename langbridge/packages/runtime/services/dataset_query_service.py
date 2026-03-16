@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 import hashlib
 import json
 import logging
@@ -19,7 +20,7 @@ from langbridge.packages.runtime.services.dataset_execution import (
     build_file_scan_sql,
 )
 from langbridge.packages.common.langbridge_common.config import settings
-from langbridge.packages.common.langbridge_common.contracts.jobs.dataset_job import (
+from langbridge.packages.contracts.jobs.dataset_job import (
     CreateDatasetBulkCreateJobRequest,
     CreateDatasetCsvIngestJobRequest,
     CreateDatasetPreviewJobRequest,
@@ -172,14 +173,14 @@ class DatasetQueryService:
                 "result": result,
                 "summary": summary,
             }
-            job_record.status = JobStatus.succeeded
+            self._set_job_status(job_record, JobStatus.succeeded)
             job_record.progress = 100
             job_record.status_message = summary
             job_record.finished_at = datetime.now(timezone.utc)
             job_record.error = None
         except Exception as exc:
             self._logger.exception("Dataset job %s failed: %s", job_record.id, exc)
-            job_record.status = JobStatus.failed
+            self._set_job_status(job_record, JobStatus.failed)
             job_record.progress = 100
             job_record.status_message = "Dataset execution failed."
             job_record.finished_at = datetime.now(timezone.utc)
@@ -1317,6 +1318,18 @@ class DatasetQueryService:
             "duration_ms": duration_ms,
             "bytes_scanned": bytes_scanned if has_bytes else None,
         }
+
+    @staticmethod
+    def _set_job_status(job_record: JobRecord, desired_status: JobStatus) -> None:
+        current_status = getattr(job_record, "status", None)
+        if isinstance(current_status, enum.Enum):
+            status_type = type(current_status)
+            try:
+                job_record.status = status_type(desired_status.value)
+                return
+            except Exception:
+                pass
+        job_record.status = desired_status
 
     @staticmethod
     def _extract_single_numeric(

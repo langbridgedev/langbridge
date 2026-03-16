@@ -13,11 +13,11 @@ The Execution Plane is where workloads run. In Langbridge this is the Worker run
 
 ## Main Components
 
-- Worker runtime: `langbridge/apps/worker/langbridge_worker/main.py`
-- Message dispatcher: `langbridge/apps/worker/langbridge_worker/handlers/dispatcher.py`
-- SQL job handler: `langbridge/apps/worker/langbridge_worker/handlers/query/sql_job_request_handler.py`
-- Semantic query handler: `langbridge/apps/worker/langbridge_worker/handlers/query/semantic_query_request_handler.py`
-- Federated tool integration: `langbridge/apps/worker/langbridge_worker/tools/federated_query_tool.py`
+- Worker runtime: `langbridge/apps/runtime_worker/main.py`
+- Message dispatcher: `langbridge/apps/runtime_worker/handlers/dispatcher.py`
+- SQL job handler: `langbridge/apps/runtime_worker/handlers/query/sql_job_request_handler.py`
+- Semantic query handler: `langbridge/apps/runtime_worker/handlers/query/semantic_query_request_handler.py`
+- Federated tool integration: `langbridge/packages/runtime/execution/federated_query_tool.py`
 
 ## Execution Modes
 

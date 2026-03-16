@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import enum
 import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from langbridge.packages.common.langbridge_common.contracts.jobs.agent_job import (
+from langbridge.packages.contracts.jobs.agent_job import (
     CreateAgentJobRequest,
 )
-from langbridge.packages.common.langbridge_common.contracts.llm_connections import (
+from langbridge.packages.contracts.llm_connections import (
     LLMConnectionSecretResponse,
 )
 from langbridge.packages.common.langbridge_common.db.agent import AgentDefinition, LLMConnection
@@ -172,7 +173,7 @@ class AgentExecutionService:
     async def reset_thread_after_failure(self, *, thread_id: uuid.UUID) -> Thread | None:
         thread = await self._thread_repository.get_by_id(thread_id)
         if thread is not None:
-            thread.state = ThreadState.awaiting_user_input
+            self._set_thread_awaiting_user_input(thread)
             thread.updated_at = datetime.now(timezone.utc)
         return thread
 
@@ -195,13 +196,29 @@ class AgentExecutionService:
         if last_message is None:
             last_message = messages[-1]
 
-        if last_message.role != Role.user:
-            user_messages = [msg for msg in messages if msg.role == Role.user]
+        if self._role_value(last_message.role) != Role.user.value:
+            user_messages = [msg for msg in messages if self._role_value(msg.role) == Role.user.value]
             if not user_messages:
                 raise BusinessValidationError(f"Thread {thread.id} does not contain a user message.")
             last_message = user_messages[-1]
 
         return thread, last_message, messages
+
+    @staticmethod
+    def _role_value(role: Any) -> str:
+        return str(getattr(role, "value", role))
+
+    @staticmethod
+    def _set_thread_awaiting_user_input(thread: Thread) -> None:
+        current_state = getattr(thread, "state", None)
+        if isinstance(current_state, enum.Enum):
+            state_type = type(current_state)
+            try:
+                thread.state = state_type(ThreadState.awaiting_user_input.value)
+                return
+            except Exception:
+                pass
+        thread.state = ThreadState.awaiting_user_input
 
     @staticmethod
     def _build_planning_context(
@@ -225,7 +242,7 @@ class AgentExecutionService:
 
         metadata = thread.metadata_json if isinstance(thread.metadata_json, dict) else {}
         clarification_state = metadata.get("clarification_state")
-        if isinstance(clarification_state, dict):
+        if AgentExecutionService._has_active_clarification_state(clarification_state):
             context["clarification_state"] = clarification_state
 
         return context
@@ -233,14 +250,32 @@ class AgentExecutionService:
     @staticmethod
     def _persist_supervisor_state(thread: Thread, response: dict[str, Any]) -> None:
         diagnostics = response.get("diagnostics")
-        if not isinstance(diagnostics, dict):
-            return
-        clarification_state = diagnostics.get("clarification_state")
-        if not isinstance(clarification_state, dict):
-            return
         metadata = thread.metadata_json if isinstance(thread.metadata_json, dict) else {}
-        metadata["clarification_state"] = clarification_state
+        if not isinstance(diagnostics, dict):
+            metadata.pop("clarification_state", None)
+            thread.metadata_json = metadata
+            return
+
+        clarification_state = diagnostics.get("clarification_state")
+        clarifying_question = diagnostics.get("clarifying_question")
+        if AgentExecutionService._has_active_clarification_state(clarification_state) or (
+            isinstance(clarifying_question, str) and clarifying_question.strip()
+        ):
+            metadata["clarification_state"] = clarification_state
+        else:
+            metadata.pop("clarification_state", None)
         thread.metadata_json = metadata
+
+    @staticmethod
+    def _has_active_clarification_state(payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        pending_slots = payload.get("pending_slots")
+        if isinstance(pending_slots, list) and any(
+            isinstance(item, str) and item.strip() for item in pending_slots
+        ):
+            return True
+        return False
 
     async def _get_agent_definition(
         self,
@@ -316,7 +351,7 @@ class AgentExecutionService:
         )
         self._thread_message_repository.add(assistant_message)
         thread.last_message_id = assistant_message_id
-        thread.state = ThreadState.awaiting_user_input
+        self._set_thread_awaiting_user_input(thread)
         thread.updated_at = datetime.now(timezone.utc)
 
     @staticmethod

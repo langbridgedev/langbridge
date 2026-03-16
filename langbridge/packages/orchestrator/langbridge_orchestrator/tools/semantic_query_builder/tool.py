@@ -7,18 +7,17 @@ import json
 import logging
 import textwrap
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Protocol, Tuple
 from uuid import UUID
 
 from langbridge.packages.common.langbridge_common.errors.application_errors import BusinessValidationError
-from langbridge.packages.common.langbridge_common.contracts.semantic import (
+from langbridge.packages.contracts.semantic import (
     SemanticQueryMetaResponse,
     SemanticQueryRequest,
     SemanticQueryResponse,
 )
 from langbridge.packages.orchestrator.langbridge_orchestrator.llm.provider import LLMProvider
 from langbridge.packages.semantic.langbridge_semantic.query import SemanticQuery
-from langbridge.apps.api.langbridge_api.services.semantic import SemanticQueryService
 
 from .schemas import (
     QueryBuilderCopilotRequest,
@@ -34,6 +33,20 @@ class _CopilotSuggestion:
     actions: list[str]
     explanation: Optional[str]
     raw_json: str
+
+
+class SemanticQueryServiceLike(Protocol):
+    async def get_meta(
+        self,
+        *,
+        semantic_model_id: UUID,
+        organization_id: UUID,
+    ) -> SemanticQueryMetaResponse: ...
+
+    async def query_request(
+        self,
+        request: SemanticQueryRequest,
+    ) -> SemanticQueryResponse: ...
 
 
 class SemanticQueryBuilderCopilotTool:
@@ -68,7 +81,7 @@ class SemanticQueryBuilderCopilotTool:
         self,
         *,
         llm: LLMProvider,
-        semantic_query_service: SemanticQueryService,
+        semantic_query_service: SemanticQueryServiceLike,
         logger: Optional[logging.Logger] = None,
         llm_temperature: float = 0.0,
         max_tokens: Optional[int] = 1200,
@@ -258,5 +271,4 @@ class SemanticQueryBuilderCopilotTool:
                 if depth == 0:
                     return stripped[start : idx + 1]
         return None
-
 

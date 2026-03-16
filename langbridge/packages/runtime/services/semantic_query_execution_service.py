@@ -15,7 +15,7 @@ from langbridge.packages.runtime.services.dataset_execution import (
     synthetic_file_connector_id,
 )
 from langbridge.packages.common.langbridge_common.config import settings
-from langbridge.packages.common.langbridge_common.contracts.semantic import (
+from langbridge.packages.contracts.semantic import (
     SemanticQueryResponse,
     UnifiedSemanticSourceModelRequest,
     UnifiedSemanticQueryResponse,
@@ -810,7 +810,6 @@ class SemanticQueryExecutionService:
             except Exception:
                 return None
         return None
-
 
 
 

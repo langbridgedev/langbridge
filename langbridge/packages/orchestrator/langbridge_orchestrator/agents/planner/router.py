@@ -292,7 +292,14 @@ def _extract_signals(question: str) -> RouteSignals:
     requires_clarification = False
     if _contains_keyword(lowered, _AMBIGUITY_PHRASES):
         requires_clarification = True
-    elif len(tokens) <= 4 and not has_research_signals and not has_web_search_signals and "?" not in lowered:
+    elif (
+        len(tokens) <= 4
+        and not has_research_signals
+        and not has_web_search_signals
+        and not has_sql_signals
+        and not has_entity_reference
+        and "?" not in lowered
+    ):
         requires_clarification = True
     elif "performance" in lowered and not has_entity_reference and not has_research_signals and not has_web_search_signals:
         requires_clarification = True

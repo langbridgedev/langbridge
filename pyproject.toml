@@ -37,7 +37,6 @@ dependencies = [
   "langchain==0.3.27",
   "mcp==1.17.0",
   "pandas==2.3.3",
-  "psycopg2==2.9.11",
   "numpy==1.26.4",
   "faiss-cpu==1.8.0",
   "qdrant-client==1.9.1",

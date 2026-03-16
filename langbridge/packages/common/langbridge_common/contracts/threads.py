@@ -1,12 +1,18 @@
+from enum import Enum
 from typing import Any, Dict, Optional, Union
 from uuid import UUID
 from datetime import datetime
 
-from pydantic import Field
-
-from langbridge.packages.common.langbridge_common.db.threads import Role
+from pydantic import Field, field_validator
 
 from .base import _Base
+
+
+class Role(str, Enum):
+    system = "system"
+    user = "user"
+    assistant = "assistant"
+    tool = "tool"
 
 
 class ThreadResponse(_Base):
@@ -49,6 +55,13 @@ class ThreadMessageResponse(_Base):
     token_usage: Optional[Dict[str, Any]] = None
     error: Optional[Dict[str, Any]] = None
     created_at: Optional[datetime] = None
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def _normalize_role(cls, value: Any) -> Any:
+        if isinstance(value, Enum):
+            return value.value
+        return value
 
 
 class ThreadHistoryResponse(_Base):
