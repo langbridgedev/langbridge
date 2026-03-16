@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langbridge-runtime-worker"
+version = "0.1.0"
+description = "Langbridge runtime worker assembly application"
+requires-python = ">=3.10"
+dependencies = [
+  "langbridge-common @ file:../../packages/common",
+  "langbridge-connectors @ file:../../packages/connectors",
+  "langbridge-semantic @ file:../../packages/semantic",
+  "langbridge-messaging @ file:../../packages/messaging",
+  "langbridge-runtime @ file:../../packages/runtime",
+]
+
+[tool.setuptools.packages.find]
+where = ["../../.."]
+include = ["langbridge.apps.runtime_worker*"]

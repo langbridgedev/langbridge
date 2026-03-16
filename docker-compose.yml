@@ -1,9 +1,7 @@
 version: "3.9"
 services:
   migrate:
-    build:
-      context: .
-      dockerfile: langbridge/Dockerfile.migrate
+    image: ghcr.io/langbridgedev/langbridge-cloud-migrate:latest
     container_name: langbridge-migrate
     env_file:
       - ./langbridge/.env
@@ -17,25 +15,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: ["alembic", "upgrade", "head"]
     restart: "no"
   api:
-    build:
-      context: .
-      dockerfile: langbridge/Dockerfile.api
+    image: ghcr.io/langbridgedev/langbridge-cloud-api:latest
     container_name: langbridge-api
-    command:
-      [
-        "uvicorn",
-        "langbridge.apps.api.langbridge_api.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8000",
-        "--reload",
-        "--reload-dir",
-        "/app/langbridge",
-      ]
     env_file:
       - ./langbridge/.env
     environment:
@@ -66,8 +49,6 @@ services:
         condition: service_completed_successfully
     ports:
       - "8000:8000"
-    volumes:
-      - ./:/app
   worker:
     build:
       context: .
@@ -92,7 +73,7 @@ services:
       FEDERATION_PARTITION_COUNT: ${FEDERATION_PARTITION_COUNT:-8}
       FEDERATION_STAGE_MAX_RETRIES: ${FEDERATION_STAGE_MAX_RETRIES:-2}
       FEDERATION_STAGE_PARALLELISM: ${FEDERATION_STAGE_PARALLELISM:-4}
-    command: ["python", "-m", "langbridge.apps.worker.langbridge_worker.main", "--reload"]
+    command: ["python", "-m", "langbridge.apps.runtime_worker.main", "--reload"]
     depends_on:
       db:
         condition: service_healthy
@@ -118,25 +99,10 @@ services:
       WORKER_RUNTIME_TAGS: "semantic_query,region:local"
       WORKER_RUNTIME_CAPABILITIES: '{"message_types":["semantic_query_request"]}'
       WORKER_BROKER: redis
-    command: ["python", "-m", "langbridge.apps.worker.langbridge_worker.main"]
+    command: ["python", "-m", "langbridge.apps.runtime_worker.main"]
     depends_on:
       api:
         condition: service_started
-  client:
-    build:
-      context: ./client
-      dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_BACKEND_URL: http://localhost:8000
-    container_name: langbridge-client
-    environment:
-      NODE_ENV: production
-      NEXT_PUBLIC_BACKEND_URL: http://localhost:8000
-      PORT: 3000
-    depends_on:
-      - api
-    ports:
-      - "3000:3000"
   db:
     image: postgres:16-alpine
     container_name: langbridge-db
@@ -192,63 +158,9 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
-  prometheus:
-    image: prom/prometheus:v2.55.1
-    container_name: langbridge-prometheus
-    profiles:
-      - observability
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-    ports:
-      - "9090:9090"
-  loki:
-    image: grafana/loki:2.9.8
-    container_name: langbridge-loki
-    profiles:
-      - observability
-    command: ["-config.file=/etc/loki/config.yml"]
-    volumes:
-      - ./monitoring/loki-config.yml:/etc/loki/config.yml:ro
-      - loki_data:/loki
-    ports:
-      - "3100:3100"
-  promtail:
-    image: grafana/promtail:2.9.8
-    container_name: langbridge-promtail
-    profiles:
-      - observability
-    command: ["-config.file=/etc/promtail/config.yml"]
-    volumes:
-      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    depends_on:
-      - loki
-  grafana:
-    image: grafana/grafana:11.2.0
-    container_name: langbridge-grafana
-    profiles:
-      - observability
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-    ports:
-      - "3001:3000"
-    depends_on:
-      - prometheus
-      - loki
 volumes:
   pg_data:
   federation_pg_a_data:
   federation_pg_b_data:
   redis_data:
   qdrant_data:
-  prometheus_data:
-  grafana_data:
-  loki_data:

@@ -7,7 +7,6 @@ opentelemetry-instrumentation-fastapi==0.60b1
 opentelemetry-instrumentation-logging==0.60b1
 dependency-injector==4.48.2
 sqlalchemy==2.0.43
-alembic==1.13.2
 prometheus-client==0.20.0
 aiosqlite==0.20.0
 asyncpg==0.30.0

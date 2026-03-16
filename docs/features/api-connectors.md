@@ -56,6 +56,6 @@ Connector sync stays under existing `/api/v1/connectors/{organization_id}` route
 
 ## Rollout Notes
 
-- Apply Alembic migrations through `alembic upgrade head`.
+- Apply control-plane migrations from `langbridge-cloud/apps/api`.
 - Existing connector APIs remain backward-compatible; no `/v2` routes were introduced.
 - Scheduling and webhook-assisted sync are left as extension points on top of the same state model and worker job path.

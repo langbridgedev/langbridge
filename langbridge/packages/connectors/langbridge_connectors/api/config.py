@@ -4,7 +4,7 @@ from typing import Any, List, Optional, Type
 
 from pydantic import Field
 
-from langbridge.packages.common.langbridge_common.contracts.base import _Base
+from langbridge.packages.contracts.base import _Base
 
 class ConnectorRuntimeType(Enum):
     POSTGRES = "POSTGRES"

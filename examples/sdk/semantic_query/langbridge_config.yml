@@ -1,0 +1,181 @@
+version: 1
+
+runtime:
+  mode: local
+  metadata_store:
+    type: sqlite
+    path: .langbridge/metadata.db
+  execution:
+    engine: duckdb
+    duckdb:
+      path: .langbridge/duckdb/execution.duckdb
+      temp_directory: .langbridge/tmp
+      threads: 4
+
+connectors:
+  - name: commerce_demo
+    type: sqlite
+    connection:
+      path: ./example.db
+
+datasets:
+  - name: shopify_orders
+    label: Shopify Orders
+    description: Order-level commerce performance data with revenue, margin, and customer attributes.
+    connector: commerce_demo
+    semantic_model: commerce_performance
+    default_time_dimension: order_date
+    source:
+      table: orders_enriched
+    sync:
+      enabled: false
+
+  - name: customers
+    label: Customers
+    description: Customer profile and segmentation data.
+    connector: commerce_demo
+    semantic_model: commerce_performance
+    source:
+      table: customers
+    sync:
+      enabled: false
+
+  - name: support_tickets
+    label: Support Tickets
+    description: Support cases tied to customer and order activity.
+    connector: commerce_demo
+    semantic_model: commerce_performance
+    source:
+      table: support_tickets
+    sync:
+      enabled: false
+
+semantic_models:
+  - name: commerce_performance
+    description: Local commerce analytics model for SDK examples
+    default: true
+    model:
+      version: "1"
+      name: commerce_performance
+      description: Commerce performance model spanning orders, customers, and support tickets.
+      datasets:
+        shopify_orders:
+          relation_name: orders_enriched
+          description: Order-level facts enriched with customer attributes.
+          dimensions:
+            - name: country
+              expression: country
+              type: string
+              synonyms: [countries, market, region]
+            - name: order_date
+              expression: order_date
+              type: time
+              synonyms: [date, order day]
+            - name: order_month
+              expression: order_month
+              type: string
+              synonyms: [month]
+            - name: acquisition_channel
+              expression: acquisition_channel
+              type: string
+              synonyms: [channel, acquisition, source]
+            - name: loyalty_tier
+              expression: loyalty_tier
+              type: string
+              synonyms: [segment, loyalty segment, tier]
+            - name: order_status
+              expression: order_status
+              type: string
+          measures:
+            - name: net_sales
+              expression: net_revenue
+              type: number
+              aggregation: sum
+              synonyms: [net revenue, sales, revenue]
+            - name: gross_margin
+              expression: gross_margin
+              type: number
+              aggregation: sum
+              synonyms: [margin]
+            - name: order_count
+              expression: order_id
+              type: number
+              aggregation: count
+              synonyms: [orders]
+        customers:
+          relation_name: customers
+          description: Customer profile data.
+          dimensions:
+            - name: customer_id
+              expression: customer_id
+              type: number
+              primary_key: true
+            - name: customer_name
+              expression: customer_name
+              type: string
+            - name: country
+              expression: country
+              type: string
+            - name: loyalty_tier
+              expression: loyalty_tier
+              type: string
+            - name: segment
+              expression: segment
+              type: string
+          measures:
+            - name: customer_count
+              expression: customer_id
+              type: number
+              aggregation: count
+        support_tickets:
+          relation_name: support_tickets
+          description: Support workload and response-time data.
+          dimensions:
+            - name: ticket_id
+              expression: ticket_id
+              type: string
+              primary_key: true
+            - name: created_date
+              expression: created_date
+              type: time
+            - name: issue_type
+              expression: issue_type
+              type: string
+              synonyms: [issue, support topic]
+            - name: severity
+              expression: severity
+              type: string
+            - name: status
+              expression: status
+              type: string
+          measures:
+            - name: ticket_count
+              expression: ticket_id
+              type: number
+              aggregation: count
+            - name: avg_first_response_minutes
+              expression: first_response_minutes
+              type: number
+              aggregation: avg
+      relationships:
+        - name: orders_to_customers
+          source_dataset: shopify_orders
+          source_field: customer_id
+          target_dataset: customers
+          target_field: customer_id
+          type: many_to_one
+        - name: tickets_to_customers
+          source_dataset: support_tickets
+          source_field: customer_id
+          target_dataset: customers
+          target_field: customer_id
+          type: many_to_one
+
+agents:
+  - name: commerce_analyst
+    description: Default local analytics agent for the SDK notebook and async examples.
+    semantic_model: commerce_performance
+    dataset: shopify_orders
+    default: true
+    instructions: |
+      Focus on net sales, margin, country, channel, and loyalty questions.

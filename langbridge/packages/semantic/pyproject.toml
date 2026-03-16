@@ -6,12 +6,14 @@ build-backend = "setuptools.build_meta"
 name = "langbridge-semantic"
 version = "0.1.0"
 description = "Semantic compiler and query handling"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "langbridge-common @ file:../common",
-  "langbridge-connectors @ file:../connectors",
+  "langbridge-contracts==0.1.0",
+  "langbridge-common==0.1.0",
+  "langbridge-connectors==0.1.0",
 ]
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["langbridge_semantic*"]
+where = ["../../.."]
+include = ["langbridge.packages.semantic*"]

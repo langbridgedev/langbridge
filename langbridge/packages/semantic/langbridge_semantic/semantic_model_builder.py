@@ -2,10 +2,9 @@ from dataclasses import dataclass
 import logging
 import re
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Protocol, Tuple
 from uuid import UUID
 
-from langbridge.apps.api.langbridge_api.services.connector_service import ConnectorService
 from langbridge.packages.connectors.langbridge_connectors.api import (
     ConnectorRuntimeType,
     TableMetadata,
@@ -16,7 +15,7 @@ from langbridge.packages.connectors.langbridge_connectors.api import (
 from langbridge.packages.semantic.langbridge_semantic.model import MeasureAggregation
 from langbridge.packages.semantic.langbridge_semantic import Dimension, Measure, Relationship, SemanticModel, Table
 from langbridge.packages.semantic.langbridge_semantic.loader import load_semantic_model
-from langbridge.packages.common.langbridge_common.contracts.connectors import ConnectorResponse
+from langbridge.packages.contracts.connectors import ConnectorResponse
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +31,23 @@ class ScopedTableMetadata:
     columns: List[ColumnMetadata]
     foreign_keys: List[ForeignKeyMetadata]
 
+
+class ConnectorCatalogService(Protocol):
+    async def get_connector(self, connector_id: UUID) -> ConnectorResponse: ...
+
+    async def async_create_sql_connector(
+        self,
+        runtime_type: ConnectorRuntimeType,
+        connector_config: dict,
+    ) -> SqlConnector: ...
+
+
 class SemanticModelBuilder:
     """Builds a semantic data model across organization/project connectors."""
 
     def __init__(
         self,
-        connector_service: ConnectorService,
+        connector_service: ConnectorCatalogService,
     ) -> None:
         self._connector_service = connector_service
         self._logger = logging.getLogger(__name__)

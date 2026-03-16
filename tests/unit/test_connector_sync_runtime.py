@@ -9,7 +9,7 @@ import httpx
 import pyarrow.parquet as pq
 import pytest
 
-from langbridge.apps.worker.langbridge_worker.connector_sync_runtime import ConnectorSyncRuntime
+from langbridge.packages.runtime.services.dataset_sync_service import ConnectorSyncRuntime
 from langbridge.packages.common.langbridge_common.config import settings
 from langbridge.packages.common.langbridge_common.contracts.connectors import (
     ConnectorSyncMode,

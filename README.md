@@ -2,6 +2,25 @@
 
 Langbridge is **agentic analytics infrastructure** with a **distributed federated query engine**.
 
+This repository now owns the runtime product boundary. The product web app has
+been moved to `langbridge-cloud/apps/web`, and active cloud-owned copies of the
+hosted API and worker now live in `langbridge-cloud/apps/api` and
+`langbridge-cloud/apps/worker`.
+
+The legacy hosted API copy has been removed from this repo. Runtime worker
+assembly now lives in `langbridge/apps/runtime_worker`, while the hosted worker
+stays in `langbridge-cloud/apps/worker`.
+
+The runtime package feed recommendation is:
+
+- Python runtime packages: AWS CodeArtifact
+- OCI images: GHCR
+
+GitHub Packages remains fine for npm later if Langbridge Cloud needs a private
+web-package feed, but it is not the right primary registry for the Python
+runtime packages consumed by `langbridge-cloud/apps/api` and
+`langbridge-cloud/apps/worker`.
+
 It is built for teams that need:
 - AI agents that can reason across data systems.
 - Native SQL authoring and execution in product.
@@ -21,10 +40,15 @@ All heavy query execution happens through the Worker execution plane and federat
 
 ## Architecture Overview
 
-- **Control Plane** (`langbridge/apps/api`, `client/`):
-  API, orchestration, auth, tenancy, policies, runtime registry, and UI.
-- **Execution Plane** (`langbridge/apps/worker`):
-  Worker runtime, connectors, secrets resolution, job handlers, message consumption.
+- **Cloud Control Plane** (`langbridge-cloud/`):
+  Product web UI now lives in `langbridge-cloud/apps/web`, and the managed
+  cloud/control-plane monorepo is the destination for API, orchestration,
+  auth, tenancy, and operational services.
+- **Cloud-Owned Control Plane Apps** (`langbridge-cloud/apps/api`, `langbridge-cloud/apps/worker`):
+  Hosted API and hosted worker ownership now live in the cloud monorepo.
+- **Runtime Worker Assembly App** (`langbridge/apps/runtime_worker`):
+  Thin runtime-owned execution surface for self-hosted and hybrid worker
+  execution.
 - **Federated Query Engine** (`langbridge/packages/federation`):
   Logical planning, optimization, physical stage DAG generation, stage scheduling/execution.
 
@@ -49,10 +73,17 @@ More architecture docs:
 - `docs/architecture/federated-query-engine.md`
 - `docs/architecture/hybrid-deployment.md`
 - `docs/architecture/deprecations.md`
+- control-plane OpenAPI snapshot: `../langbridge-cloud/contracts/openapi/control-plane.openapi.json`
+
+Legacy app retirement:
+- `langbridge/apps/api` has been removed. Control-plane API ownership is fully in `langbridge-cloud/apps/api`.
+- `langbridge/apps/runtime_worker` is the runtime-owned worker assembly surface.
+- cloud-hosted worker code is retired from this repo and should not be reintroduced.
+- `apps/` should remain only as a thin runtime assembly namespace such as `apps/runtime`, or disappear entirely if no assembly app is needed.
 
 ## Federated Query Engine
 
-Primary structured query execution now uses the built-in federated engine in `langbridge/packages/federation` and Worker tooling in `langbridge/apps/worker/langbridge_worker/tools/federated_query_tool.py`.
+Primary structured query execution now uses the built-in federated engine in `langbridge/packages/federation` and the runtime federated tool in `langbridge/packages/runtime/execution/federated_query_tool.py`.
 
 Core capabilities:
 - SQL and semantic query planning.
@@ -89,14 +120,14 @@ Reference:
 
 ## Getting Started
 
-### Local (core stack)
-- API: `uvicorn langbridge.apps.api.langbridge_api.main:app --reload`
-- Worker: `python -m langbridge.apps.worker.langbridge_worker.main`
-- UI: `cd client && npm install && npm run dev`
+### Local (runtime-focused)
+- API: `cd ../langbridge-cloud && python scripts/export_control_plane_openapi.py && pip install -e packages/shared -e packages/persistence && PYTHONPATH=apps/api uvicorn langbridge_cloud_api.main:app --reload`
+- Worker: `python -m langbridge.apps.runtime_worker.main`
+- Web app: `cd ../langbridge-cloud/apps/web && npm install && npm run dev`
 
 ### Docker (core services only)
-- `docker compose up --build migrate api worker client db redis`
-- UI: `http://localhost:3000`
+- `docker compose up --build migrate api worker db redis`
+- Web app: start from `langbridge-cloud/apps/web`
 - API docs: `http://localhost:8000/docs`
 
 ## Development

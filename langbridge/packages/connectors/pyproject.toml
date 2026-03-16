@@ -6,11 +6,13 @@ build-backend = "setuptools.build_meta"
 name = "langbridge-connectors"
 version = "0.1.0"
 description = "Connector adapters"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "langbridge-common @ file:../common",
+  "langbridge-common==0.1.0",
+  "snowflake-connector-python==3.18.0",
 ]
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["langbridge_connectors*"]
+where = ["../../.."]
+include = ["langbridge.packages.connectors*"]

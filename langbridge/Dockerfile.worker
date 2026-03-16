@@ -22,4 +22,4 @@ RUN pip install --upgrade pip \
 COPY langbridge /app/langbridge
 COPY pyproject.toml /app/pyproject.toml
 
-CMD ["python", "-m", "langbridge.apps.worker.langbridge_worker.main"]
+CMD ["python", "-m", "langbridge.apps.runtime_worker.main"]

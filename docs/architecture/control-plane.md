@@ -14,11 +14,14 @@ The Control Plane is the policy, orchestration, and product surface of Langbridg
 
 ## Main Components
 
-- API app: `langbridge/apps/api/langbridge_api`
-- UI app: `client/`
+- API app: `langbridge-cloud/apps/api/langbridge_cloud_api`
+- UI app: `langbridge-cloud/apps/web`
 - Orchestrator package: `langbridge/packages/orchestrator`
 - Shared contracts/models: `langbridge/packages/common`
 - Messaging contracts: `langbridge/packages/messaging`
+
+This document remains in the runtime repo temporarily as a boundary reference.
+The control-plane implementation is now owned by `langbridge-cloud/`.
 
 ## Control Plane to Execution Plane Boundary
 

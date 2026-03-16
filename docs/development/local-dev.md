@@ -12,19 +12,21 @@ pip install -r langbridge/requirements.txt
 Run API:
 
 ```bash
-uvicorn langbridge.apps.api.langbridge_api.main:app --reload
+cd ../langbridge-cloud
+python scripts/export_control_plane_openapi.py
+PYTHONPATH=apps/api uvicorn langbridge_cloud_api.main:app --reload
 ```
 
 Run Worker:
 
 ```bash
-python -m langbridge.apps.worker.langbridge_worker.main
+python -m langbridge.apps.runtime_worker.main
 ```
 
-## Frontend
+## Web App
 
 ```bash
-cd client
+cd ../langbridge-cloud/apps/web
 npm install
 npm run dev
 ```
@@ -45,5 +47,5 @@ npm run dev
 
 ```bash
 pytest -q tests/unit
-cd client && npm run lint
+cd ../langbridge-cloud/apps/web && npm run lint
 ```

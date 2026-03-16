@@ -1,27 +1,29 @@
 # Hosted Deployment
 
 Hosted mode runs Langbridge control and execution planes in one managed environment.
+The web application for that managed product now lives in `langbridge-cloud/`.
 
 ## Components
 
-- Control Plane API (`langbridge/apps/api`)
-- Worker runtime (`langbridge/apps/worker`)
-- UI (`client`)
-- Shared infra (Postgres, Redis, optional observability stack)
+- Control Plane API (`langbridge-cloud/apps/api`)
+- Worker runtime (`langbridge/apps/runtime_worker`)
+- Web UI (`langbridge-cloud/apps/web`)
+- Shared infra (Postgres, Redis)
 
 ## Local Hosted-Like Compose
 
 Run core services only:
 
 ```bash
-docker compose up --build migrate api worker client db redis
+docker compose up --build migrate api worker db redis
 ```
 
 Endpoints:
-- UI: `http://localhost:3000`
+- Web app: start from `langbridge-cloud/apps/web`
 - API docs: `http://localhost:8000/docs`
 
 ## Notes
 
 - SQL and semantic execution use the Worker + Federated Query Engine path.
-- Hosted deployments only need the API, Worker, UI, Postgres, and Redis core services.
+- Hosted deployments need API, Worker, Postgres, Redis, and the cloud-owned web app.
+- Control-plane observability manifests now live in `../langbridge-cloud/monitoring`.

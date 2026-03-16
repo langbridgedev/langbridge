@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from langbridge.apps.worker.langbridge_worker.secrets import SecretProviderRegistry
+from langbridge.packages.runtime.security import SecretProviderRegistry
 from langbridge.packages.common.langbridge_common.contracts.connectors import SecretReference
 
 

@@ -5,14 +5,14 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from langbridge.apps.worker.langbridge_worker.dataset_execution import DatasetExecutionResolver
-from langbridge.packages.common.langbridge_common.contracts.semantic import SemanticModelRecordResponse
+from langbridge.packages.contracts.semantic import SemanticModelRecordResponse
 from langbridge.packages.common.langbridge_common.db.dataset import DatasetRecord
 from langbridge.packages.common.langbridge_common.errors.application_errors import BusinessValidationError
 from langbridge.packages.common.langbridge_common.interfaces.agent_events import IAgentEventEmitter
 from langbridge.packages.common.langbridge_common.interfaces.semantic_models import ISemanticModelStore
 from langbridge.packages.common.langbridge_common.repositories.dataset_repository import DatasetColumnRepository, DatasetRepository
 from langbridge.packages.common.langbridge_common.utils.embedding_provider import EmbeddingProvider
+from langbridge.packages.runtime.services.dataset_execution import DatasetExecutionResolver
 from langbridge.packages.orchestrator.langbridge_orchestrator.agents.analyst import AnalystAgent
 from langbridge.packages.orchestrator.langbridge_orchestrator.agents.deep_research import DeepResearchAgent
 from langbridge.packages.orchestrator.langbridge_orchestrator.agents.planner import (

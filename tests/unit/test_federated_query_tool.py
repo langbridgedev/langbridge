@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from langbridge.apps.worker.langbridge_worker.tools.federated_query_tool import (
+from langbridge.packages.runtime.execution.federated_query_tool import (
     FederatedQueryTool,
 )
 from langbridge.packages.federation.connectors import DuckDbFileRemoteSource

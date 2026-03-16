@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from langbridge.apps.worker.langbridge_worker.semantic_query_execution_service import (
+from langbridge.packages.runtime.services.semantic_query_execution_service import (
     SemanticQueryExecutionService,
     _normalize_unified_relationship_payload,
 )
@@ -433,7 +433,6 @@ async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() 
     inventory_binding = workflow["dataset"]["tables"]["Inventory__inventory"]
     assert orders_binding["metadata"]["source_kind"] == "file"
     assert inventory_binding["connector_id"] == str(warehouse_connector_id)
-
 
 
 

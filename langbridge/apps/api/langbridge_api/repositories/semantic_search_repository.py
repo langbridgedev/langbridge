@@ -1,3 +1,0 @@
-from langbridge.packages.common.langbridge_common.repositories.semantic_search_repository import SemanticVectorStoreEntryRepository
-
-__all__ = ["SemanticVectorStoreEntryRepository"]
