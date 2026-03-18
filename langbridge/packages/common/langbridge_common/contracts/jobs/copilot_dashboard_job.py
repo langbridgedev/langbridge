@@ -1,9 +1,8 @@
 from typing import Any
 import uuid
 
-from langbridge.packages.common.langbridge_common.contracts.base import _Base
-
-from .type import JobType
+from langbridge.contracts.base import _Base
+from langbridge.contracts.jobs.type import JobType
 
 
 class CreateCopilotDashboardJobRequest(_Base):

@@ -3,13 +3,17 @@ from datetime import datetime, timezone
 
 from pydantic import ValidationError
 
+from langbridge.packages.runtime.adapters import (
+    RepositoryDatasetCatalogStore,
+    RepositorySqlJobArtifactStore,
+    RepositorySqlJobStore,
+    to_runtime_sql_job,
+)
 from langbridge.packages.runtime.models import (
     CreateSqlJobRequest,
+    SqlJob,
 )
-from langbridge.packages.common.langbridge_common.db.sql import SqlJobRecord
-from langbridge.packages.common.langbridge_common.errors.application_errors import (
-    BusinessValidationError,
-)
+from langbridge.packages.runtime.errors import BusinessValidationError
 from langbridge.packages.common.langbridge_common.repositories.connector_repository import (
     ConnectorRepository,
 )
@@ -27,6 +31,7 @@ from langbridge.packages.messaging.langbridge_messaging.contracts.jobs.sql_job i
 from langbridge.packages.messaging.langbridge_messaging.handler import BaseMessageHandler
 from langbridge.packages.runtime.context import RuntimeContext
 from langbridge.packages.runtime.execution import FederatedQueryTool
+from langbridge.packages.runtime.providers import RepositoryConnectorMetadataProvider
 from langbridge.packages.runtime.services.runtime_host import (
     RuntimeHost,
     RuntimeProviders,
@@ -50,22 +55,34 @@ class SqlJobRequestHandler(BaseMessageHandler):
     ) -> None:
         self._logger = logging.getLogger(__name__)
         self._sql_job_repository = sql_job_repository
+        self._sql_job_store = RepositorySqlJobStore(repository=sql_job_repository)
         self._sql_query_service = SqlQueryService(
-            sql_job_result_artifact_repository=sql_job_result_artifact_repository,
-            connector_repository=connector_repository,
-            dataset_repository=dataset_repository,
+            sql_job_result_artifact_store=RepositorySqlJobArtifactStore(
+                repository=sql_job_result_artifact_repository
+            ),
+            connector_provider=RepositoryConnectorMetadataProvider(
+                connector_repository=connector_repository
+            ),
+            dataset_repository=(
+                RepositoryDatasetCatalogStore(repository=dataset_repository)
+                if dataset_repository is not None
+                else None
+            ),
             secret_provider_registry=secret_provider_registry,
             federated_query_tool=federated_query_tool,
         )
 
     async def handle(self, payload: SqlJobRequestMessage) -> None:
         request = self._parse_request(payload)
-        job: SqlJobRecord = await self._sql_job_repository.get_by_id_for_workspace(
+        legacy_job = await self._sql_job_repository.get_by_id_for_workspace(
             sql_job_id=request.sql_job_id,
             workspace_id=request.workspace_id,
         )
-        if job is None:
+        if legacy_job is None:
             raise BusinessValidationError("SQL job not found.")
+        job: SqlJob | None = to_runtime_sql_job(legacy_job)
+        if job is None:
+            raise BusinessValidationError("SQL job could not be loaded.")
 
         if job.status in {"succeeded", "failed", "cancelled"}:
             self._logger.info("SQL job %s already terminal (%s).", job.id, job.status)
@@ -85,12 +102,14 @@ class SqlJobRequestHandler(BaseMessageHandler):
             providers=RuntimeProviders(),
             services=RuntimeServices(sql_query=self._sql_query_service),
         )
-        return await runtime.execute_sql(
+        result = await runtime.execute_sql(
             request=request,
             job=job,
             create_sql_connector=self._create_sql_connector,
             resolve_connector_config=self._resolve_connector_config,
         )
+        await self._sql_job_store.save(job)
+        return result
 
     def _parse_request(self, payload: SqlJobRequestMessage) -> CreateSqlJobRequest:
         try:

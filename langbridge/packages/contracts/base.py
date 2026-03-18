@@ -1,12 +1,3 @@
-from langbridge.packages.contracts._reexport import reexport_public_api
+from langbridge.contracts.base import _Base
 
-globals().update(
-    reexport_public_api(
-        "langbridge.packages.common.langbridge_common.contracts.base",
-        __name__,
-        include_private=("_Base",),
-    )
-)
-
-from langbridge.packages.common.langbridge_common.contracts.base import _Base
 __all__ = ["_Base"]

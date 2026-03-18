@@ -11,36 +11,14 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from langbridge.packages.common.langbridge_common.db.connector_sync import (
-    ConnectorSyncStateRecord,
-)
-from langbridge.packages.common.langbridge_common.db.dataset import (
-    DatasetColumnRecord,
-    DatasetPolicyRecord,
-    DatasetRecord,
-    DatasetRevisionRecord,
-)
-from langbridge.packages.common.langbridge_common.db.lineage import LineageEdgeRecord
-from langbridge.packages.common.langbridge_common.repositories.connector_sync_repository import (
-    ConnectorSyncStateRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.dataset_repository import (
-    DatasetColumnRepository,
-    DatasetPolicyRepository,
-    DatasetRepository,
-    DatasetRevisionRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.lineage_repository import (
-    LineageEdgeRepository,
-)
-from langbridge.packages.common.langbridge_common.utils.lineage import (
+from langbridge.packages.runtime.utils.lineage import (
     LineageEdgeType,
     LineageNodeType,
     build_api_resource_id,
     build_file_resource_id,
     stable_payload_hash,
 )
-from langbridge.packages.common.langbridge_common.utils.datasets import (
+from langbridge.packages.runtime.utils.datasets import (
     build_dataset_execution_capabilities,
     build_dataset_relation_identity,
     resolve_dataset_source_kind,
@@ -48,6 +26,22 @@ from langbridge.packages.common.langbridge_common.utils.datasets import (
 )
 from langbridge.packages.connectors.langbridge_connectors.api import ApiResource
 from langbridge.packages.connectors.langbridge_connectors.api.config import ConnectorRuntimeType
+from langbridge.packages.runtime.models import (
+    ConnectorSyncState,
+    DatasetColumnMetadata,
+    DatasetMetadata,
+    DatasetPolicyMetadata,
+    DatasetRevision,
+    LineageEdge,
+)
+from langbridge.packages.runtime.ports import (
+    ConnectorSyncStateStore,
+    DatasetCatalogStore,
+    DatasetColumnStore,
+    DatasetPolicyStore,
+    DatasetRevisionStore,
+    LineageEdgeStore,
+)
 from langbridge.packages.runtime.settings import runtime_settings as settings
 
 _RESOURCE_SANITIZER = re.compile(r"[^0-9A-Za-z_]+")
@@ -76,12 +70,12 @@ class ConnectorSyncRuntime:
     def __init__(
         self,
         *,
-        connector_sync_state_repository: ConnectorSyncStateRepository,
-        dataset_repository: DatasetRepository,
-        dataset_column_repository: DatasetColumnRepository,
-        dataset_policy_repository: DatasetPolicyRepository,
-        dataset_revision_repository: DatasetRevisionRepository | None = None,
-        lineage_edge_repository: LineageEdgeRepository | None = None,
+        connector_sync_state_repository: ConnectorSyncStateStore,
+        dataset_repository: DatasetCatalogStore,
+        dataset_column_repository: DatasetColumnStore,
+        dataset_policy_repository: DatasetPolicyStore,
+        dataset_revision_repository: DatasetRevisionStore | None = None,
+        lineage_edge_repository: LineageEdgeStore | None = None,
     ) -> None:
         self._connector_sync_state_repository = connector_sync_state_repository
         self._dataset_repository = dataset_repository
@@ -98,7 +92,7 @@ class ConnectorSyncRuntime:
         connector_type: ConnectorRuntimeType,
         resource_name: str,
         sync_mode: Any,
-    ) -> ConnectorSyncStateRecord:
+    ) -> ConnectorSyncState:
         sync_mode_value = _enum_value(sync_mode)
         state = await self._connector_sync_state_repository.get_for_resource(
             workspace_id=workspace_id,
@@ -107,7 +101,7 @@ class ConnectorSyncRuntime:
         )
         if state is not None:
             return state
-        state = ConnectorSyncStateRecord(
+        state = ConnectorSyncState(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
             connection_id=connection_id,
@@ -116,7 +110,7 @@ class ConnectorSyncRuntime:
             sync_mode=sync_mode_value,
             last_cursor=None,
             last_sync_at=None,
-            state_json={},
+            state={},
             status=_SYNC_STATUS_NEVER_SYNCED,
             error_message=None,
             records_synced=0,
@@ -138,7 +132,7 @@ class ConnectorSyncRuntime:
         connector_type: ConnectorRuntimeType,
         resource: ApiResource,
         api_connector,
-        state: ConnectorSyncStateRecord,
+        state: ConnectorSyncState,
         sync_mode: Any,
     ) -> dict[str, Any]:
         sync_mode_value = _enum_value(sync_mode)
@@ -224,7 +218,7 @@ class ConnectorSyncRuntime:
         state.error_message = None
         state.records_synced = len(parent_rows) + sum(len(rows) for rows in child_rows.values())
         state.bytes_synced = bytes_synced
-        state.state_json = {
+        state.state = {
             "page_count": page_count,
             "dataset_ids": [str(item.dataset_id) for item in materialized],
             "dataset_names": [item.dataset_name for item in materialized],
@@ -241,6 +235,7 @@ class ConnectorSyncRuntime:
             "last_sync_at": now.isoformat(),
         }
         state.updated_at = now
+        await self._connector_sync_state_repository.save(state)
 
         return {
             "resource_name": resource.name,
@@ -252,10 +247,11 @@ class ConnectorSyncRuntime:
             "dataset_names": [item.dataset_name for item in materialized],
         }
 
-    async def mark_failed(self, *, state: ConnectorSyncStateRecord, error_message: str) -> None:
+    async def mark_failed(self, *, state: ConnectorSyncState, error_message: str) -> None:
         state.status = _SYNC_STATUS_FAILED
         state.error_message = error_message
         state.updated_at = datetime.now(timezone.utc)
+        await self._connector_sync_state_repository.save(state)
 
     async def _materialize_dataset(
         self,
@@ -324,7 +320,7 @@ class ConnectorSyncRuntime:
         }
 
         if dataset is None:
-            dataset = DatasetRecord(
+            dataset = DatasetMetadata(
                 id=uuid.uuid4(),
                 workspace_id=workspace_id,
                 project_id=project_id,
@@ -334,7 +330,7 @@ class ConnectorSyncRuntime:
                 name=dataset_name,
                 sql_alias=self._dataset_sql_alias(dataset_name),
                 description=self._dataset_description(connector_record.name, resource_name, parent_resource_name),
-                tags_json=self._dataset_tags(connector_type=connector_type, resource_name=resource_name),
+                tags=self._dataset_tags(connector_type=connector_type, resource_name=resource_name),
                 dataset_type="FILE",
                 dialect="duckdb",
                 catalog_name=None,
@@ -342,9 +338,9 @@ class ConnectorSyncRuntime:
                 table_name=dataset_name,
                 storage_uri=storage_uri,
                 sql_text=None,
-                referenced_dataset_ids_json=[],
-                federated_plan_json=None,
-                file_config_json=file_config,
+                referenced_dataset_ids=[],
+                federated_plan=None,
+                file_config=file_config,
                 status="published",
                 revision_id=None,
                 row_count_estimate=len(merged_rows),
@@ -369,7 +365,7 @@ class ConnectorSyncRuntime:
                 resource_name,
                 parent_resource_name,
             )
-            dataset.tags_json = self._merge_tags(
+            dataset.tags = self._merge_tags(
                 existing=list(dataset.tags_json or []),
                 required=self._dataset_tags(connector_type=connector_type, resource_name=resource_name),
             )
@@ -378,7 +374,7 @@ class ConnectorSyncRuntime:
             dataset.schema_name = None
             dataset.table_name = dataset_name
             dataset.storage_uri = storage_uri
-            dataset.file_config_json = file_config
+            dataset.file_config = file_config
             dataset.status = "published"
             dataset.row_count_estimate = len(merged_rows)
             dataset.bytes_estimate = bytes_written
@@ -398,6 +394,7 @@ class ConnectorSyncRuntime:
             change_summary=change_summary,
         )
         await self._replace_dataset_lineage(dataset=dataset)
+        await self._dataset_repository.save(dataset)
 
         return MaterializedDatasetResult(
             dataset_id=dataset.id,
@@ -408,12 +405,12 @@ class ConnectorSyncRuntime:
             schema_drift=schema_drift,
         )
 
-    async def _replace_columns(self, *, dataset: DatasetRecord, table: pa.Table) -> None:
+    async def _replace_columns(self, *, dataset: DatasetMetadata, table: pa.Table) -> None:
         await self._dataset_column_repository.delete_for_dataset(dataset_id=dataset.id)
         now = datetime.now(timezone.utc)
         for ordinal, field in enumerate(table.schema):
             self._dataset_column_repository.add(
-                DatasetColumnRecord(
+                DatasetColumnMetadata(
                     id=uuid.uuid4(),
                     dataset_id=dataset.id,
                     workspace_id=dataset.workspace_id,
@@ -430,20 +427,21 @@ class ConnectorSyncRuntime:
                 )
             )
 
-    async def _get_or_create_policy(self, *, dataset: DatasetRecord) -> DatasetPolicyRecord:
+    async def _get_or_create_policy(self, *, dataset: DatasetMetadata) -> DatasetPolicyMetadata:
         existing = await self._dataset_policy_repository.get_for_dataset(dataset_id=dataset.id)
         if existing is not None:
             existing.allow_dml = False
             existing.updated_at = datetime.now(timezone.utc)
+            await self._dataset_policy_repository.save(existing)
             return existing
-        policy = DatasetPolicyRecord(
+        policy = DatasetPolicyMetadata(
             id=uuid.uuid4(),
             dataset_id=dataset.id,
             workspace_id=dataset.workspace_id,
             max_rows_preview=1000,
             max_export_rows=100000,
-            redaction_rules_json={},
-            row_filters_json=[],
+            redaction_rules={},
+            row_filters=[],
             allow_dml=False,
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
@@ -454,8 +452,8 @@ class ConnectorSyncRuntime:
     async def _create_dataset_revision(
         self,
         *,
-        dataset: DatasetRecord,
-        policy: DatasetPolicyRecord,
+        dataset: DatasetMetadata,
+        policy: DatasetPolicyMetadata,
         created_by: uuid.UUID,
         change_summary: str,
     ) -> None:
@@ -484,20 +482,20 @@ class ConnectorSyncRuntime:
         }
         revision_id = uuid.uuid4()
         self._dataset_revision_repository.add(
-            DatasetRevisionRecord(
+            DatasetRevision(
                 id=revision_id,
                 dataset_id=dataset.id,
                 workspace_id=dataset.workspace_id,
                 revision_number=next_revision,
                 revision_hash=stable_payload_hash(snapshot),
                 change_summary=change_summary,
-                definition_json=definition,
-                schema_json=schema_snapshot,
-                policy_json=policy_snapshot,
-                source_bindings_json=source_bindings,
-                execution_characteristics_json=execution_characteristics,
+                definition=definition,
+                schema_snapshot=schema_snapshot,
+                policy=policy_snapshot,
+                source_bindings=source_bindings,
+                execution_characteristics=execution_characteristics,
                 status=dataset.status,
-                snapshot_json=snapshot,
+                snapshot=snapshot,
                 note=change_summary,
                 created_by=created_by,
                 created_at=datetime.now(timezone.utc),
@@ -505,7 +503,7 @@ class ConnectorSyncRuntime:
         )
         dataset.revision_id = revision_id
 
-    async def _replace_dataset_lineage(self, *, dataset: DatasetRecord) -> None:
+    async def _replace_dataset_lineage(self, *, dataset: DatasetMetadata) -> None:
         if self._lineage_edge_repository is None:
             return
         await self._lineage_edge_repository.delete_for_target(
@@ -520,23 +518,23 @@ class ConnectorSyncRuntime:
             sync_meta = {}
         storage_uri = str(file_config.get("storage_uri") or dataset.storage_uri or "").strip()
 
-        edges: list[LineageEdgeRecord] = []
+        edges: list[LineageEdge] = []
         if dataset.connection_id is not None:
             edges.append(
-                LineageEdgeRecord(
+                LineageEdge(
                     workspace_id=dataset.workspace_id,
                     source_type=LineageNodeType.CONNECTION.value,
                     source_id=str(dataset.connection_id),
                     target_type=LineageNodeType.DATASET.value,
                     target_id=str(dataset.id),
                     edge_type=LineageEdgeType.FEEDS.value,
-                    metadata_json={"connection_id": str(dataset.connection_id)},
+                    metadata={"connection_id": str(dataset.connection_id)},
                 )
             )
         resource_name = str(sync_meta.get("resource_name") or "").strip()
         if dataset.connection_id is not None and resource_name:
             edges.append(
-                LineageEdgeRecord(
+                LineageEdge(
                     workspace_id=dataset.workspace_id,
                     source_type=LineageNodeType.API_RESOURCE.value,
                     source_id=build_api_resource_id(
@@ -546,7 +544,7 @@ class ConnectorSyncRuntime:
                     target_type=LineageNodeType.DATASET.value,
                     target_id=str(dataset.id),
                     edge_type=LineageEdgeType.MATERIALIZES_FROM.value,
-                    metadata_json={
+                    metadata={
                         "connection_id": str(dataset.connection_id),
                         "connector_type": sync_meta.get("connector_type"),
                         "resource_name": resource_name,
@@ -557,14 +555,14 @@ class ConnectorSyncRuntime:
             )
         if storage_uri:
             edges.append(
-                LineageEdgeRecord(
+                LineageEdge(
                     workspace_id=dataset.workspace_id,
                     source_type=LineageNodeType.FILE_RESOURCE.value,
                     source_id=build_file_resource_id(storage_uri),
                     target_type=LineageNodeType.DATASET.value,
                     target_id=str(dataset.id),
                     edge_type=LineageEdgeType.MATERIALIZES_FROM.value,
-                    metadata_json={
+                    metadata={
                         "storage_uri": storage_uri,
                         "file_config": file_config,
                     },
@@ -574,7 +572,7 @@ class ConnectorSyncRuntime:
             self._lineage_edge_repository.add(edge)
 
     @staticmethod
-    def _column_snapshot(column: DatasetColumnRecord) -> dict[str, Any]:
+    def _column_snapshot(column: DatasetColumnMetadata) -> dict[str, Any]:
         return {
             "id": str(column.id),
             "dataset_id": str(column.dataset_id),
@@ -589,7 +587,7 @@ class ConnectorSyncRuntime:
         }
 
     @staticmethod
-    def _policy_snapshot(policy: DatasetPolicyRecord) -> dict[str, Any]:
+    def _policy_snapshot(policy: DatasetPolicyMetadata) -> dict[str, Any]:
         return {
             "max_rows_preview": policy.max_rows_preview,
             "max_export_rows": policy.max_export_rows,
@@ -599,7 +597,7 @@ class ConnectorSyncRuntime:
         }
 
     @staticmethod
-    def _build_dataset_definition_snapshot(dataset: DatasetRecord) -> dict[str, Any]:
+    def _build_dataset_definition_snapshot(dataset: DatasetMetadata) -> dict[str, Any]:
         relation_identity, execution_capabilities = ConnectorSyncRuntime._resolve_dataset_descriptor_snapshot(
             dataset
         )
@@ -630,7 +628,7 @@ class ConnectorSyncRuntime:
         }
 
     @staticmethod
-    def _build_dataset_source_bindings(dataset: DatasetRecord) -> list[dict[str, Any]]:
+    def _build_dataset_source_bindings(dataset: DatasetMetadata) -> list[dict[str, Any]]:
         file_config = dict(dataset.file_config_json or {})
         sync_meta = file_config.get("connector_sync") if isinstance(file_config.get("connector_sync"), dict) else {}
         storage_uri = str(file_config.get("storage_uri") or dataset.storage_uri or "").strip()
@@ -677,7 +675,7 @@ class ConnectorSyncRuntime:
         return bindings
 
     @staticmethod
-    def _resolve_dataset_descriptor_snapshot(dataset: DatasetRecord) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _resolve_dataset_descriptor_snapshot(dataset: DatasetMetadata) -> tuple[dict[str, Any], dict[str, Any]]:
         relation_identity = dict(dataset.relation_identity_json or {})
         execution_capabilities = dict(dataset.execution_capabilities_json or {})
         return relation_identity, execution_capabilities
@@ -685,7 +683,7 @@ class ConnectorSyncRuntime:
     @staticmethod
     def _apply_dataset_descriptor_metadata(
         *,
-        dataset: DatasetRecord,
+        dataset: DatasetMetadata,
         connection_connector_type: str | None,
     ) -> None:
         connector_kind = str(connection_connector_type or "").strip().lower() or None
@@ -722,8 +720,8 @@ class ConnectorSyncRuntime:
         dataset.source_kind = source_kind.value
         dataset.connector_kind = connector_kind
         dataset.storage_kind = storage_kind.value
-        dataset.relation_identity_json = relation_identity.model_dump(mode="json")
-        dataset.execution_capabilities_json = execution_capabilities.model_dump(mode="json")
+        dataset.relation_identity = relation_identity.model_dump(mode="json")
+        dataset.execution_capabilities = execution_capabilities.model_dump(mode="json")
 
     @staticmethod
     def _dataset_name(

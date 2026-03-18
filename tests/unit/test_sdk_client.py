@@ -10,19 +10,19 @@ from pathlib import Path
 
 import httpx
 
-from langbridge.packages.common.langbridge_common.contracts.jobs.agent_job import (
+from langbridge.contracts.jobs.agent_job import (
     AgentJobStateResponse,
     JobFinalResponse,
 )
-from langbridge.packages.common.langbridge_common.contracts.datasets import DatasetListResponse
-from langbridge.packages.common.langbridge_common.contracts.sql import (
+from langbridge.contracts.datasets import DatasetListResponse
+from langbridge.contracts.sql import (
     SqlJobResultsResponse,
     SqlJobStatus,
     SqlJobResponse,
     SqlWorkbenchMode,
     SqlExecutionMode,
 )
-from langbridge.packages.common.langbridge_common.contracts.threads import ThreadResponse
+from langbridge.contracts.threads import ThreadResponse
 from langbridge import LangbridgeClient
 
 

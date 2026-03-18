@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
-from langbridge.packages.common.langbridge_common.contracts.datasets import (
+from langbridge.contracts.datasets import (
     DatasetExecutionCapabilities,
     DatasetRelationIdentity,
     DatasetSourceKind,

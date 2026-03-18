@@ -10,13 +10,13 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Protocol, Tuple
 from uuid import UUID
 
-from langbridge.packages.common.langbridge_common.errors.application_errors import BusinessValidationError
-from langbridge.packages.contracts.semantic import (
+from langbridge.packages.runtime.models import (
     SemanticQueryMetaResponse,
     SemanticQueryRequest,
     SemanticQueryResponse,
 )
 from langbridge.packages.orchestrator.langbridge_orchestrator.llm.provider import LLMProvider
+from langbridge.packages.runtime.errors import BusinessValidationError
 from langbridge.packages.semantic.langbridge_semantic.query import SemanticQuery
 
 from .schemas import (
@@ -271,4 +271,3 @@ class SemanticQueryBuilderCopilotTool:
                 if depth == 0:
                     return stripped[start : idx + 1]
         return None
-

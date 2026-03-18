@@ -1,0 +1,5 @@
+from langbridge.contracts._reexport import reexport_public_api
+
+globals().update(reexport_public_api("langbridge.packages.federation", __name__))
+
+__all__ = [name for name in globals() if not name.startswith("_")]

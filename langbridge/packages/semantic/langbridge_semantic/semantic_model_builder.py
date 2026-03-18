@@ -15,7 +15,7 @@ from langbridge.packages.connectors.langbridge_connectors.api import (
 from langbridge.packages.semantic.langbridge_semantic.model import MeasureAggregation
 from langbridge.packages.semantic.langbridge_semantic import Dimension, Measure, Relationship, SemanticModel, Table
 from langbridge.packages.semantic.langbridge_semantic.loader import load_semantic_model
-from langbridge.packages.contracts.connectors import ConnectorResponse
+from langbridge.contracts.connectors import ConnectorResponse
 
 logger = logging.getLogger(__name__)
 

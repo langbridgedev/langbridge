@@ -44,6 +44,9 @@ class BaseRepository(Generic[ModelT]):
     def get_all(self) -> list[ModelT]:
         return list(self._session.scalars(select(self._model)).all())
 
+    def save(self, instance: ModelT) -> ModelT:
+        return self._session.merge(instance)
+
 
 class AsyncBaseRepository(Generic[ModelT]):
     def __init__(self, session: AsyncSession, model: type[ModelT]):
@@ -64,6 +67,9 @@ class AsyncBaseRepository(Generic[ModelT]):
     async def get_all(self) -> list[ModelT]:
         result = await self._session.scalars(select(self._model))
         return list(result.all())
+
+    async def save(self, instance: ModelT) -> ModelT:
+        return await self._session.merge(instance)
 
     async def commit(self) -> None:
         await self._session.commit()

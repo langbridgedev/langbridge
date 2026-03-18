@@ -1,7 +1,8 @@
-"""Runtime-owned contracts package.
+"""Compatibility package for legacy contract imports.
 
-Importing a specific contracts submodule should not force the entire contracts
-surface, and its transitive infrastructure dependencies, into memory.
+Canonical contract modules now live under ``langbridge.contracts``. Keep this
+package as a backward-compatible shim while runtime consumers migrate to the
+root monolith namespace.
 """
 
 from __future__ import annotations

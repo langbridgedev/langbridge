@@ -9,12 +9,14 @@ import pytest
 from langbridge.packages.runtime.adapters import (
     to_runtime_connector,
     to_runtime_dataset,
+    to_runtime_sql_job,
 )
 from langbridge.packages.runtime.models import ConnectorSyncState
 from langbridge.packages.runtime.providers.memory import (
     MemoryDatasetProvider,
     MemorySyncStateProvider,
 )
+from langbridge.packages.runtime.utils import build_connector_runtime_payload
 
 
 @pytest.fixture
@@ -64,6 +66,28 @@ def test_to_runtime_connector_maps_legacy_connector_shape() -> None:
     assert connector.secret_references["password"].identifier == "DB_PASSWORD"
     assert connector.connection_policy is not None
     assert connector.connection_policy.allowed_schemas == ["public"]
+
+
+def test_build_connector_runtime_payload_uses_runtime_secret_references() -> None:
+    payload = build_connector_runtime_payload(
+        config_json='{"config": {"database": "analytics"}}',
+        connection_metadata={
+            "host": "db.internal",
+            "extra": {"sslmode": "require"},
+        },
+        secret_references={
+            "password": {
+                "provider_type": "env",
+                "identifier": "DB_PASSWORD",
+            }
+        },
+        secret_resolver=lambda ref: f"resolved:{ref.identifier}",
+    )
+
+    assert payload["config"]["database"] == "analytics"
+    assert payload["config"]["host"] == "db.internal"
+    assert payload["config"]["sslmode"] == "require"
+    assert payload["config"]["password"] == "resolved:DB_PASSWORD"
 
 
 def test_to_runtime_dataset_maps_legacy_dataset_shape() -> None:
@@ -139,6 +163,61 @@ def test_to_runtime_dataset_maps_legacy_dataset_shape() -> None:
     assert dataset.columns[0].name == "order_id"
     assert dataset.policy is not None
     assert dataset.policy.redaction_rules_json == {"email": "mask"}
+
+
+def test_to_runtime_sql_job_maps_legacy_sql_job_shape() -> None:
+    workspace_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    connection_id = uuid.uuid4()
+    created_at = datetime.now(timezone.utc)
+    legacy_job = SimpleNamespace(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        project_id=None,
+        user_id=user_id,
+        connection_id=connection_id,
+        workbench_mode="dataset",
+        selected_datasets_json=[{"dataset_id": str(uuid.uuid4()), "alias": "orders"}],
+        execution_mode="single",
+        status="queued",
+        query_text="SELECT 1",
+        query_hash="hash-123",
+        query_params_json={"limit": 1},
+        requested_limit=10,
+        enforced_limit=10,
+        requested_timeout_seconds=15,
+        enforced_timeout_seconds=15,
+        is_explain=False,
+        is_federated=False,
+        correlation_id="corr-1",
+        policy_snapshot_json={"allow_dml": False},
+        result_columns_json=[{"name": "id", "type": "integer"}],
+        result_rows_json=[{"id": 1}],
+        row_count_preview=1,
+        total_rows_estimate=None,
+        bytes_scanned=128,
+        duration_ms=25,
+        result_cursor="0",
+        redaction_applied=False,
+        error_json=None,
+        warning_json=None,
+        stats_json={"rows_returned": 1},
+        created_at=created_at,
+        started_at=created_at,
+        finished_at=created_at,
+        updated_at=created_at,
+    )
+
+    job = to_runtime_sql_job(legacy_job)
+
+    assert job is not None
+    assert job.workspace_id == workspace_id
+    assert job.user_id == user_id
+    assert job.connection_id == connection_id
+    assert job.query_text == "SELECT 1"
+    assert job.query_params_json == {"limit": 1}
+    assert job.result_rows_json == [{"id": 1}]
+    assert job.stats_json == {"rows_returned": 1}
 
 
 @pytest.mark.anyio

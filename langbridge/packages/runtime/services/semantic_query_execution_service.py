@@ -19,15 +19,7 @@ from langbridge.packages.runtime.models import (
     UnifiedSemanticSourceModelRequest,
     UnifiedSemanticQueryResponse,
 )
-from langbridge.packages.common.langbridge_common.errors.application_errors import (
-    BusinessValidationError,
-)
-from langbridge.packages.common.langbridge_common.repositories.semantic_model_repository import (
-    SemanticModelRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.dataset_repository import (
-    DatasetRepository,
-)
+from langbridge.packages.runtime.errors import BusinessValidationError
 from langbridge.packages.connectors.langbridge_connectors.api import (
     ConnectorRuntimeTypeSqlDialectMap,
     SqlConnector,
@@ -36,6 +28,7 @@ from langbridge.packages.connectors.langbridge_connectors.api import (
 )
 from langbridge.packages.connectors.langbridge_connectors.api.config import ConnectorRuntimeType
 from langbridge.packages.runtime.execution.federated_query_tool import FederatedQueryTool
+from langbridge.packages.runtime.ports import DatasetCatalogStore
 from langbridge.packages.runtime.providers import (
     DatasetMetadataProvider,
     SemanticModelMetadataProvider,
@@ -104,14 +97,12 @@ class SemanticQueryExecutionService:
     def __init__(
         self,
         *,
-        semantic_model_repository: SemanticModelRepository | None,
-        dataset_repository: DatasetRepository | None,
+        dataset_repository: DatasetCatalogStore | None,
         federated_query_tool: FederatedQueryTool | None,
         logger: logging.Logger,
         dataset_provider: DatasetMetadataProvider | None = None,
         semantic_model_provider: SemanticModelMetadataProvider | None = None,
     ) -> None:
-        self._semantic_model_repository = semantic_model_repository
         self._dataset_repository = dataset_repository
         self._dataset_provider = dataset_provider
         self._semantic_model_provider = semantic_model_provider
@@ -666,11 +657,8 @@ class SemanticQueryExecutionService:
                 organization_id=organization_id,
                 semantic_model_id=semantic_model_id,
             )
-        if self._semantic_model_repository is None:
-            raise BusinessValidationError("Semantic model repository is required for semantic query execution.")
-        return await self._semantic_model_repository.get_for_scope(
-            model_id=semantic_model_id,
-            organization_id=organization_id,
+        raise BusinessValidationError(
+            "Semantic model metadata provider is required for semantic query execution."
         )
 
     async def _get_dataset_record(
@@ -810,6 +798,3 @@ class SemanticQueryExecutionService:
             except Exception:
                 return None
         return None
-
-
-

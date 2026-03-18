@@ -8,7 +8,7 @@ from typing import Any, Iterable, List, Sequence
 
 from openai import OpenAI, OpenAIError, AzureOpenAI  # type: ignore[import-untyped]
 
-from langbridge.packages.common.langbridge_common.contracts.llm_connections import LLMProvider
+from langbridge.contracts.llm_connections import LLMProvider
 
 
 DEFAULT_OPENAI_EMBED_MODEL = "text-embedding-3-small"

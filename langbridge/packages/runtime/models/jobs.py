@@ -8,6 +8,11 @@ from typing import Any, Literal
 from pydantic import Field, model_validator
 
 from langbridge.packages.runtime.models.base import RuntimeRequestModel
+from langbridge.packages.runtime.models.semantic import (
+    UnifiedSemanticMetricRequest,
+    UnifiedSemanticRelationshipRequest,
+    UnifiedSemanticSourceModelRequest,
+)
 
 
 class JobType(str, Enum):
@@ -26,6 +31,9 @@ class JobType(str, Enum):
 class SqlWorkbenchMode(str, Enum):
     dataset = "dataset"
     direct_sql = "direct_sql"
+
+
+_CONNECTOR_SYNC_MODES = {"INCREMENTAL", "FULL_REFRESH", "WEBHOOK_ASSISTED"}
 
 
 class SqlSelectedDataset(RuntimeRequestModel):
@@ -123,6 +131,37 @@ class CreateSqlJobRequest(RuntimeRequestModel):
         return self
 
 
+class CreateSemanticQueryJobRequest(RuntimeRequestModel):
+    job_type: JobType = JobType.SEMANTIC_QUERY
+    organisation_id: uuid.UUID
+    project_id: uuid.UUID | None = None
+    user_id: uuid.UUID
+    query_scope: Literal["semantic_model", "unified"] = "semantic_model"
+    semantic_model_id: uuid.UUID | None = None
+    connector_id: uuid.UUID | None = None
+    semantic_model_ids: list[uuid.UUID] | None = None
+    source_models: list[UnifiedSemanticSourceModelRequest] | None = None
+    relationships: list[UnifiedSemanticRelationshipRequest] | None = None
+    metrics: dict[str, UnifiedSemanticMetricRequest] | None = None
+    query: dict[str, Any]
+
+    @model_validator(mode="after")
+    def _validate_scope_payload(self) -> "CreateSemanticQueryJobRequest":
+        if self.query_scope == "semantic_model":
+            if self.semantic_model_id is None:
+                raise ValueError("semantic_model_id is required for semantic_model query scope.")
+            return self
+
+        if self.query_scope == "unified":
+            if not self.semantic_model_ids:
+                raise ValueError(
+                    "semantic_model_ids must include at least one model id for unified query scope."
+                )
+            return self
+
+        raise ValueError(f"Unsupported semantic query scope '{self.query_scope}'.")
+
+
 class DatasetPolicyDefaultsRequest(RuntimeRequestModel):
     max_preview_rows: int | None = Field(default=None, ge=1)
     max_export_rows: int | None = Field(default=None, ge=1)
@@ -212,6 +251,31 @@ class CreateDatasetBulkCreateJobRequest(RuntimeRequestModel):
             raise ValueError("Bulk create job requires at least one selection.")
         if len(self.selections) > 500:
             raise ValueError("Bulk create job supports at most 500 selections.")
+        return self
+
+
+class CreateConnectorSyncJobRequest(RuntimeRequestModel):
+    job_type: JobType = JobType.CONNECTOR_SYNC
+    workspace_id: uuid.UUID
+    project_id: uuid.UUID | None = None
+    user_id: uuid.UUID
+    connection_id: uuid.UUID
+    resource_names: list[str] = Field(default_factory=list)
+    sync_mode: str = "INCREMENTAL"
+    force_full_refresh: bool = False
+    correlation_id: str | None = None
+    operation: Literal["connector_sync"] = "connector_sync"
+
+    @model_validator(mode="after")
+    def _validate_resource_names(self) -> "CreateConnectorSyncJobRequest":
+        normalized = [str(value or "").strip() for value in self.resource_names if str(value or "").strip()]
+        if not normalized:
+            raise ValueError("Connector sync requires at least one resource.")
+        sync_mode = str(getattr(self.sync_mode, "value", self.sync_mode) or "INCREMENTAL").strip().upper()
+        if sync_mode not in _CONNECTOR_SYNC_MODES:
+            raise ValueError(f"Unsupported connector sync mode '{sync_mode}'.")
+        self.resource_names = normalized
+        self.sync_mode = sync_mode
         return self
 
 

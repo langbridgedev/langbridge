@@ -1,6 +1,6 @@
 
-from langbridge.packages.messaging.langbridge_messaging.broker.redis import RedisStreams
-from langbridge.packages.messaging.langbridge_messaging.contracts.base import MessageType
+from ..broker.redis import RedisStreams
+from .base import MessageType
 
 
 STREAM_MAPPING = {

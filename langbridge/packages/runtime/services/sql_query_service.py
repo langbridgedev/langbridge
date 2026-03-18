@@ -6,31 +6,16 @@ from typing import Any, Awaitable, Callable
 
 import sqlglot
 from sqlglot import exp
-
-from langbridge.packages.runtime.adapters import to_runtime_connector
 from langbridge.packages.runtime.models import (
     CreateSqlJobRequest,
+    SqlJob,
+    SqlJobResultArtifact,
 )
-from langbridge.packages.common.langbridge_common.db.sql import (
-    SqlJobRecord,
-    SqlJobResultArtifactRecord,
-)
-from langbridge.packages.common.langbridge_common.errors.application_errors import (
-    BusinessValidationError,
-)
-from langbridge.packages.common.langbridge_common.repositories.connector_repository import (
-    ConnectorRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.dataset_repository import (
-    DatasetRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.sql_repository import (
-    SqlJobResultArtifactRepository,
-)
-from langbridge.packages.common.langbridge_common.utils.datasets import (
+from langbridge.packages.runtime.errors import BusinessValidationError
+from langbridge.packages.runtime.utils.datasets import (
     dataset_supports_structured_federation,
 )
-from langbridge.packages.common.langbridge_common.utils.sql import (
+from langbridge.packages.runtime.utils.sql import (
     apply_result_redaction,
     enforce_preview_limit,
     enforce_read_only_sql,
@@ -48,6 +33,10 @@ from langbridge.packages.connectors.langbridge_connectors.api import (
 from langbridge.packages.connectors.langbridge_connectors.api.config import ConnectorRuntimeType
 from langbridge.packages.federation.models import FederationWorkflow, VirtualDataset, VirtualTableBinding
 from langbridge.packages.runtime.execution import FederatedQueryTool
+from langbridge.packages.runtime.ports import (
+    DatasetCatalogStore,
+    SqlJobArtifactStore,
+)
 from langbridge.packages.runtime.providers import (
     ConnectorMetadataProvider,
     CredentialProvider,
@@ -66,9 +55,8 @@ ResolveConnectorConfig = Callable[[ConnectorMetadata], dict[str, Any]]
 class SqlQueryService:
     def __init__(
         self,
-        sql_job_result_artifact_repository: SqlJobResultArtifactRepository | None,
-        connector_repository: ConnectorRepository | None,
-        dataset_repository: DatasetRepository | None = None,
+        sql_job_result_artifact_store: SqlJobArtifactStore | None,
+        dataset_repository: DatasetCatalogStore | None = None,
         secret_provider_registry: SecretProviderRegistry | None = None,
         federated_query_tool: FederatedQueryTool | None = None,
         connector_provider: ConnectorMetadataProvider | None = None,
@@ -76,8 +64,7 @@ class SqlQueryService:
         credential_provider: CredentialProvider | None = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
-        self._sql_job_result_artifact_repository = sql_job_result_artifact_repository
-        self._connector_repository = connector_repository
+        self._sql_job_result_artifact_store = sql_job_result_artifact_store
         self._dataset_repository = dataset_repository
         self._connector_provider = connector_provider
         self._dataset_provider = dataset_provider
@@ -96,7 +83,7 @@ class SqlQueryService:
         self,
         *,
         request: CreateSqlJobRequest,
-        job: SqlJobRecord | None = None,
+        job: SqlJob | None = None,
         create_sql_connector: CreateSqlConnector | None = None,
         resolve_connector_config: ResolveConnectorConfig | None = None,
     ) -> dict[str, Any]:
@@ -125,7 +112,7 @@ class SqlQueryService:
     async def execute_job(
         self,
         *,
-        job: SqlJobRecord,
+        job: SqlJob,
         request: CreateSqlJobRequest,
         create_sql_connector: CreateSqlConnector | None = None,
         resolve_connector_config: ResolveConnectorConfig | None = None,
@@ -156,7 +143,7 @@ class SqlQueryService:
 
     async def _execute_single(
         self,
-        job: SqlJobRecord,
+        job: SqlJob,
         request: CreateSqlJobRequest,
         *,
         create_sql_connector: CreateSqlConnector,
@@ -265,7 +252,7 @@ class SqlQueryService:
         
     async def _execute_federated(
         self,
-        job: SqlJobRecord,
+        job: SqlJob,
         request: CreateSqlJobRequest,
     ) -> None:
         if not settings.SQL_FEDERATION_ENABLED or not request.allow_federation:
@@ -360,7 +347,7 @@ class SqlQueryService:
 
     async def _store_explain_result(
         self,
-        job: SqlJobRecord,
+        job: SqlJob,
         request: CreateSqlJobRequest,
         rendered_query: str,
         *,
@@ -440,11 +427,7 @@ class SqlQueryService:
     ) -> ConnectorMetadata | None:
         if self._connector_provider is not None:
             return await self._connector_provider.get_connector(connection_id)
-
-        if self._connector_repository is None:
-            raise BusinessValidationError("Connector metadata provider is required for SQL execution.")
-        connector = await self._connector_repository.get_by_id(connection_id)
-        return to_runtime_connector(connector)
+        raise BusinessValidationError("Connector metadata provider is required for SQL execution.")
 
     def _resolve_connector_config(self, connector: ConnectorMetadata) -> dict[str, Any]:
         resolved_payload = dict(connector.config or {})
@@ -501,15 +484,15 @@ class SqlQueryService:
     def _store_preview_artifact(
         self,
         *,
-        job: SqlJobRecord,
+        job: SqlJob,
         columns_payload: list[dict[str, Any]],
         rows: list[dict[str, Any]],
         now: datetime,
     ) -> None:
-        if self._sql_job_result_artifact_repository is None:
+        if self._sql_job_result_artifact_store is None:
             return
         snapshot_artifact_id = uuid.uuid4()
-        snapshot_artifact = SqlJobResultArtifactRecord(
+        snapshot_artifact = SqlJobResultArtifact(
             id=snapshot_artifact_id,
             sql_job_id=job.id,
             workspace_id=job.workspace_id,
@@ -526,7 +509,7 @@ class SqlQueryService:
             },
             created_at=now,
         )
-        self._sql_job_result_artifact_repository.add(snapshot_artifact)
+        self._sql_job_result_artifact_store.add(snapshot_artifact)
 
     async def _build_federated_workflow(
         self,
@@ -535,7 +518,7 @@ class SqlQueryService:
         query: str,
         source_dialect: str,
         federated_datasets: list[dict[str, Any]],
-        job: SqlJobRecord,
+        job: SqlJob,
     ) -> tuple[FederationWorkflow, list[str]]:
         return await self._build_dataset_federated_workflow(
             workspace_id=workspace_id,
@@ -552,7 +535,7 @@ class SqlQueryService:
         query: str,
         source_dialect: str,
         federated_datasets: list[dict[str, Any]],
-        job: SqlJobRecord,
+        job: SqlJob,
     ) -> tuple[FederationWorkflow, list[str]]:
         dataset_map = self._normalize_federated_datasets(federated_datasets)
         datasets = await self._get_datasets_for_workspace(
@@ -701,7 +684,7 @@ class SqlQueryService:
         raise BusinessValidationError("Dataset metadata provider is required for dataset-backed federated SQL.")
 
     @staticmethod
-    def _result_payload(job: SqlJobRecord) -> dict[str, Any]:
+    def _result_payload(job: SqlJob) -> dict[str, Any]:
         return {
             "columns": list(job.result_columns_json or []),
             "rows": list(job.result_rows_json or []),
@@ -715,10 +698,10 @@ class SqlQueryService:
         }
 
     @staticmethod
-    def _build_transient_job(request: CreateSqlJobRequest) -> SqlJobRecord:
+    def _build_transient_job(request: CreateSqlJobRequest) -> SqlJob:
         now = datetime.now(timezone.utc)
         query_hash = hashlib.sha256(request.query.strip().encode("utf-8")).hexdigest()
-        return SqlJobRecord(
+        return SqlJob(
             id=request.sql_job_id,
             workspace_id=request.workspace_id,
             project_id=request.project_id,
@@ -844,7 +827,7 @@ class SqlQueryService:
     def _store_federated_explain_result(
         self,
         *,
-        job: SqlJobRecord,
+        job: SqlJob,
         request: CreateSqlJobRequest,
         explain_payload: dict[str, Any],
         query_sql: str,

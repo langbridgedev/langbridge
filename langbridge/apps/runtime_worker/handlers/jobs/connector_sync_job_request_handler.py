@@ -3,20 +3,10 @@ from datetime import datetime, timezone
 
 from pydantic import ValidationError
 
-from langbridge.packages.common.langbridge_common.contracts.connectors import (
-    ConnectorSyncMode,
-    ConnectorSyncStatus,
-)
-from langbridge.packages.common.langbridge_common.contracts.jobs.connector_job import (
-    CreateConnectorSyncJobRequest,
-)
 from langbridge.packages.common.langbridge_common.db.job import (
     JobEventRecord,
     JobEventVisibility,
     JobStatus,
-)
-from langbridge.packages.common.langbridge_common.errors.application_errors import (
-    BusinessValidationError,
 )
 from langbridge.packages.common.langbridge_common.repositories.connector_repository import (
     ConnectorRepository,
@@ -34,7 +24,9 @@ from langbridge.packages.common.langbridge_common.repositories.job_repository im
 from langbridge.packages.common.langbridge_common.repositories.lineage_repository import (
     LineageEdgeRepository,
 )
-from langbridge.packages.common.langbridge_common.utils.connector_runtime import (
+from langbridge.packages.runtime.errors import BusinessValidationError
+from langbridge.packages.runtime.models import CreateConnectorSyncJobRequest
+from langbridge.packages.runtime.utils.connector_runtime import (
     build_connector_runtime_payload,
 )
 from langbridge.packages.connectors.langbridge_connectors.api import (
@@ -162,8 +154,8 @@ class ConnectorSyncJobRequestHandler(BaseMessageHandler):
                     resource_name=resource_name,
                     sync_mode=request.sync_mode,
                 )
-                active_state.status = ConnectorSyncStatus.RUNNING.value
-                active_state.sync_mode = request.sync_mode.value
+                active_state.status = "running"
+                active_state.sync_mode = request.sync_mode
                 active_state.error_message = None
                 active_state.updated_at = datetime.now(timezone.utc)
 
@@ -178,7 +170,7 @@ class ConnectorSyncJobRequestHandler(BaseMessageHandler):
                     api_connector=api_connector,
                     state=active_state,
                     sync_mode=(
-                        ConnectorSyncMode.FULL_REFRESH
+                        "FULL_REFRESH"
                         if request.force_full_refresh
                         else request.sync_mode
                     ),

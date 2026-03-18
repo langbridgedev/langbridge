@@ -14,12 +14,10 @@ from langbridge.packages.runtime.services.semantic_query_execution_service impor
     SemanticQueryExecutionService,
     _normalize_unified_relationship_payload,
 )
-from langbridge.packages.common.langbridge_common.contracts.semantic import (
+from langbridge.packages.runtime.models import (
     UnifiedSemanticRelationshipRequest,
 )
-from langbridge.packages.common.langbridge_common.errors.application_errors import (
-    BusinessValidationError,
-)
+from langbridge.packages.runtime.errors import BusinessValidationError
 from langbridge.packages.semantic.langbridge_semantic.model import Dimension, SemanticModel, Table
 from langbridge.packages.semantic.langbridge_semantic.query import SemanticQuery
 
@@ -187,12 +185,17 @@ def test_to_semantic_filters_normalizes_iso_dot_date_range_for_date_member() -> 
     ]
 
 
-class _FakeSemanticModelRepository:
+class _FakeSemanticModelProvider:
     def __init__(self, models: dict[uuid.UUID, _ModelRecord]) -> None:
         self._models = models
 
-    async def get_for_scope(self, *, model_id: uuid.UUID, organization_id: uuid.UUID) -> _ModelRecord | None:
-        return self._models.get(model_id)
+    async def get_semantic_model(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        semantic_model_id: uuid.UUID,
+    ) -> _ModelRecord | None:
+        return self._models.get(semantic_model_id)
 
 
 class _FakeFederatedQueryTool:
@@ -289,7 +292,7 @@ async def test_execute_unified_query_routes_through_federated_tool() -> None:
             )
         },
     )
-    repo = _FakeSemanticModelRepository(
+    provider = _FakeSemanticModelProvider(
         {
             model_id: _ModelRecord(
                 id=model_id,
@@ -301,7 +304,6 @@ async def test_execute_unified_query_routes_through_federated_tool() -> None:
     )
     tool = _FakeFederatedQueryTool(rows=[{"orders__id": 1}])
     service = SemanticQueryExecutionService(
-        semantic_model_repository=repo,
         dataset_repository=_FakeDatasetRepository(
             {
                 dataset_id: _dataset_stub(
@@ -323,6 +325,7 @@ async def test_execute_unified_query_routes_through_federated_tool() -> None:
         ),
         federated_query_tool=tool,
         logger=logging.getLogger(__name__),
+        semantic_model_provider=provider,
     )
 
     result = await service.execute_unified_query(
@@ -368,7 +371,7 @@ async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() 
             ),
         },
     )
-    repo = _FakeSemanticModelRepository(
+    provider = _FakeSemanticModelProvider(
         {
             model_id: _ModelRecord(
                 id=model_id,
@@ -412,10 +415,10 @@ async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() 
     )
     tool = _FakeFederatedQueryTool(rows=[{"orders__id": 1}])
     service = SemanticQueryExecutionService(
-        semantic_model_repository=repo,
         dataset_repository=dataset_repo,
         federated_query_tool=tool,
         logger=logging.getLogger(__name__),
+        semantic_model_provider=provider,
     )
 
     result = await service.execute_unified_query(
@@ -433,9 +436,6 @@ async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() 
     inventory_binding = workflow["dataset"]["tables"]["Inventory__inventory"]
     assert orders_binding["metadata"]["source_kind"] == "file"
     assert inventory_binding["connector_id"] == str(warehouse_connector_id)
-
-
-
 
 
 

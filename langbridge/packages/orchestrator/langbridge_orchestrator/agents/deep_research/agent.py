@@ -12,9 +12,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
-from langbridge.packages.common.langbridge_common.interfaces.agent_events import (
+from langbridge.packages.runtime.events import (
     AgentEventVisibility,
-    IAgentEventEmitter,
+    AgentEventEmitter,
 )
 from langbridge.packages.orchestrator.langbridge_orchestrator.agents.web_search import (
     WebSearchAgent,
@@ -115,7 +115,7 @@ class DeepResearchAgent:
         llm: LLMProvider,
         web_search_agent: Optional[WebSearchAgent] = None,
         logger: Optional[logging.Logger] = None,
-        event_emitter: Optional[IAgentEventEmitter] = None,
+        event_emitter: Optional[AgentEventEmitter] = None,
         default_max_steps: int = 4,
         min_source_diversity: int = 3,
     ) -> None:

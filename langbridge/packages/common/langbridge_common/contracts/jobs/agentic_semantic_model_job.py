@@ -5,9 +5,8 @@ from typing import List
 
 from pydantic import Field, model_validator
 
-from langbridge.packages.common.langbridge_common.contracts.base import _Base
-
-from .type import JobType
+from langbridge.contracts.base import _Base
+from langbridge.contracts.jobs.type import JobType
 
 
 class CreateAgenticSemanticModelJobRequest(_Base):

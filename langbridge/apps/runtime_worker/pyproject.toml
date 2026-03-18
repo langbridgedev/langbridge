@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Langbridge runtime worker assembly application"
 requires-python = ">=3.10"
 dependencies = [
+  "langbridge @ file:../../..",
   "langbridge-common @ file:../../packages/common",
   "langbridge-connectors @ file:../../packages/connectors",
   "langbridge-semantic @ file:../../packages/semantic",

@@ -1,9 +1,7 @@
-from langbridge.packages.connectors.langbridge_connectors.api.config import (
+from langbridge.plugins import (
+    ConnectorPlugin,
     ConnectorFamily,
     ConnectorRuntimeType,
-)
-from langbridge.packages.connectors.langbridge_connectors.api.registry import (
-    ConnectorPlugin,
     register_connector_plugin,
 )
 

@@ -11,7 +11,7 @@ import pytest
 
 from langbridge.packages.runtime.services.dataset_sync_service import ConnectorSyncRuntime
 from langbridge.packages.common.langbridge_common.config import settings
-from langbridge.packages.common.langbridge_common.contracts.connectors import (
+from langbridge.contracts.connectors import (
     ConnectorSyncMode,
     ConnectorSyncStatus,
 )
@@ -55,6 +55,10 @@ class _FakeConnectorSyncStateRepository:
     def add(self, state: ConnectorSyncStateRecord) -> None:
         self.items[(state.workspace_id, state.connection_id, state.resource_name)] = state
 
+    async def save(self, state: ConnectorSyncStateRecord) -> ConnectorSyncStateRecord:
+        self.add(state)
+        return state
+
     async def get_for_resource(
         self,
         *,
@@ -83,6 +87,10 @@ class _FakeDatasetRepository:
 
     def add(self, dataset: DatasetRecord) -> None:
         self.items[dataset.id] = dataset
+
+    async def save(self, dataset: DatasetRecord) -> DatasetRecord:
+        self.add(dataset)
+        return dataset
 
     async def find_file_dataset_for_connection(
         self,
@@ -143,6 +151,10 @@ class _FakeDatasetPolicyRepository:
 
     def add(self, policy: DatasetPolicyRecord) -> None:
         self.by_dataset[policy.dataset_id] = policy
+
+    async def save(self, policy: DatasetPolicyRecord) -> DatasetPolicyRecord:
+        self.add(policy)
+        return policy
 
     async def get_for_dataset(self, *, dataset_id: uuid.UUID) -> DatasetPolicyRecord | None:
         return self.by_dataset.get(dataset_id)

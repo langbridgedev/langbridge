@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from langbridge.packages.common.langbridge_common.contracts.datasets import (
+from langbridge.contracts.datasets import (
     DatasetSourceKind,
     DatasetStorageKind,
 )

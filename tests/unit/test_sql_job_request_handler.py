@@ -9,14 +9,14 @@ import pytest
 from langbridge.apps.runtime_worker.handlers.query.sql_job_request_handler import (
     SqlJobRequestHandler,
 )
-from langbridge.packages.common.langbridge_common.contracts.connectors import (
+from langbridge.contracts.connectors import (
     ConnectionPolicy,
     ConnectorResponse,
 )
 from langbridge.packages.runtime.models import (
     CreateSqlJobRequest,
 )
-from langbridge.packages.common.langbridge_common.contracts.jobs.type import JobType
+from langbridge.contracts.jobs.type import JobType
 from langbridge.packages.common.langbridge_common.db.dataset import DatasetRecord
 from langbridge.packages.common.langbridge_common.db.sql import SqlJobRecord
 from langbridge.packages.connectors.langbridge_connectors.api.connector import QueryResult
@@ -38,6 +38,11 @@ class _FakeSqlJobRepository:
         if self._job.id == sql_job_id and self._job.workspace_id == workspace_id:
             return self._job
         return None
+
+    async def save(self, job: SqlJobRecord) -> SqlJobRecord:
+        for column in job.__table__.columns:
+            setattr(self._job, column.name, getattr(job, column.name))
+        return self._job
 
 
 class _FakeSqlArtifactRepository:

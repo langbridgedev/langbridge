@@ -5,8 +5,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
-from langbridge.packages.common.langbridge_common.db.threads import Role
-from langbridge.packages.runtime.models import CreateDatasetPreviewJobRequest
+from langbridge.packages.runtime.models import (
+    CreateDatasetPreviewJobRequest,
+    RuntimeMessageRole,
+)
 from langbridge.packages.runtime.local_config import build_configured_local_runtime
 from tests.unit._runtime_host_sync_helpers import (
     mock_stripe_api,
@@ -108,7 +110,7 @@ def test_configured_local_runtime_ask_agent_uses_agent_execution() -> None:
     assert payload["thread_id"] == request.thread_id
     assert request.agent_definition_id == next(iter(runtime._agents.values())).id
     assert len(runtime._thread_message_repository.items) == 1
-    assert runtime._thread_message_repository.items[0].role == Role.user
+    assert runtime._thread_message_repository.items[0].role == RuntimeMessageRole.user
 
 
 def test_build_configured_local_runtime_supports_file_backed_datasets() -> None:

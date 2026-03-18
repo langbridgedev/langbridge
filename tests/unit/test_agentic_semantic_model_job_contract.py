@@ -3,7 +3,7 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-from langbridge.packages.common.langbridge_common.contracts.jobs.agentic_semantic_model_job import (
+from langbridge.contracts.jobs.agentic_semantic_model_job import (
     CreateAgenticSemanticModelJobRequest,
 )
 from langbridge.packages.messaging.langbridge_messaging.broker.redis import RedisStreams

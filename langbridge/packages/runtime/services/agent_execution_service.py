@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import enum
 import logging
 import uuid
 from dataclasses import dataclass
@@ -10,45 +9,27 @@ from typing import Any, Optional
 from langbridge.packages.runtime.models import (
     CreateAgentJobRequest,
     LLMConnectionSecret,
+    RuntimeAgentDefinition,
+    RuntimeMessageRole,
+    RuntimeThread,
+    RuntimeThreadMessage,
+    RuntimeThreadState,
 )
-from langbridge.packages.common.langbridge_common.db.agent import AgentDefinition, LLMConnection
-from langbridge.packages.common.langbridge_common.db.threads import (
-    Role,
-    Thread,
-    ThreadMessage,
-    ThreadState,
-)
-from langbridge.packages.common.langbridge_common.errors.application_errors import (
-    BusinessValidationError,
-)
-from langbridge.packages.common.langbridge_common.interfaces.agent_events import (
-    IAgentEventEmitter,
-)
-from langbridge.packages.common.langbridge_common.interfaces.semantic_models import (
-    ISemanticModelStore,
-)
-from langbridge.packages.common.langbridge_common.repositories.agent_repository import (
-    AgentRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.conversation_memory_repository import (
-    ConversationMemoryRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.dataset_repository import (
-    DatasetColumnRepository,
-    DatasetRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.llm_connection_repository import (
-    LLMConnectionRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.thread_message_repository import (
-    ThreadMessageRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.thread_repository import (
-    ThreadRepository,
-)
-from langbridge.packages.common.langbridge_common.utils.embedding_provider import (
+from langbridge.packages.runtime.embeddings import (
     EmbeddingProvider,
     EmbeddingProviderError,
+)
+from langbridge.packages.runtime.errors import BusinessValidationError
+from langbridge.packages.runtime.events import AgentEventEmitter
+from langbridge.packages.runtime.ports import (
+    AgentDefinitionStore,
+    ConversationMemoryStore,
+    DatasetCatalogStore,
+    DatasetColumnStore,
+    LLMConnectionStore,
+    SemanticModelStore,
+    ThreadMessageStore,
+    ThreadStore,
 )
 from langbridge.packages.orchestrator.langbridge_orchestrator.agents.supervisor import (
     MemoryManager,
@@ -68,23 +49,23 @@ from ..execution.federated_query_tool import FederatedQueryTool
 @dataclass(slots=True)
 class AgentExecutionResult:
     response: dict[str, Any]
-    thread: Thread
-    user_message: ThreadMessage
-    agent_definition: AgentDefinition
+    thread: RuntimeThread
+    user_message: RuntimeThreadMessage
+    agent_definition: RuntimeAgentDefinition
 
 
 class AgentExecutionService:
     def __init__(
         self,
         *,
-        agent_definition_repository: AgentRepository,
-        llm_repository: LLMConnectionRepository,
-        semantic_model_store: ISemanticModelStore,
-        dataset_repository: DatasetRepository,
-        dataset_column_repository: DatasetColumnRepository,
-        thread_repository: ThreadRepository,
-        thread_message_repository: ThreadMessageRepository,
-        memory_repository: ConversationMemoryRepository,
+        agent_definition_repository: AgentDefinitionStore,
+        llm_repository: LLMConnectionStore,
+        semantic_model_store: SemanticModelStore,
+        dataset_repository: DatasetCatalogStore,
+        dataset_column_repository: DatasetColumnStore,
+        thread_repository: ThreadStore,
+        thread_message_repository: ThreadMessageStore,
+        memory_repository: ConversationMemoryStore,
         federated_query_tool: FederatedQueryTool,
     ) -> None:
         self._logger = logging.getLogger(__name__)
@@ -105,7 +86,7 @@ class AgentExecutionService:
         *,
         job_id: uuid.UUID,
         request: CreateAgentJobRequest,
-        event_emitter: IAgentEventEmitter | None = None,
+        event_emitter: AgentEventEmitter | None = None,
     ) -> AgentExecutionResult:
         thread, user_message, thread_messages = await self._get_thread_and_last_user_message(
             request.thread_id
@@ -155,6 +136,7 @@ class AgentExecutionService:
             response=response,
             agent_id=agent_definition.id,
         )
+        await self._thread_repository.save(thread)
         await memory_manager.write_back(
             thread_id=thread.id,
             user_id=thread.created_by,
@@ -168,17 +150,18 @@ class AgentExecutionService:
             agent_definition=agent_definition,
         )
 
-    async def reset_thread_after_failure(self, *, thread_id: uuid.UUID) -> Thread | None:
+    async def reset_thread_after_failure(self, *, thread_id: uuid.UUID) -> RuntimeThread | None:
         thread = await self._thread_repository.get_by_id(thread_id)
         if thread is not None:
             self._set_thread_awaiting_user_input(thread)
             thread.updated_at = datetime.now(timezone.utc)
+            await self._thread_repository.save(thread)
         return thread
 
     async def _get_thread_and_last_user_message(
         self,
         thread_id: uuid.UUID,
-    ) -> tuple[Thread, ThreadMessage, list[ThreadMessage]]:
+    ) -> tuple[RuntimeThread, RuntimeThreadMessage, list[RuntimeThreadMessage]]:
         thread = await self._thread_repository.get_by_id(thread_id)
         if thread is None:
             raise BusinessValidationError(f"Thread with ID {thread_id} does not exist.")
@@ -187,15 +170,17 @@ class AgentExecutionService:
         if not messages:
             raise BusinessValidationError(f"Thread {thread.id} has no messages to process.")
 
-        last_message: ThreadMessage | None = None
+        last_message: RuntimeThreadMessage | None = None
         if thread.last_message_id is not None:
             last_message = next((msg for msg in messages if msg.id == thread.last_message_id), None)
 
         if last_message is None:
             last_message = messages[-1]
 
-        if self._role_value(last_message.role) != Role.user.value:
-            user_messages = [msg for msg in messages if self._role_value(msg.role) == Role.user.value]
+        if self._role_value(last_message.role) != RuntimeMessageRole.user.value:
+            user_messages = [
+                msg for msg in messages if self._role_value(msg.role) == RuntimeMessageRole.user.value
+            ]
             if not user_messages:
                 raise BusinessValidationError(f"Thread {thread.id} does not contain a user message.")
             last_message = user_messages[-1]
@@ -207,22 +192,14 @@ class AgentExecutionService:
         return str(getattr(role, "value", role))
 
     @staticmethod
-    def _set_thread_awaiting_user_input(thread: Thread) -> None:
-        current_state = getattr(thread, "state", None)
-        if isinstance(current_state, enum.Enum):
-            state_type = type(current_state)
-            try:
-                thread.state = state_type(ThreadState.awaiting_user_input.value)
-                return
-            except Exception:
-                pass
-        thread.state = ThreadState.awaiting_user_input
+    def _set_thread_awaiting_user_input(thread: RuntimeThread) -> None:
+        thread.state = RuntimeThreadState.awaiting_user_input
 
     @staticmethod
     def _build_planning_context(
         *,
         base_context: Optional[dict[str, Any]],
-        thread: Thread,
+        thread: RuntimeThread,
         memory_context: Any,
     ) -> dict[str, Any]:
         context: dict[str, Any] = dict(base_context or {})
@@ -246,12 +223,12 @@ class AgentExecutionService:
         return context
 
     @staticmethod
-    def _persist_supervisor_state(thread: Thread, response: dict[str, Any]) -> None:
+    def _persist_supervisor_state(thread: RuntimeThread, response: dict[str, Any]) -> None:
         diagnostics = response.get("diagnostics")
-        metadata = thread.metadata_json if isinstance(thread.metadata_json, dict) else {}
+        metadata = dict(thread.metadata or {})
         if not isinstance(diagnostics, dict):
             metadata.pop("clarification_state", None)
-            thread.metadata_json = metadata
+            thread.metadata = metadata
             return
 
         clarification_state = diagnostics.get("clarification_state")
@@ -262,7 +239,7 @@ class AgentExecutionService:
             metadata["clarification_state"] = clarification_state
         else:
             metadata.pop("clarification_state", None)
-        thread.metadata_json = metadata
+        thread.metadata = metadata
 
     @staticmethod
     def _has_active_clarification_state(payload: Any) -> bool:
@@ -278,7 +255,7 @@ class AgentExecutionService:
     async def _get_agent_definition(
         self,
         agent_definition_id: uuid.UUID,
-    ) -> tuple[AgentDefinition, AgentDefinitionModel]:
+    ) -> tuple[RuntimeAgentDefinition, AgentDefinitionModel]:
         agent_definition = await self._agent_definition_repository.get_by_id(agent_definition_id)
         if agent_definition is None:
             raise BusinessValidationError(
@@ -286,7 +263,7 @@ class AgentExecutionService:
             )
         return agent_definition, AgentDefinitionModel.model_validate(agent_definition.definition)
 
-    async def _get_llm_connection(self, llm_connection_id: uuid.UUID) -> LLMConnection:
+    async def _get_llm_connection(self, llm_connection_id: uuid.UUID) -> LLMConnectionSecret:
         llm_connection = await self._llm_repository.get_by_id(llm_connection_id)
         if llm_connection is None:
             raise BusinessValidationError(
@@ -297,7 +274,7 @@ class AgentExecutionService:
     def _create_embedding_provider(
         self,
         job_id: uuid.UUID,
-        llm_connection: LLMConnection,
+        llm_connection: LLMConnectionSecret,
     ) -> Optional[EmbeddingProvider]:
         llm_connection_response = LLMConnectionSecret.model_validate(llm_connection)
         try:
@@ -311,7 +288,7 @@ class AgentExecutionService:
             return None
 
     @staticmethod
-    def _extract_user_query(message: ThreadMessage) -> str:
+    def _extract_user_query(message: RuntimeThreadMessage) -> str:
         content = message.content
         if isinstance(content, str):
             text = content.strip()
@@ -327,17 +304,17 @@ class AgentExecutionService:
     def _record_assistant_message(
         self,
         *,
-        thread: Thread,
-        user_message: ThreadMessage,
+        thread: RuntimeThread,
+        user_message: RuntimeThreadMessage,
         response: dict[str, Any],
         agent_id: uuid.UUID,
     ) -> None:
         assistant_message_id = uuid.uuid4()
-        assistant_message = ThreadMessage(
+        assistant_message = RuntimeThreadMessage(
             id=assistant_message_id,
             thread_id=thread.id,
             parent_message_id=user_message.id,
-            role=Role.assistant,
+            role=RuntimeMessageRole.assistant,
             content={
                 "summary": response.get("summary"),
                 "result": response.get("result"),

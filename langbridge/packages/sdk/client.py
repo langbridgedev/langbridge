@@ -18,17 +18,17 @@ else:  # pragma: no cover - exercised indirectly in local-only environments
     except ModuleNotFoundError:  # pragma: no cover - depends on install extras
         httpx = None
 
-from langbridge.packages.common.langbridge_common.contracts.base import _Base
-from langbridge.packages.common.langbridge_common.contracts.datasets import (
+from langbridge.contracts.base import _Base
+from langbridge.contracts.datasets import (
     DatasetListResponse,
     DatasetPreviewColumn,
     DatasetPreviewRequest,
 )
-from langbridge.packages.common.langbridge_common.contracts.jobs.agent_job import (
+from langbridge.contracts.jobs.agent_job import (
     AgentJobStateResponse,
     JobEventResponse,
 )
-from langbridge.packages.common.langbridge_common.contracts.sql import (
+from langbridge.contracts.sql import (
     SqlColumnMetadata,
     SqlDialect,
     SqlExecuteRequest,
@@ -36,7 +36,7 @@ from langbridge.packages.common.langbridge_common.contracts.sql import (
     SqlJobResultsResponse,
     SqlSelectedDataset,
 )
-from langbridge.packages.common.langbridge_common.contracts.threads import (
+from langbridge.contracts.threads import (
     ThreadChatRequest,
     ThreadCreateRequest,
     ThreadResponse,

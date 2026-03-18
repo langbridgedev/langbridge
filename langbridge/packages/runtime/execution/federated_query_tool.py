@@ -4,9 +4,6 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from langbridge.packages.runtime.adapters import to_runtime_connector
-from langbridge.packages.common.langbridge_common.db.connector import APIConnector
-from langbridge.packages.common.langbridge_common.repositories.connector_repository import ConnectorRepository
 from langbridge.packages.connectors.langbridge_connectors.api import (
     ConnectorRuntimeTypeSqlDialectMap,
     SqlConnectorFactory,
@@ -53,17 +50,14 @@ class FederatedQueryToolRequest(BaseModel):
 class FederatedQueryTool:
     def __init__(
         self,
-        connector_repository: ConnectorRepository | None = None,
+        connector_provider: ConnectorMetadataProvider,
         secret_provider_registry: SecretProviderRegistry | None = None,
-        connector_provider: ConnectorMetadataProvider | None = None,
         credential_provider: CredentialProvider | None = None,
     ) -> None:
-        self._connector_repository = connector_repository
         self._connector_provider = connector_provider
         self._credential_provider = credential_provider or SecretRegistryCredentialProvider(
             registry=secret_provider_registry or SecretProviderRegistry()
         )
-        self._secret_provider_registry = secret_provider_registry or SecretProviderRegistry()
         self._logger = logging.getLogger(__name__)
         self._sql_connector_factory = SqlConnectorFactory()
         self._service = FederatedQueryService(
@@ -164,19 +158,14 @@ class FederatedQueryTool:
                     raise ValueError(
                         f"Source id '{binding.source_id}' maps to multiple connector ids in workflow '{workflow.id}'."
                     )
-            connector = None
-            raw_connector = None
-            if self._connector_provider is not None:
-                connector = await self._connector_provider.get_connector(connector_id)
-            elif self._connector_repository is not None:
-                raw_connector = await self._connector_repository.get_by_id(connector_id)
-                connector = to_runtime_connector(raw_connector)
+            connector = await self._connector_provider.get_connector(connector_id)
             if connector is None:
                 raise ValueError(f"Connector '{connector_id}' not found for source '{source_id}'.")
-            if type(raw_connector) is APIConnector:
-                raise ValueError(f"Connector '{connector_id}' for source '{source_id}' is an API connector, which is not supported for federation sources.")
             resolved_config = self._resolve_connector_config(connector)
-            runtime_type = ConnectorRuntimeType((connector.connector_type or "").upper())
+            runtime_type = self._resolve_sql_connector_type(
+                connector,
+                source_id=source_id,
+            )
             sql_connector = await self._create_sql_connector(
                 connector_type=runtime_type,
                 connector_config=resolved_config,
@@ -190,6 +179,30 @@ class FederatedQueryTool:
             )
 
         return sources
+
+    def _resolve_sql_connector_type(
+        self,
+        connector: ConnectorMetadata,
+        *,
+        source_id: str,
+    ) -> ConnectorRuntimeType:
+        connector_type = str(connector.connector_type or "").strip().upper()
+        if not connector_type:
+            raise ValueError(
+                f"Connector '{connector.id}' for source '{source_id}' is missing connector_type."
+            )
+        try:
+            runtime_type = ConnectorRuntimeType(connector_type)
+        except ValueError as exc:
+            raise ValueError(
+                f"Connector '{connector.id}' for source '{source_id}' has unsupported connector type "
+                f"'{connector.connector_type}'."
+            ) from exc
+        if ConnectorRuntimeTypeSqlDialectMap.get(runtime_type) is None:
+            raise ValueError(
+                f"Connector '{connector.id}' for source '{source_id}' does not support SQL federation."
+            )
+        return runtime_type
 
     async def _create_sql_connector(
         self,

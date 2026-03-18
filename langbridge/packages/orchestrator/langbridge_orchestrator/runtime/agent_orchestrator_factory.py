@@ -5,13 +5,15 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from langbridge.packages.contracts.semantic import SemanticModelRecordResponse
-from langbridge.packages.common.langbridge_common.db.dataset import DatasetRecord
-from langbridge.packages.common.langbridge_common.errors.application_errors import BusinessValidationError
-from langbridge.packages.common.langbridge_common.interfaces.agent_events import IAgentEventEmitter
-from langbridge.packages.common.langbridge_common.interfaces.semantic_models import ISemanticModelStore
-from langbridge.packages.common.langbridge_common.repositories.dataset_repository import DatasetColumnRepository, DatasetRepository
-from langbridge.packages.common.langbridge_common.utils.embedding_provider import EmbeddingProvider
+from langbridge.packages.runtime.embeddings import EmbeddingProvider
+from langbridge.packages.runtime.errors import BusinessValidationError
+from langbridge.packages.runtime.events import AgentEventEmitter
+from langbridge.packages.runtime.models import DatasetMetadata, SemanticModelMetadata
+from langbridge.packages.runtime.ports import (
+    DatasetCatalogStore,
+    DatasetColumnStore,
+    SemanticModelStore,
+)
 from langbridge.packages.runtime.services.dataset_execution import DatasetExecutionResolver
 from langbridge.packages.orchestrator.langbridge_orchestrator.agents.analyst import AnalystAgent
 from langbridge.packages.orchestrator.langbridge_orchestrator.agents.deep_research import DeepResearchAgent
@@ -135,9 +137,9 @@ class AgentOrchestratorFactory:
 
     def __init__(
         self,
-        semantic_model_store: ISemanticModelStore,
-        dataset_repository: DatasetRepository | None = None,
-        dataset_column_repository: DatasetColumnRepository | None = None,
+        semantic_model_store: SemanticModelStore,
+        dataset_repository: DatasetCatalogStore | None = None,
+        dataset_column_repository: DatasetColumnStore | None = None,
         federated_query_tool: Any | None = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
@@ -155,7 +157,7 @@ class AgentOrchestratorFactory:
         definition: AgentDefinitionModel,
         llm_provider: LLMProvider,
         embedding_provider: Optional[EmbeddingProvider],
-        event_emitter: Optional[IAgentEventEmitter] = None,
+        event_emitter: Optional[AgentEventEmitter] = None,
     ) -> AgentRuntime:
         tool_config = self._build_agent_tool_config(definition)
         analyst_tools = await self._build_analyst_tools(
@@ -313,7 +315,7 @@ class AgentOrchestratorFactory:
         tool_config: AgentToolConfig,
         llm_provider: LLMProvider,
         embedding_provider: Optional[EmbeddingProvider],
-        event_emitter: Optional[IAgentEventEmitter],
+        event_emitter: Optional[AgentEventEmitter],
     ) -> list[SqlAnalystTool]:
         if not tool_config.allow_sql or not tool_config.analyst_bindings:
             return []
@@ -361,12 +363,12 @@ class AgentOrchestratorFactory:
     async def _build_dataset_tool(
         self,
         *,
-        dataset: DatasetRecord,
-        selected_datasets: list[DatasetRecord],
+        dataset: DatasetMetadata,
+        selected_datasets: list[DatasetMetadata],
         binding: AnalystBinding,
         llm_provider: LLMProvider,
         embedding_provider: Optional[EmbeddingProvider],
-        event_emitter: Optional[IAgentEventEmitter],
+        event_emitter: Optional[AgentEventEmitter],
     ) -> SqlAnalystTool:
         workflow, _workflow_dialect = await self._build_dataset_workflow(selected_datasets)
         context = await self._build_dataset_context(
@@ -395,11 +397,11 @@ class AgentOrchestratorFactory:
     async def _build_semantic_model_tool(
         self,
         *,
-        semantic_model_entry: SemanticModelRecordResponse,
+        semantic_model_entry: SemanticModelMetadata,
         binding: AnalystBinding,
         llm_provider: LLMProvider,
         embedding_provider: Optional[EmbeddingProvider],
-        event_emitter: Optional[IAgentEventEmitter],
+        event_emitter: Optional[AgentEventEmitter],
     ) -> SqlAnalystTool:
         semantic_model = load_semantic_model(semantic_model_entry.content_yaml)
         raw_model_payload = self._parse_yaml_payload(semantic_model_entry.content_yaml)
@@ -442,7 +444,7 @@ class AgentOrchestratorFactory:
 
     async def _build_dataset_workflow(
         self,
-        datasets: list[DatasetRecord],
+        datasets: list[DatasetMetadata],
     ) -> tuple[FederationWorkflow, str]:
         if len(datasets) == 1:
             workflow, _default_table_key, workflow_dialect = await self._dataset_execution_resolver.build_workflow_for_dataset(
@@ -536,10 +538,10 @@ class AgentOrchestratorFactory:
             metrics=metrics,
         )
 
-    async def _load_datasets(self, dataset_ids: list[uuid.UUID]) -> list[DatasetRecord]:
+    async def _load_datasets(self, dataset_ids: list[uuid.UUID]) -> list[DatasetMetadata]:
         if self._dataset_repository is None:
             raise BusinessValidationError("Dataset repository is required for dataset-backed analysis.")
-        ordered: list[DatasetRecord] = []
+        ordered: list[DatasetMetadata] = []
         for dataset_id in dataset_ids:
             dataset = await self._dataset_repository.get_by_id(dataset_id)
             if dataset is None:
@@ -550,8 +552,8 @@ class AgentOrchestratorFactory:
     async def _build_dataset_context(
         self,
         *,
-        asset_dataset: DatasetRecord,
-        selected_datasets: list[DatasetRecord],
+        asset_dataset: DatasetMetadata,
+        selected_datasets: list[DatasetMetadata],
         binding: AnalystBinding,
         workflow: FederationWorkflow,
     ) -> AnalyticalContext:
@@ -597,7 +599,7 @@ class AgentOrchestratorFactory:
         self,
         *,
         binding: AnalystBinding,
-        semantic_model_entry: SemanticModelRecordResponse,
+        semantic_model_entry: SemanticModelMetadata,
         semantic_model: SemanticModel,
         workflow: FederationWorkflow,
     ) -> AnalyticalContext:
@@ -695,7 +697,7 @@ class AgentOrchestratorFactory:
         *,
         workspace_id: uuid.UUID,
         workflow: FederationWorkflow,
-    ) -> dict[uuid.UUID, DatasetRecord]:
+    ) -> dict[uuid.UUID, DatasetMetadata]:
         if self._dataset_repository is None:
             return {}
 
@@ -787,7 +789,7 @@ class AgentOrchestratorFactory:
         llm_provider: LLMProvider,
         planning_constraints: PlanningConstraints,
         analyst_tools: list[SqlAnalystTool],
-        event_emitter: Optional[IAgentEventEmitter],
+        event_emitter: Optional[AgentEventEmitter],
     ) -> SupervisorOrchestrator:
         analyst_agent = None
         if analyst_tools:

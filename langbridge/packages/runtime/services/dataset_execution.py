@@ -5,11 +5,10 @@ import uuid
 from collections.abc import Mapping
 from typing import Any
 
-from langbridge.packages.common.langbridge_common.utils.storage_uri import resolve_local_storage_path
-from langbridge.packages.common.langbridge_common.errors.application_errors import BusinessValidationError
-from langbridge.packages.common.langbridge_common.repositories.dataset_repository import DatasetRepository
+from langbridge.packages.runtime.errors import BusinessValidationError
+from langbridge.packages.runtime.ports import DatasetCatalogStore
 from langbridge.packages.runtime.providers import DatasetMetadataProvider
-from langbridge.packages.common.langbridge_common.utils.datasets import (
+from langbridge.packages.runtime.utils.datasets import (
     build_dataset_execution_capabilities,
     build_dataset_relation_identity,
     derive_legacy_dataset_type,
@@ -17,7 +16,8 @@ from langbridge.packages.common.langbridge_common.utils.datasets import (
     resolve_dataset_source_kind,
     resolve_dataset_storage_kind,
 )
-from langbridge.packages.common.langbridge_common.utils.sql import enforce_read_only_sql
+from langbridge.packages.runtime.utils.sql import enforce_read_only_sql
+from langbridge.packages.runtime.utils.storage_uri import resolve_local_storage_path
 from langbridge.packages.federation.models import (
     DatasetExecutionDescriptor,
     FederationWorkflow,
@@ -33,7 +33,7 @@ class DatasetExecutionResolver:
     def __init__(
         self,
         *,
-        dataset_repository: DatasetRepository | None = None,
+        dataset_repository: DatasetCatalogStore | None = None,
         dataset_provider: DatasetMetadataProvider | None = None,
     ) -> None:
         self._dataset_repository = dataset_repository

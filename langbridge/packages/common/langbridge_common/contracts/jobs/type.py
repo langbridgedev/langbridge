@@ -1,14 +1,4 @@
-from enum import Enum
+from langbridge.contracts.jobs.type import *  # noqa: F401,F403
+from langbridge.contracts.jobs.type import __all__ as _contracts_all
 
-
-class JobType(str, Enum):
-    AGENT = "agent"
-    SEMANTIC_QUERY = "semantic_query"
-    AGENTIC_SEMANTIC_MODEL = "agentic_semantic_model"
-    COPILOT_DASHBOARD = "copilot_dashboard"
-    SQL = "sql"
-    DATASET_PREVIEW = "dataset_preview"
-    DATASET_PROFILE = "dataset_profile"
-    DATASET_BULK_CREATE = "dataset_bulk_create"
-    DATASET_CSV_INGEST = "dataset_csv_ingest"
-    CONNECTOR_SYNC = "connector_sync"
+__all__ = list(_contracts_all)

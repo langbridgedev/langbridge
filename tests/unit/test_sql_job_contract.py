@@ -3,10 +3,10 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-from langbridge.packages.common.langbridge_common.contracts.jobs.sql_job import (
+from langbridge.contracts.jobs.sql_job import (
     CreateSqlJobRequest,
 )
-from langbridge.packages.common.langbridge_common.contracts.sql import SqlExecuteRequest
+from langbridge.contracts.sql import SqlExecuteRequest
 
 
 def test_sql_job_contract_requires_connection_for_single_mode() -> None:

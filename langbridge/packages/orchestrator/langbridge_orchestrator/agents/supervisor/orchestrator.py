@@ -9,9 +9,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Sequence
 
-from langbridge.packages.common.langbridge_common.interfaces.agent_events import (
+from langbridge.packages.runtime.events import (
     AgentEventVisibility,
-    IAgentEventEmitter,
+    AgentEventEmitter,
 )
 from langbridge.packages.orchestrator.langbridge_orchestrator.agents.models import PlanExecutionArtifacts
 from langbridge.packages.orchestrator.langbridge_orchestrator.agents.reasoning.agent import ReasoningAgent, ReasoningDecision
@@ -83,7 +83,7 @@ class SupervisorOrchestrator:
         web_search_agent: Optional[WebSearchAgent] = None,
         reasoning_agent: Optional[ReasoningAgent] = None,
         bi_copilot_agent: Optional[BICopilotAgent] = None,
-        event_emitter: Optional[IAgentEventEmitter] = None,
+        event_emitter: Optional[AgentEventEmitter] = None,
         question_classifier: Optional[QuestionClassifier] = None,
         entity_resolver: Optional[EntityResolver] = None,
         clarification_manager: Optional[ClarificationManager] = None,

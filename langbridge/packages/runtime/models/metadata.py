@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from enum import Enum
 from typing import Any, Literal
 
 from pydantic import Field
@@ -61,6 +62,7 @@ class ConnectorMetadata(RuntimeModel):
 class DatasetColumnMetadata(RuntimeModel):
     id: uuid.UUID
     dataset_id: uuid.UUID
+    workspace_id: uuid.UUID | None = None
     name: str
     data_type: str
     nullable: bool = True
@@ -69,6 +71,8 @@ class DatasetColumnMetadata(RuntimeModel):
     is_computed: bool = False
     expression: str | None = None
     ordinal_position: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class DatasetPolicyMetadata(RuntimeModel):
@@ -80,6 +84,8 @@ class DatasetPolicyMetadata(RuntimeModel):
     redaction_rules: dict[str, str] = Field(default_factory=dict)
     row_filters: list[str] = Field(default_factory=list)
     allow_dml: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     @property
     def redaction_rules_json(self) -> dict[str, str]:
@@ -88,6 +94,48 @@ class DatasetPolicyMetadata(RuntimeModel):
     @property
     def row_filters_json(self) -> list[str]:
         return list(self.row_filters)
+
+
+class DatasetSourceKind(str, Enum):
+    DATABASE = "database"
+    SAAS = "saas"
+    API = "api"
+    FILE = "file"
+    VIRTUAL = "virtual"
+
+
+class DatasetStorageKind(str, Enum):
+    TABLE = "table"
+    PARQUET = "parquet"
+    CSV = "csv"
+    JSON = "json"
+    VIEW = "view"
+    VIRTUAL = "virtual"
+
+
+class DatasetExecutionCapabilities(RuntimeModel):
+    supports_structured_scan: bool = False
+    supports_sql_federation: bool = False
+    supports_filter_pushdown: bool = False
+    supports_projection_pushdown: bool = False
+    supports_aggregation_pushdown: bool = False
+    supports_join_pushdown: bool = False
+    supports_materialization: bool = False
+    supports_semantic_modeling: bool = False
+
+
+class DatasetRelationIdentity(RuntimeModel):
+    canonical_reference: str
+    relation_name: str
+    qualified_name: str | None = None
+    catalog_name: str | None = None
+    schema_name: str | None = None
+    table_name: str | None = None
+    storage_uri: str | None = None
+    dataset_id: uuid.UUID | None = None
+    connector_id: uuid.UUID | None = None
+    source_kind: DatasetSourceKind
+    storage_kind: DatasetStorageKind
 
 
 class DatasetMetadata(RuntimeModel):

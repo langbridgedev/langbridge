@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import logging
 
-from langbridge.packages.common.langbridge_common.interfaces.semantic_models import (
-    ISemanticModelStore,
-)
 from langbridge.packages.common.langbridge_common.repositories.agent_repository import (
     AgentRepository,
 )
@@ -41,8 +38,27 @@ from langbridge.packages.common.langbridge_common.repositories.thread_message_re
 from langbridge.packages.common.langbridge_common.repositories.thread_repository import (
     ThreadRepository,
 )
+from langbridge.packages.runtime.adapters import (
+    RepositoryAgentDefinitionStore,
+    RepositoryConnectorSyncStateStore,
+    RepositoryConversationMemoryStore,
+    RepositoryDatasetCatalogStore,
+    RepositoryDatasetColumnStore,
+    RepositoryDatasetPolicyStore,
+    RepositoryDatasetRevisionStore,
+    RepositoryLLMConnectionStore,
+    RepositoryLineageEdgeStore,
+    RepositorySemanticModelStore,
+    RepositorySqlJobArtifactStore,
+    RepositoryThreadMessageStore,
+    RepositoryThreadStore,
+)
 from langbridge.packages.runtime.context import RuntimeContext
 from langbridge.packages.runtime.execution import FederatedQueryTool
+from langbridge.packages.runtime.ports import (
+    ConversationMemoryStore,
+    SemanticModelStore,
+)
 from langbridge.packages.runtime.providers import (
     CachedConnectorMetadataProvider,
     CachedDatasetMetadataProvider,
@@ -91,17 +107,73 @@ def build_local_runtime(
     llm_repository: LLMConnectionRepository | None = None,
     thread_repository: ThreadRepository | None = None,
     thread_message_repository: ThreadMessageRepository | None = None,
-    memory_repository: ConversationMemoryRepository | None = None,
-    semantic_model_store: ISemanticModelStore | None = None,
+    memory_repository: ConversationMemoryStore | ConversationMemoryRepository | None = None,
+    semantic_model_store: SemanticModelStore | None = None,
     secret_provider_registry: SecretProviderRegistry | None = None,
     logger: logging.Logger | None = None,
 ) -> RuntimeHost:
+    dataset_store = RepositoryDatasetCatalogStore(repository=dataset_repository)
+    dataset_column_store = (
+        RepositoryDatasetColumnStore(repository=dataset_column_repository)
+        if dataset_column_repository is not None
+        else None
+    )
+    dataset_policy_store = (
+        RepositoryDatasetPolicyStore(repository=dataset_policy_repository)
+        if dataset_policy_repository is not None
+        else None
+    )
+    dataset_revision_store = (
+        RepositoryDatasetRevisionStore(repository=dataset_revision_repository)
+        if dataset_revision_repository is not None
+        else None
+    )
+    lineage_edge_store = (
+        RepositoryLineageEdgeStore(repository=lineage_edge_repository)
+        if lineage_edge_repository is not None
+        else None
+    )
+    connector_sync_state_store = (
+        RepositoryConnectorSyncStateStore(repository=connector_sync_state_repository)
+        if connector_sync_state_repository is not None
+        else None
+    )
+    agent_definition_store = (
+        RepositoryAgentDefinitionStore(repository=agent_definition_repository)
+        if agent_definition_repository is not None
+        else None
+    )
+    llm_connection_store = (
+        RepositoryLLMConnectionStore(repository=llm_repository)
+        if llm_repository is not None
+        else None
+    )
+    thread_store = (
+        RepositoryThreadStore(repository=thread_repository)
+        if thread_repository is not None
+        else None
+    )
+    thread_message_store = (
+        RepositoryThreadMessageStore(repository=thread_message_repository)
+        if thread_message_repository is not None
+        else None
+    )
+    runtime_semantic_model_store = semantic_model_store or (
+        RepositorySemanticModelStore(repository=semantic_model_repository)
+        if semantic_model_repository is not None
+        else None
+    )
+    runtime_memory_store = (
+        RepositoryConversationMemoryStore(repository=memory_repository)
+        if isinstance(memory_repository, ConversationMemoryRepository)
+        else memory_repository
+    )
     credential_provider = SecretRegistryCredentialProvider(registry=secret_provider_registry)
     dataset_provider = CachedDatasetMetadataProvider(
         RepositoryDatasetMetadataProvider(
-            dataset_repository=dataset_repository,
-            dataset_column_repository=dataset_column_repository,
-            dataset_policy_repository=dataset_policy_repository,
+            dataset_repository=dataset_store,
+            dataset_column_repository=dataset_column_store,
+            dataset_policy_repository=dataset_policy_store,
         )
     )
     connector_provider = CachedConnectorMetadataProvider(
@@ -118,9 +190,9 @@ def build_local_runtime(
     )
     sync_state_provider = (
         RepositorySyncStateProvider(
-            connector_sync_state_repository=connector_sync_state_repository
+            connector_sync_state_repository=connector_sync_state_store
         )
-        if connector_sync_state_repository is not None
+        if connector_sync_state_store is not None
         else None
     )
     federated_query_tool = FederatedQueryTool(
@@ -130,8 +202,7 @@ def build_local_runtime(
     )
     semantic_query_service = (
         SemanticQueryExecutionService(
-            semantic_model_repository=semantic_model_repository,
-            dataset_repository=dataset_repository,
+            dataset_repository=dataset_store,
             dataset_provider=dataset_provider,
             semantic_model_provider=semantic_provider,
             federated_query_tool=federated_query_tool,
@@ -141,19 +212,22 @@ def build_local_runtime(
         else None
     )
     dataset_query_service = DatasetQueryService(
-        dataset_repository=dataset_repository,
-        dataset_column_repository=dataset_column_repository,
-        dataset_policy_repository=dataset_policy_repository,
-        dataset_revision_repository=dataset_revision_repository,
-        lineage_edge_repository=lineage_edge_repository,
+        dataset_repository=dataset_store,
+        dataset_column_repository=dataset_column_store,
+        dataset_policy_repository=dataset_policy_store,
+        dataset_revision_repository=dataset_revision_store,
+        lineage_edge_repository=lineage_edge_store,
         federated_query_tool=federated_query_tool,
         dataset_provider=dataset_provider,
     )
     sql_query_service = SqlQueryService(
-        sql_job_result_artifact_repository=sql_job_result_artifact_repository,
-        connector_repository=connector_repository,
+        sql_job_result_artifact_store=(
+            RepositorySqlJobArtifactStore(repository=sql_job_result_artifact_repository)
+            if sql_job_result_artifact_repository is not None
+            else None
+        ),
         connector_provider=connector_provider,
-        dataset_repository=dataset_repository,
+        dataset_repository=dataset_store,
         dataset_provider=dataset_provider,
         credential_provider=credential_provider,
         secret_provider_registry=secret_provider_registry,
@@ -161,37 +235,36 @@ def build_local_runtime(
     )
     dataset_sync_service = (
         ConnectorSyncRuntime(
-            connector_sync_state_repository=connector_sync_state_repository,
-            dataset_repository=dataset_repository,
-            dataset_column_repository=dataset_column_repository,
-            dataset_policy_repository=dataset_policy_repository,
-            dataset_revision_repository=dataset_revision_repository,
-            lineage_edge_repository=lineage_edge_repository,
+            connector_sync_state_repository=connector_sync_state_store,
+            dataset_repository=dataset_store,
+            dataset_column_repository=dataset_column_store,
+            dataset_policy_repository=dataset_policy_store,
+            dataset_revision_repository=dataset_revision_store,
+            lineage_edge_repository=lineage_edge_store,
         )
-        if connector_sync_state_repository is not None
+        if connector_sync_state_store is not None
         else None
     )
     agent_execution_service = (
         AgentExecutionService(
-            agent_definition_repository=agent_definition_repository,
-            llm_repository=llm_repository,
-            semantic_model_store=semantic_model_store,
-            dataset_repository=dataset_repository,
-            dataset_column_repository=dataset_column_repository,
-            thread_repository=thread_repository,
-            thread_message_repository=thread_message_repository,
-            memory_repository=memory_repository,
+            agent_definition_repository=agent_definition_store,
+            llm_repository=llm_connection_store,
+            semantic_model_store=runtime_semantic_model_store,
+            dataset_repository=dataset_store,
+            dataset_column_repository=dataset_column_store,
+            thread_repository=thread_store,
+            thread_message_repository=thread_message_store,
+            memory_repository=runtime_memory_store,
             federated_query_tool=federated_query_tool,
-            logger=logger or logging.getLogger("langbridge.runtime.agent"),
         )
         if (
-            agent_definition_repository is not None
-            and llm_repository is not None
-            and dataset_column_repository is not None
-            and thread_repository is not None
-            and thread_message_repository is not None
-            and memory_repository is not None
-            and semantic_model_store is not None
+            agent_definition_store is not None
+            and llm_connection_store is not None
+            and dataset_column_store is not None
+            and thread_store is not None
+            and thread_message_store is not None
+            and runtime_memory_store is not None
+            and runtime_semantic_model_store is not None
         )
         else None
     )
@@ -244,7 +317,6 @@ def build_hosted_runtime(
         secret_provider_registry=secret_provider_registry,
     )
     semantic_query_service = SemanticQueryExecutionService(
-        semantic_model_repository=None,
         dataset_repository=None,
         dataset_provider=dataset_provider,
         semantic_model_provider=semantic_provider,
@@ -259,8 +331,7 @@ def build_hosted_runtime(
         dataset_provider=dataset_provider,
     )
     sql_query_service = SqlQueryService(
-        sql_job_result_artifact_repository=None,
-        connector_repository=None,
+        sql_job_result_artifact_store=None,
         connector_provider=connector_provider,
         dataset_repository=None,
         dataset_provider=dataset_provider,

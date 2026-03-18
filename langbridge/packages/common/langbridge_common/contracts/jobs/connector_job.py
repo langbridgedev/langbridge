@@ -5,10 +5,10 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from langbridge.packages.common.langbridge_common.contracts.base import _Base
-from langbridge.packages.common.langbridge_common.contracts.connectors import ConnectorSyncMode
+from langbridge.contracts.base import _Base
+from langbridge.contracts.connectors import ConnectorSyncMode
 
-from .type import JobType
+from langbridge.contracts.jobs.type import JobType
 
 
 class CreateConnectorSyncJobRequest(_Base):

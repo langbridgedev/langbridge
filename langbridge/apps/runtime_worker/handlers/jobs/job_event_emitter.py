@@ -8,9 +8,9 @@ from langbridge.packages.common.langbridge_common.db.job import (
     JobEventVisibility as JobEventRecordVisibility,
     JobRecord,
 )
-from langbridge.packages.common.langbridge_common.interfaces.agent_events import (
+from langbridge.packages.runtime.events import (
     AgentEventVisibility,
-    IAgentEventEmitter,
+    AgentEventEmitter,
 )
 from langbridge.packages.common.langbridge_common.repositories.job_repository import JobRepository
 from langbridge.packages.messaging.langbridge_messaging.broker.base import MessageBroker
@@ -19,7 +19,7 @@ from langbridge.packages.messaging.langbridge_messaging.contracts import Message
 from langbridge.packages.messaging.langbridge_messaging.contracts.messages import MessageEnvelope
 from langbridge.packages.messaging.langbridge_messaging.contracts.jobs.event import JobEventMessage
 
-class SqlJobEventEmitter(IAgentEventEmitter):
+class SqlJobEventEmitter(AgentEventEmitter):
     """Persists agent/tool events onto a job record for user progress + auditing."""
 
     def __init__(
@@ -70,7 +70,7 @@ class SqlJobEventEmitter(IAgentEventEmitter):
                 self._logger.warning("Failed to persist public job event '%s': %s", event_type, exc)
 
 
-class BrokerJobEventEmitter(IAgentEventEmitter):
+class BrokerJobEventEmitter(AgentEventEmitter):
     """Emits job events via a message broker."""
     
     def __init__(

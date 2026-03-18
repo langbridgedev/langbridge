@@ -1,7 +1,7 @@
 
 import uuid
 from ..base import BaseMessagePayload, register_payload
-from langbridge.packages.common.langbridge_common.contracts.jobs.type import JobType
+from langbridge.contracts.jobs.type import JobType
 
 @register_payload("agent_job_request")
 class AgentJobRequestMessage(BaseMessagePayload):

@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from langbridge.packages.common.langbridge_common.contracts.semantic import (
+from langbridge.contracts.semantic import (
     SemanticModelRecordResponse,
 )
 from langbridge.packages.common.langbridge_common.db.semantic import SemanticModelEntry, SemanticVectorStoreEntry

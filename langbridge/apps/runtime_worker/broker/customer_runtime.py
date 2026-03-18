@@ -8,7 +8,7 @@ from typing import Sequence
 
 import httpx
 
-from langbridge.packages.contracts.runtime import (
+from langbridge.contracts.runtime import (
     EdgeTaskAckRequest,
     EdgeTaskFailRequest,
     EdgeTaskPullRequest,

@@ -9,6 +9,7 @@ description = "Shared Langbridge types and utilities"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "langbridge==0.1.0",
   "pydantic>=2.0.0",
   "pydantic-settings>=2.0.0",
   "sqlalchemy>=2.0.0",

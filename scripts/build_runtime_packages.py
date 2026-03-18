@@ -11,6 +11,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIRS = [
+    Path("."),
     Path("langbridge/packages/common"),
     Path("langbridge/packages/connectors"),
     Path("langbridge/packages/contracts"),
@@ -22,6 +23,7 @@ PACKAGE_DIRS = [
     Path("langbridge/packages/semantic"),
 ]
 INTERNAL_DISTRIBUTIONS = {
+    "langbridge",
     "langbridge-common",
     "langbridge-connectors",
     "langbridge-contracts",

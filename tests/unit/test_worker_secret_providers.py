@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from langbridge.packages.runtime.security import SecretProviderRegistry
-from langbridge.packages.common.langbridge_common.contracts.connectors import SecretReference
+from langbridge.contracts.connectors import SecretReference
 
 
 def test_env_secret_provider_resolves_plain_value(monkeypatch) -> None:

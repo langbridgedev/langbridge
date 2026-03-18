@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from langbridge.packages.common.langbridge_common.contracts.semantic import SemanticModelRecordResponse
+from langbridge.contracts.semantic import SemanticModelRecordResponse
 from langbridge.packages.common.langbridge_common.db.dataset import DatasetColumnRecord, DatasetRecord
 from langbridge.packages.orchestrator.langbridge_orchestrator.runtime.agent_orchestrator_factory import (
     AgentOrchestratorFactory,

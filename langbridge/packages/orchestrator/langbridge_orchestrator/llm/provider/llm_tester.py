@@ -1,6 +1,6 @@
 from typing import Dict, Any, Optional
 from openai import OpenAI, OpenAIError, AzureOpenAI
-from langbridge.packages.contracts.llm_connections import LLMProvider
+from langbridge.packages.runtime.models import LLMProvider
 
 try:  # pragma: no cover - optional dependency
     from anthropic import Anthropic

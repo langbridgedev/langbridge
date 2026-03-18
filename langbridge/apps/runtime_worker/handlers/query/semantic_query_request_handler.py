@@ -11,21 +11,11 @@ from pydantic import ValidationError
 
 from ..jobs.job_event_emitter import BrokerJobEventEmitter
 from langbridge.packages.common.langbridge_common.config import settings
-from langbridge.packages.common.langbridge_common.contracts.connectors import ConnectorResponse
-from langbridge.packages.common.langbridge_common.contracts.jobs.semantic_query_job import (
-    CreateSemanticQueryJobRequest,
-)
-from langbridge.packages.common.langbridge_common.contracts.semantic import (
-    SemanticQueryResponse,
-    UnifiedSemanticQueryResponse,
-)
 from langbridge.packages.common.langbridge_common.db.job import JobRecord, JobStatus
-from langbridge.packages.common.langbridge_common.errors.application_errors import (
-    BusinessValidationError,
-)
-from langbridge.packages.common.langbridge_common.interfaces.agent_events import (
+from langbridge.packages.runtime.events import (
     AgentEventVisibility,
 )
+from langbridge.packages.runtime.errors import BusinessValidationError
 from langbridge.packages.common.langbridge_common.repositories.connector_repository import (
     ConnectorRepository,
 )
@@ -37,7 +27,7 @@ from langbridge.packages.common.langbridge_common.repositories.job_repository im
 from langbridge.packages.common.langbridge_common.repositories.semantic_model_repository import (
     SemanticModelRepository,
 )
-from langbridge.packages.common.langbridge_common.utils.sql import (
+from langbridge.packages.runtime.utils.sql import (
     normalize_sql_dialect,
     transpile_sql,
 )
@@ -58,7 +48,15 @@ from langbridge.packages.messaging.langbridge_messaging.contracts.jobs.semantic_
     SemanticQueryRequestMessage,
 )
 from langbridge.packages.messaging.langbridge_messaging.handler import BaseMessageHandler
+from langbridge.packages.runtime.adapters import RepositoryDatasetCatalogStore
 from langbridge.packages.runtime.execution import FederatedQueryTool
+from langbridge.packages.runtime.models import (
+    ConnectorMetadata,
+    CreateSemanticQueryJobRequest,
+    SemanticQueryResponse,
+    UnifiedSemanticQueryResponse,
+)
+from langbridge.packages.runtime.providers import RepositorySemanticModelMetadataProvider
 from langbridge.packages.runtime.security import SecretProviderRegistry
 from langbridge.packages.runtime.services.dataset_execution import DatasetExecutionResolver
 from langbridge.packages.runtime.services.semantic_query_execution_service import (
@@ -101,10 +99,20 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
             dataset_repository=self._dataset_repository,
         )
         self._query_execution_service = SemanticQueryExecutionService(
-            semantic_model_repository=self._semantic_model_repository,
-            dataset_repository=self._dataset_repository,
+            dataset_repository=(
+                RepositoryDatasetCatalogStore(repository=self._dataset_repository)
+                if self._dataset_repository is not None
+                else None
+            ),
             federated_query_tool=self._federated_query_tool,
             logger=self._logger,
+            semantic_model_provider=(
+                RepositorySemanticModelMetadataProvider(
+                    semantic_model_repository=self._semantic_model_repository
+                )
+                if self._semantic_model_repository is not None
+                else None
+            ),
         )
 
     async def handle(self, payload: SemanticQueryRequestMessage) -> None:
@@ -213,7 +221,7 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         )
 
         try:
-            connector_response = ConnectorResponse.model_validate(payload.connector)
+            connector_response = ConnectorMetadata.model_validate(payload.connector)
             semantic_model = self._load_model_payload(payload.semantic_model_yaml)
             semantic_query = self._load_query_payload(request.query)
             resolved_connector_config = self._resolve_connector_config(connector_response)
@@ -558,7 +566,7 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
             logger=self._logger,
         )
 
-    def _resolve_connector_config(self, connector: ConnectorResponse) -> dict[str, Any]:
+    def _resolve_connector_config(self, connector: ConnectorMetadata) -> dict[str, Any]:
         resolved_payload = dict(connector.config or {})
         runtime_config = dict(resolved_payload.get("config") or {})
 

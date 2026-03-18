@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from langbridge.packages.common.langbridge_common.contracts.connectors import SecretReference
+from langbridge.contracts.connectors import SecretReference
 
 SecretResolver = Callable[[SecretReference], str]
 

@@ -14,7 +14,7 @@ from langbridge.packages.runtime.models import (
     CreateDatasetBulkCreateJobRequest,
     CreateDatasetPreviewJobRequest,
 )
-from langbridge.packages.common.langbridge_common.contracts.jobs.type import JobType
+from langbridge.contracts.jobs.type import JobType
 from langbridge.packages.common.langbridge_common.db.dataset import (
     DatasetColumnRecord,
     DatasetPolicyRecord,
@@ -43,7 +43,7 @@ class _FakeJobRepository:
 
 class _FakeDatasetRepository:
     def __init__(self, dataset: DatasetRecord | None = None) -> None:
-        self._datasets: dict[uuid.UUID, DatasetRecord] = {}
+        self._datasets: dict[uuid.UUID, Any] = {}
         if dataset is not None:
             self._datasets[dataset.id] = dataset
 
@@ -72,6 +72,10 @@ class _FakeDatasetRepository:
     def add(self, dataset: DatasetRecord) -> None:
         self._datasets[dataset.id] = dataset
 
+    async def save(self, dataset: Any) -> Any:
+        self._datasets[dataset.id] = dataset
+        return dataset
+
 
 class _FakeDatasetColumnRepository:
     def __init__(self, columns: list[DatasetColumnRecord] | None = None) -> None:
@@ -98,6 +102,10 @@ class _FakeDatasetPolicyRepository:
 
     def add(self, policy: DatasetPolicyRecord) -> None:
         self._policies[policy.dataset_id] = policy
+
+    async def save(self, policy: Any) -> Any:
+        self._policies[policy.dataset_id] = policy
+        return policy
 
 
 class _FakeFederatedQueryTool:

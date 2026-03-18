@@ -7,11 +7,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional, Sequence
 
-from langbridge.packages.common.langbridge_common.db.threads import Role, ThreadMessage
-from langbridge.packages.common.langbridge_common.repositories.conversation_memory_repository import (
-    ConversationMemoryRepository,
+from langbridge.packages.runtime.models import (
+    RuntimeMessageRole,
+    RuntimeThreadMessage,
 )
-from langbridge.packages.common.langbridge_common.utils.embedding_provider import EmbeddingProvider
+from langbridge.packages.runtime.embeddings import EmbeddingProvider
+from langbridge.packages.runtime.ports import ConversationMemoryStore
 from langbridge.packages.connectors.langbridge_connectors.api.connector import ManagedVectorDB, VectorDBType
 from langbridge.packages.connectors.langbridge_connectors.api.registry import VectorDBConnectorFactory
 
@@ -29,7 +30,7 @@ class MemoryManager:
     def __init__(
         self,
         *,
-        repository: ConversationMemoryRepository,
+        repository: ConversationMemoryStore,
         embedding_provider: Optional[EmbeddingProvider],
         logger: Optional[logging.Logger] = None,
     ) -> None:
@@ -43,7 +44,7 @@ class MemoryManager:
         *,
         thread_id: uuid.UUID,
         query: str,
-        messages: Sequence[ThreadMessage],
+        messages: Sequence[RuntimeThreadMessage],
         top_k: int = _DEFAULT_TOP_K,
     ) -> MemoryRetrievalResult:
         short_term = self._build_short_term_context(messages)
@@ -241,7 +242,7 @@ class MemoryManager:
             return "User preference: exclude benchmark comparisons by default."
         return None
 
-    def _build_short_term_context(self, messages: Sequence[ThreadMessage]) -> str:
+    def _build_short_term_context(self, messages: Sequence[RuntimeThreadMessage]) -> str:
         recent = list(messages)[-_SHORT_TERM_WINDOW:]
         if not recent:
             return ""
@@ -251,27 +252,31 @@ class MemoryManager:
             text = self._extract_message_text(message)
             if not text:
                 continue
-            role = "User" if message.role == Role.user else "Assistant"
+            role = "User" if self._role_value(message.role) == RuntimeMessageRole.user.value else "Assistant"
             lines.append(f"{role}: {text}")
         return "\n".join(lines)
 
     @staticmethod
-    def _extract_message_text(message: ThreadMessage) -> str:
+    def _extract_message_text(message: RuntimeThreadMessage) -> str:
         content = message.content
         if isinstance(content, str):
             return content.strip()
         if isinstance(content, dict):
-            if message.role == Role.user:
+            if MemoryManager._role_value(message.role) == RuntimeMessageRole.user.value:
                 for key in ("text", "message", "prompt", "query"):
                     value = content.get(key)
                     if isinstance(value, str) and value.strip():
                         return value.strip()
-            if message.role == Role.assistant:
+            if MemoryManager._role_value(message.role) == RuntimeMessageRole.assistant.value:
                 for key in ("summary", "text"):
                     value = content.get(key)
                     if isinstance(value, str) and value.strip():
                         return value.strip()
         return ""
+
+    @staticmethod
+    def _role_value(role: Any) -> str:
+        return str(getattr(role, "value", role))
 
     def _rank_items(
         self,

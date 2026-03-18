@@ -1,6 +1,9 @@
 """
-Web search agent that retrieves and normalizes search results.
+Web search agent that retrieves, summarizes, reranks, and synthesizes web results.
 """
+
+from __future__ import annotations
+
 import asyncio
 import html
 import json
@@ -19,9 +22,19 @@ from langbridge.packages.orchestrator.langbridge_orchestrator.llm.provider impor
 
 DEFAULT_MAX_RESULTS = 6
 MAX_RESULTS_CAP = 20
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_HTML_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+_HTML_TITLE_RE = re.compile(r"<title[^>]*>(?P<value>.*?)</title>", re.IGNORECASE | re.DOTALL)
+_HTML_H1_RE = re.compile(r"<h1[^>]*>(?P<value>.*?)</h1>", re.IGNORECASE | re.DOTALL)
+_HTML_BLOCK_TAG_RE = re.compile(
+    r"</?(?:p|div|section|article|main|aside|header|footer|li|ul|ol|br|tr|td|h[1-6])\b[^>]*>",
+    re.IGNORECASE,
+)
 
 
-@dataclass
+@dataclass(slots=True)
 class WebSearchResultItem:
     """Single web search result."""
 
@@ -29,6 +42,8 @@ class WebSearchResultItem:
     url: str
     snippet: str = ""
     source: str = ""
+    html_content: Optional[str] = None
+    html_content_summary: Optional[str] = None
     rank: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
@@ -37,6 +52,7 @@ class WebSearchResultItem:
             "url": self.url,
             "snippet": self.snippet,
             "source": self.source,
+            "html_content_summary": self.html_content_summary,
             "rank": self.rank,
         }
 
@@ -47,10 +63,11 @@ class WebSearchResultItem:
             self.url,
             self.snippet,
             self.source,
+            self.html_content_summary or "",
         ]
 
 
-@dataclass
+@dataclass(slots=True)
 class WebSearchResult:
     """Aggregated web search output."""
 
@@ -83,7 +100,7 @@ class WebSearchResult:
             }
 
         return {
-            "columns": ["rank", "title", "url", "snippet", "source"],
+            "columns": ["rank", "title", "url", "snippet", "source", "html_content_summary"],
             "rows": [result.to_row() for result in self.results],
         }
 
@@ -94,9 +111,19 @@ class WebSearchResult:
                 "snippet": result.snippet,
                 "url": result.url,
                 "source": result.source,
+                "html_content_summary": result.html_content_summary,
             }
             for result in self.results
         ]
+
+
+@dataclass(slots=True)
+class SearchExecutionOutcome:
+    """Internal search execution trace before triage and synthesis."""
+
+    results: list[WebSearchResultItem] = field(default_factory=list)
+    attempts: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 class WebSearchProvider(Protocol):
@@ -160,22 +187,21 @@ class DuckDuckGoInstantAnswerProvider:
     ) -> list[WebSearchResultItem]:
         if httpx is None:
             raise RuntimeError("httpx is required for DuckDuckGoInstantAnswerProvider.")
-        params = self._build_params(query, region=region, safe_search=safe_search)
         timeout = httpx.Timeout(timebox_seconds)
         with httpx.Client(timeout=timeout, headers={"User-Agent": self.user_agent}) as client:
-            response = client.get(self.base_url, params=params)
-            response.raise_for_status()
-            payload = response.json()
-            results = self._parse_results(query, payload, max_results=max_results)
-            if results:
-                return results
-            html_response = client.get(
-                self.html_search_url,
-                params=self._build_html_params(query, region=region, safe_search=safe_search),
-                follow_redirects=True,
+            results = self._search_with_client(
+                client,
+                query,
+                max_results=max_results,
+                region=region,
+                safe_search=safe_search,
             )
-            html_response.raise_for_status()
-        return self._parse_html_results(html_response.text, max_results=max_results)
+            self._attach_html_content(
+                client,
+                results,
+                timeout_seconds=min(max(1, timebox_seconds), 5),
+            )
+        return results
 
     async def search_async(
         self,
@@ -188,21 +214,68 @@ class DuckDuckGoInstantAnswerProvider:
     ) -> list[WebSearchResultItem]:
         if httpx is None:
             raise RuntimeError("httpx is required for DuckDuckGoInstantAnswerProvider.")
-        params = self._build_params(query, region=region, safe_search=safe_search)
         timeout = httpx.Timeout(timebox_seconds)
         async with httpx.AsyncClient(timeout=timeout, headers={"User-Agent": self.user_agent}) as client:
-            response = await client.get(self.base_url, params=params)
-            response.raise_for_status()
-            payload = response.json()
-            results = self._parse_results(query, payload, max_results=max_results)
-            if results:
-                return results
-            html_response = await client.get(
-                self.html_search_url,
-                params=self._build_html_params(query, region=region, safe_search=safe_search),
-                follow_redirects=True,
+            results = await self._search_with_client_async(
+                client,
+                query,
+                max_results=max_results,
+                region=region,
+                safe_search=safe_search,
             )
-            html_response.raise_for_status()
+            await self._attach_html_content_async(
+                client,
+                results,
+                timeout_seconds=min(max(1, timebox_seconds), 5),
+            )
+        return results
+
+    def _search_with_client(
+        self,
+        client: "httpx.Client",
+        query: str,
+        *,
+        max_results: int,
+        region: Optional[str],
+        safe_search: Optional[str],
+    ) -> list[WebSearchResultItem]:
+        response = client.get(self.base_url, params=self._build_params(query, region=region, safe_search=safe_search))
+        response.raise_for_status()
+        payload = response.json()
+        results = self._parse_results(query, payload, max_results=max_results)
+        if results:
+            return results
+
+        html_response = client.get(
+            self.html_search_url,
+            params=self._build_html_params(query, region=region, safe_search=safe_search),
+            follow_redirects=True,
+        )
+        html_response.raise_for_status()
+        return self._parse_html_results(html_response.text, max_results=max_results)
+
+    async def _search_with_client_async(
+        self,
+        client: "httpx.AsyncClient",
+        query: str,
+        *,
+        max_results: int,
+        region: Optional[str],
+        safe_search: Optional[str],
+    ) -> list[WebSearchResultItem]:
+        response = await client.get(self.base_url, params=self._build_params(query, region=region, safe_search=safe_search))
+        response.raise_for_status()
+        payload = response.json()
+        results = self._parse_results(query, payload, max_results=max_results)
+        if results:
+            return results
+
+        html_response = await client.get(
+            self.html_search_url,
+            params=self._build_html_params(query, region=region, safe_search=safe_search),
+            follow_redirects=True,
+        )
+        html_response.raise_for_status()
         return self._parse_html_results(html_response.text, max_results=max_results)
 
     def _build_params(
@@ -241,6 +314,66 @@ class DuckDuckGoInstantAnswerProvider:
             params["kp"] = safe_value
         return params
 
+    def _read_html_content(
+        self,
+        client: "httpx.Client",
+        url: str,
+        *,
+        timeout_seconds: int,
+    ) -> Optional[str]:
+        if httpx is None or not url:
+            return None
+        try:
+            response = client.get(url, timeout=httpx.Timeout(timeout_seconds), follow_redirects=True)
+            response.raise_for_status()
+        except Exception:
+            return None
+        return response.text
+
+    async def _read_html_content_async(
+        self,
+        client: "httpx.AsyncClient",
+        url: str,
+        *,
+        timeout_seconds: int,
+    ) -> Optional[str]:
+        if httpx is None or not url:
+            return None
+        try:
+            response = await client.get(url, timeout=httpx.Timeout(timeout_seconds), follow_redirects=True)
+            response.raise_for_status()
+        except Exception:
+            return None
+        return response.text
+
+    def _attach_html_content(
+        self,
+        client: "httpx.Client",
+        results: list[WebSearchResultItem],
+        *,
+        timeout_seconds: int,
+    ) -> None:
+        for result in results:
+            if result.html_content:
+                continue
+            result.html_content = self._read_html_content(client, result.url, timeout_seconds=timeout_seconds)
+
+    async def _attach_html_content_async(
+        self,
+        client: "httpx.AsyncClient",
+        results: list[WebSearchResultItem],
+        *,
+        timeout_seconds: int,
+    ) -> None:
+        for result in results:
+            if result.html_content:
+                continue
+            result.html_content = await self._read_html_content_async(
+                client,
+                result.url,
+                timeout_seconds=timeout_seconds,
+            )
+
     def _parse_results(
         self,
         query: str,
@@ -255,15 +388,12 @@ class DuckDuckGoInstantAnswerProvider:
             if not url or url in seen_urls:
                 return
             seen_urls.add(url)
-            clean_title = (title or url).strip()
-            clean_snippet = (snippet or "").strip()
-            resolved_source = (source or self._source_from_url(url) or self.name).strip()
             results.append(
                 WebSearchResultItem(
-                    title=clean_title,
+                    title=(title or url).strip(),
                     url=url,
-                    snippet=clean_snippet,
-                    source=resolved_source,
+                    snippet=(snippet or "").strip(),
+                    source=(source or self._source_from_url(url) or self.name).strip(),
                 )
             )
 
@@ -294,7 +424,7 @@ class DuckDuckGoInstantAnswerProvider:
             if not text or not url:
                 continue
             title = text.split(" - ", 1)[0].strip() if " - " in text else text
-            _add_result(title or query, url, text, None)
+            _add_result(title or query, url, text)
 
         if len(results) < max_results:
             for entry in self._coerce_list(payload.get("Results")):
@@ -305,7 +435,7 @@ class DuckDuckGoInstantAnswerProvider:
                 if not text or not url:
                     continue
                 title = text.split(" - ", 1)[0].strip() if " - " in text else text
-                _add_result(title or query, url, text, None)
+                _add_result(title or query, url, text)
 
         return results[:max_results]
 
@@ -404,7 +534,7 @@ class DuckDuckGoInstantAnswerProvider:
 
 
 class WebSearchAgent:
-    """Agent that performs query refinement, triage, and grounded synthesis."""
+    """Agent that performs query refinement, triage, reranking, and grounded synthesis."""
 
     def __init__(
         self,
@@ -419,7 +549,7 @@ class WebSearchAgent:
 
     @staticmethod
     def _tokens(text: str) -> set[str]:
-        return set(re.findall(r"[a-z0-9]+", str(text or "").lower()))
+        return set(_TOKEN_RE.findall(str(text or "").lower()))
 
     @staticmethod
     def _extract_json_blob(text: str) -> Optional[str]:
@@ -452,25 +582,11 @@ class WebSearchAgent:
         return parsed
 
     @staticmethod
-    def _normalize_alternates(value: Any, base_query: str) -> list[str]:
-        if not isinstance(value, list):
-            return []
-        cleaned: list[str] = []
-        for item in value:
-            text = str(item or "").strip()
-            if not text or text == base_query:
-                continue
-            cleaned.append(text)
-        return cleaned
-
-    @staticmethod
     def _dedupe_queries(queries: Iterable[str]) -> list[str]:
         seen: set[str] = set()
         ordered: list[str] = []
         for query in queries:
-            if not query:
-                continue
-            if query in seen:
+            if not query or query in seen:
                 continue
             seen.add(query)
             ordered.append(query)
@@ -536,14 +652,13 @@ class WebSearchAgent:
         region: Optional[str],
         safe_search: Optional[str],
         timebox_seconds: int,
-    ) -> tuple[list[WebSearchResultItem], list[str], list[str]]:
-        warnings: list[str] = []
-        attempts: list[str] = []
-        merged: list[WebSearchResultItem] = []
+    ) -> SearchExecutionOutcome:
+        outcome = SearchExecutionOutcome()
         seen_urls: set[str] = set()
         per_query_limit = max(1, min(max_results, 8))
+
         for candidate in queries[:3]:
-            attempts.append(candidate)
+            outcome.attempts.append(candidate)
             try:
                 results = self.provider.search(
                     candidate,
@@ -553,16 +668,17 @@ class WebSearchAgent:
                     timebox_seconds=timebox_seconds,
                 )
             except Exception as exc:  # pragma: no cover
-                warnings.append(f"Search provider failed for query '{candidate}': {exc}")
+                outcome.warnings.append(f"Search provider failed for query '{candidate}': {exc}")
                 continue
+
             for result in results:
                 if result.url in seen_urls:
                     continue
                 seen_urls.add(result.url)
-                merged.append(result)
-                if len(merged) >= max_results * 2:
+                outcome.results.append(result)
+                if len(outcome.results) >= max_results * 2:
                     break
-        return merged, attempts, warnings
+        return outcome
 
     async def _execute_query_sequence_async(
         self,
@@ -572,14 +688,13 @@ class WebSearchAgent:
         region: Optional[str],
         safe_search: Optional[str],
         timebox_seconds: int,
-    ) -> tuple[list[WebSearchResultItem], list[str], list[str]]:
-        warnings: list[str] = []
-        attempts: list[str] = []
-        merged: list[WebSearchResultItem] = []
+    ) -> SearchExecutionOutcome:
+        outcome = SearchExecutionOutcome()
         seen_urls: set[str] = set()
         per_query_limit = max(1, min(max_results, 8))
+
         for candidate in queries[:3]:
-            attempts.append(candidate)
+            outcome.attempts.append(candidate)
             try:
                 results = await self.provider.search_async(
                     candidate,
@@ -589,16 +704,28 @@ class WebSearchAgent:
                     timebox_seconds=timebox_seconds,
                 )
             except Exception as exc:  # pragma: no cover
-                warnings.append(f"Search provider failed for query '{candidate}': {exc}")
+                outcome.warnings.append(f"Search provider failed for query '{candidate}': {exc}")
                 continue
+
             for result in results:
                 if result.url in seen_urls:
                     continue
                 seen_urls.add(result.url)
-                merged.append(result)
-                if len(merged) >= max_results * 2:
+                outcome.results.append(result)
+                if len(outcome.results) >= max_results * 2:
                     break
-        return merged, attempts, warnings
+        return outcome
+
+    def _prepare_results_for_ranking(
+        self,
+        *,
+        query: str,
+        results: list[WebSearchResultItem],
+    ) -> list[WebSearchResultItem]:
+        for item in results:
+            item.html_content_summary = self._build_html_content_summary(query=query, item=item)
+            item.html_content = None
+        return results
 
     def _triage_results(
         self,
@@ -610,23 +737,178 @@ class WebSearchAgent:
         if not results:
             return [], True
 
-        query_tokens = self._tokens(query)
         scored: list[tuple[float, WebSearchResultItem]] = []
         for item in results:
-            title_tokens = self._tokens(item.title)
-            snippet_tokens = self._tokens(item.snippet)
-            overlap = len(query_tokens.intersection(title_tokens.union(snippet_tokens)))
-            denom = max(len(query_tokens), 1)
-            score = overlap / denom
-            if item.snippet:
-                score += 0.1
-            score = min(1.0, score)
-            scored.append((score, item))
+            scored.append((self._score_result(query=query, item=item), item))
 
         scored.sort(key=lambda row: row[0], reverse=True)
-        kept = [item for score, item in scored if score >= 0.2][:max_results]
+        kept = [item for score, item in scored if score >= 0.18][:max_results]
+        if not kept:
+            kept = [item for _, item in scored[:max_results]]
         weak_results = len(kept) < min(2, max_results)
         return kept, weak_results
+
+    def _score_result(self, *, query: str, item: WebSearchResultItem) -> float:
+        query_tokens = self._tokens(query)
+        if not query_tokens:
+            return 0.0
+
+        title_score = self._overlap_score(query_tokens, self._tokens(item.title))
+        snippet_score = self._overlap_score(query_tokens, self._tokens(item.snippet))
+        source_score = self._overlap_score(query_tokens, self._tokens(item.source))
+        summary_text = self._summary_text(item)
+        summary_score = self._overlap_score(query_tokens, self._tokens(summary_text))
+
+        evidence_score = max(title_score, snippet_score, summary_score)
+        normalized_query = query.strip().lower()
+        combined_text = " ".join(part for part in [item.title, item.snippet, summary_text] if part).lower()
+        exact_phrase_bonus = 0.08 if normalized_query and len(query_tokens) > 1 and normalized_query in combined_text else 0.0
+        summary_bonus = 0.07 if summary_text else 0.0
+        snippet_bonus = 0.05 if item.snippet else 0.0
+
+        score = (
+            (0.24 * title_score)
+            + (0.17 * snippet_score)
+            + (0.39 * summary_score)
+            + (0.12 * evidence_score)
+            + (0.03 * source_score)
+            + summary_bonus
+            + snippet_bonus
+            + exact_phrase_bonus
+        )
+        return round(max(0.0, min(1.0, score)), 4)
+
+    @staticmethod
+    def _overlap_score(query_tokens: set[str], candidate_tokens: set[str]) -> float:
+        if not query_tokens or not candidate_tokens:
+            return 0.0
+        overlap = len(query_tokens.intersection(candidate_tokens))
+        return overlap / max(len(query_tokens), 1)
+
+    def _build_html_content_summary(
+        self,
+        *,
+        query: str,
+        item: WebSearchResultItem,
+    ) -> Optional[str]:
+        summary_points: list[str] = []
+        if item.snippet:
+            summary_points.append(self._trim_summary_text(item.snippet))
+
+        extracted_text = self._extract_readable_text(item.html_content or "")
+        selected_sentences = self._select_relevant_sentences(query=query, text=extracted_text, limit=3)
+        for sentence in selected_sentences:
+            trimmed = self._trim_summary_text(sentence)
+            if trimmed and trimmed not in summary_points:
+                summary_points.append(trimmed)
+
+        if not summary_points:
+            return None
+
+        heading = self._extract_html_heading(item.html_content or "") or item.title or item.url
+        return self._render_summary_html(
+            heading=heading,
+            primary=summary_points[0],
+            bullets=summary_points[1:3],
+        )
+
+    @staticmethod
+    def _extract_readable_text(value: str) -> str:
+        if not value:
+            return ""
+        text = _HTML_COMMENT_RE.sub(" ", value)
+        text = _HTML_SCRIPT_STYLE_RE.sub(" ", text)
+        text = _HTML_BLOCK_TAG_RE.sub("\n", text)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = html.unescape(text)
+        text = re.sub(r"[ \t\r\f\v]+", " ", text)
+        text = re.sub(r"\n\s*\n+", "\n", text)
+        return text.strip()
+
+    def _select_relevant_sentences(self, *, query: str, text: str, limit: int) -> list[str]:
+        if not text:
+            return []
+
+        query_tokens = self._tokens(query)
+        candidates: list[tuple[float, int, str]] = []
+        for index, segment in enumerate(_SENTENCE_SPLIT_RE.split(text)[:80]):
+            cleaned = segment.strip()
+            if len(cleaned) < 40:
+                continue
+            tokens = self._tokens(cleaned)
+            if not tokens:
+                continue
+            overlap = len(query_tokens.intersection(tokens))
+            density = overlap / max(len(tokens), 1)
+            lead_bonus = 0.08 if index < 3 else 0.0
+            candidates.append((overlap + density + lead_bonus, index, cleaned))
+
+        candidates.sort(key=lambda row: (row[0], -row[1]), reverse=True)
+        selected: list[tuple[int, str]] = []
+        seen: set[str] = set()
+        for score, index, segment in candidates:
+            if len(selected) >= limit:
+                break
+            normalized = segment.lower()
+            if normalized in seen:
+                continue
+            if score <= 0 and selected:
+                continue
+            seen.add(normalized)
+            selected.append((index, segment))
+
+        if not selected:
+            fallback = text[:280].strip()
+            return [fallback] if fallback else []
+
+        selected.sort(key=lambda row: row[0])
+        return [segment for _, segment in selected]
+
+    @staticmethod
+    def _extract_html_heading(value: str) -> str:
+        for pattern in (_HTML_H1_RE, _HTML_TITLE_RE):
+            match = pattern.search(value or "")
+            if match:
+                heading = DuckDuckGoInstantAnswerProvider._clean_html_fragment(match.group("value"))
+                if heading:
+                    return heading
+        return ""
+
+    @staticmethod
+    def _trim_summary_text(value: str, *, max_words: int = 28, max_chars: int = 220) -> str:
+        cleaned = re.sub(r"\s+", " ", str(value or "")).strip()
+        if not cleaned:
+            return ""
+        words = cleaned.split(" ")
+        if len(words) > max_words:
+            cleaned = " ".join(words[:max_words]).rstrip(" ,;:")
+            cleaned = f"{cleaned}..."
+        if len(cleaned) > max_chars:
+            cleaned = cleaned[: max_chars - 3].rstrip(" ,;:")
+            cleaned = f"{cleaned}..."
+        return cleaned
+
+    @staticmethod
+    def _render_summary_html(*, heading: str, primary: str, bullets: list[str]) -> str:
+        parts = [
+            "<article>",
+            f"<h2>{html.escape(heading)}</h2>",
+            f"<p>{html.escape(primary)}</p>",
+        ]
+        if bullets:
+            parts.append("<ul>")
+            for bullet in bullets:
+                parts.append(f"<li>{html.escape(bullet)}</li>")
+            parts.append("</ul>")
+        parts.append("</article>")
+        return "".join(parts)
+
+    @staticmethod
+    def _summary_text(item: WebSearchResultItem) -> str:
+        return DuckDuckGoInstantAnswerProvider._clean_html_fragment(item.html_content_summary or "")
+
+    def _answer_text(self, item: WebSearchResultItem) -> str:
+        return self._summary_text(item) or item.snippet
 
     def _synthesize_answer(
         self,
@@ -639,15 +921,15 @@ class WebSearchAgent:
 
         if self.llm:
             prompt_sections = [
-                "You synthesize grounded answers from web snippets.",
+                "You synthesize grounded answers from reranked web results.",
                 "Return ONLY JSON with keys: answer, citations, weak_results, follow_up_question.",
                 "citations must be list of URLs actually used.",
                 f"Question: {query}",
-                "Search snippets:",
+                "Reranked evidence:",
             ]
             for index, item in enumerate(triaged_results[:6], start=1):
                 prompt_sections.append(
-                    f"{index}. title={item.title}; url={item.url}; snippet={item.snippet}"
+                    f"{index}. title={item.title}; url={item.url}; snippet={item.snippet}; summary_html={item.html_content_summary or ''}"
                 )
             prompt = "\n".join(prompt_sections)
             try:
@@ -676,8 +958,8 @@ class WebSearchAgent:
 
         top = triaged_results[:3]
         citations = [item.url for item in top]
-        snippets = [item.snippet for item in top if item.snippet]
-        answer = snippets[0] if snippets else f"Found {len(top)} relevant sources."
+        answer_candidates = [self._answer_text(item) for item in top if self._answer_text(item)]
+        answer = answer_candidates[0] if answer_candidates else f"Found {len(top)} relevant sources."
         weak = len(top) < 2
         return answer, citations, weak, self._build_follow_up_question(query) if weak else None
 
@@ -689,6 +971,49 @@ class WebSearchAgent:
         if "policy" in lowered or "regulation" in lowered:
             return "Which jurisdiction or regulatory body should I prioritize?"
         return "Could you narrow this to a specific company, location, or timeframe?"
+
+    def _finalize_search(
+        self,
+        *,
+        query: str,
+        max_results: int,
+        outcome: SearchExecutionOutcome,
+        warnings: list[str],
+    ) -> WebSearchResult:
+        warnings.extend(outcome.warnings)
+        prepared_results = self._prepare_results_for_ranking(query=query, results=outcome.results)
+        triaged_results, weak_results = self._triage_results(
+            query=query,
+            results=prepared_results,
+            max_results=max_results,
+        )
+        answer, citations, weak_from_synthesis, follow_up = self._synthesize_answer(
+            query=query,
+            triaged_results=triaged_results,
+        )
+        weak_results = weak_results or weak_from_synthesis
+        if not outcome.results:
+            warnings.append("No web results returned by the provider.")
+        if weak_results:
+            warnings.append("Search results were weak or only partially relevant.")
+        self._apply_ranking(triaged_results)
+        self.logger.info(
+            "WebSearchAgent retrieved %d result(s) for query '%s' via %s after %d attempt(s)",
+            len(triaged_results),
+            query,
+            self.provider.name,
+            len(outcome.attempts),
+        )
+        return WebSearchResult(
+            query=query,
+            provider=self.provider.name,
+            results=triaged_results,
+            warnings=warnings,
+            answer=answer,
+            citations=citations,
+            weak_results=weak_results,
+            follow_up_question=follow_up,
+        )
 
     def search(
         self,
@@ -702,45 +1027,18 @@ class WebSearchAgent:
         clean_query = self._normalize_query(query)
         capped_max_results = self._normalize_max_results(max_results)
         query_sequence, warnings = self._prepare_query_candidates(clean_query)
-        results, attempts, attempt_warnings = self._execute_query_sequence(
+        outcome = self._execute_query_sequence(
             query_sequence,
             max_results=capped_max_results,
             region=region,
             safe_search=safe_search,
             timebox_seconds=timebox_seconds,
         )
-        warnings.extend(attempt_warnings)
-        triaged_results, weak_results = self._triage_results(
+        return self._finalize_search(
             query=clean_query,
-            results=results,
             max_results=capped_max_results,
-        )
-        answer, citations, weak_from_synthesis, follow_up = self._synthesize_answer(
-            query=clean_query,
-            triaged_results=triaged_results,
-        )
-        weak_results = weak_results or weak_from_synthesis
-        if not results:
-            warnings.append("No web results returned by the provider.")
-        if weak_results:
-            warnings.append("Search results were weak or only partially relevant.")
-        self._apply_ranking(triaged_results)
-        self.logger.info(
-            "WebSearchAgent retrieved %d result(s) for query '%s' via %s after %d attempt(s)",
-            len(triaged_results),
-            clean_query,
-            self.provider.name,
-            len(attempts),
-        )
-        return WebSearchResult(
-            query=clean_query,
-            provider=self.provider.name,
-            results=triaged_results,
+            outcome=outcome,
             warnings=warnings,
-            answer=answer,
-            citations=citations,
-            weak_results=weak_results,
-            follow_up_question=follow_up,
         )
 
     async def search_async(
@@ -755,45 +1053,18 @@ class WebSearchAgent:
         clean_query = self._normalize_query(query)
         capped_max_results = self._normalize_max_results(max_results)
         query_sequence, warnings = await self._prepare_query_candidates_async(clean_query)
-        results, attempts, attempt_warnings = await self._execute_query_sequence_async(
+        outcome = await self._execute_query_sequence_async(
             query_sequence,
             max_results=capped_max_results,
             region=region,
             safe_search=safe_search,
             timebox_seconds=timebox_seconds,
         )
-        warnings.extend(attempt_warnings)
-        triaged_results, weak_results = self._triage_results(
+        return self._finalize_search(
             query=clean_query,
-            results=results,
             max_results=capped_max_results,
-        )
-        answer, citations, weak_from_synthesis, follow_up = self._synthesize_answer(
-            query=clean_query,
-            triaged_results=triaged_results,
-        )
-        weak_results = weak_results or weak_from_synthesis
-        if not results:
-            warnings.append("No web results returned by the provider.")
-        if weak_results:
-            warnings.append("Search results were weak or only partially relevant.")
-        self._apply_ranking(triaged_results)
-        self.logger.info(
-            "WebSearchAgent retrieved %d result(s) for query '%s' via %s after %d attempt(s)",
-            len(triaged_results),
-            clean_query,
-            self.provider.name,
-            len(attempts),
-        )
-        return WebSearchResult(
-            query=clean_query,
-            provider=self.provider.name,
-            results=triaged_results,
+            outcome=outcome,
             warnings=warnings,
-            answer=answer,
-            citations=citations,
-            weak_results=weak_results,
-            follow_up_question=follow_up,
         )
 
     @staticmethod

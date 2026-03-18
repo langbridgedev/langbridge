@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from langbridge.packages.common.langbridge_common.utils.sql import (
+from langbridge.packages.runtime.utils.sql import (
     apply_result_redaction,
     enforce_preview_limit,
     enforce_read_only_sql,

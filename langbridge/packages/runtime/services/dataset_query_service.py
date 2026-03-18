@@ -14,45 +14,41 @@ import sqlglot
 from sqlglot import exp
 
 from langbridge.packages.runtime.execution import DuckDbExecutionEngine, ExecutionEngine, FederatedQueryTool
-from langbridge.packages.runtime.providers import DatasetMetadataProvider
-from langbridge.packages.runtime.services.dataset_execution import (
-    DatasetExecutionResolver,
-    build_file_scan_sql,
-)
 from langbridge.packages.runtime.models import (
     CreateDatasetBulkCreateJobRequest,
     CreateDatasetCsvIngestJobRequest,
     CreateDatasetPreviewJobRequest,
     CreateDatasetProfileJobRequest,
+    DatasetColumnMetadata,
+    DatasetMetadata,
+    DatasetPolicyMetadata,
+    DatasetRevision,
+    LineageEdge,
+    RuntimeJob,
+    RuntimeJobStatus,
 )
-from langbridge.packages.common.langbridge_common.db.dataset import (
-    DatasetColumnRecord,
-    DatasetPolicyRecord,
-    DatasetRecord,
-    DatasetRevisionRecord,
+from langbridge.packages.runtime.ports import (
+    DatasetCatalogStore,
+    DatasetColumnStore,
+    DatasetPolicyStore,
+    DatasetRevisionStore,
+    LineageEdgeStore,
+    MutableJobHandle,
 )
-from langbridge.packages.common.langbridge_common.db.lineage import LineageEdgeRecord
-from langbridge.packages.common.langbridge_common.db.job import JobRecord, JobStatus
-from langbridge.packages.common.langbridge_common.errors.application_errors import (
-    BusinessValidationError,
+from langbridge.packages.runtime.providers import DatasetMetadataProvider
+from langbridge.packages.runtime.services.dataset_execution import (
+    DatasetExecutionResolver,
+    build_file_scan_sql,
 )
-from langbridge.packages.common.langbridge_common.repositories.dataset_repository import (
-    DatasetColumnRepository,
-    DatasetPolicyRepository,
-    DatasetRepository,
-    DatasetRevisionRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.lineage_repository import (
-    LineageEdgeRepository,
-)
-from langbridge.packages.common.langbridge_common.utils.lineage import (
+from langbridge.packages.runtime.errors import BusinessValidationError
+from langbridge.packages.runtime.utils.lineage import (
     LineageEdgeType,
     LineageNodeType,
     build_file_resource_id,
     build_source_table_resource_id,
     stable_payload_hash,
 )
-from langbridge.packages.common.langbridge_common.utils.sql import (
+from langbridge.packages.runtime.utils.sql import (
     apply_result_redaction,
     render_sql_with_params,
     sanitize_sql_error_message,
@@ -72,11 +68,11 @@ DatasetExecutionRequest = (
 class DatasetQueryService:
     def __init__(
         self,
-        dataset_repository: DatasetRepository | None,
-        dataset_column_repository: DatasetColumnRepository | None,
-        dataset_policy_repository: DatasetPolicyRepository | None,
-        dataset_revision_repository: DatasetRevisionRepository | None = None,
-        lineage_edge_repository: LineageEdgeRepository | None = None,
+        dataset_repository: DatasetCatalogStore | None,
+        dataset_column_repository: DatasetColumnStore | None,
+        dataset_policy_repository: DatasetPolicyStore | None,
+        dataset_revision_repository: DatasetRevisionStore | None = None,
+        lineage_edge_repository: LineageEdgeStore | None = None,
         federated_query_tool: FederatedQueryTool | None = None,
         execution_engine: ExecutionEngine | None = None,
         dataset_provider: DatasetMetadataProvider | None = None,
@@ -99,7 +95,7 @@ class DatasetQueryService:
         self,
         *,
         request: DatasetExecutionRequest,
-        job_record: JobRecord | None = None,
+        job_record: MutableJobHandle | None = None,
     ) -> dict[str, Any]:
         if job_record is not None:
             await self.execute_job(job_record=job_record, request=request)
@@ -120,13 +116,13 @@ class DatasetQueryService:
         if isinstance(request, CreateDatasetBulkCreateJobRequest):
             if self._dataset_repository is None or self._dataset_column_repository is None:
                 raise BusinessValidationError("Bulk dataset creation requires mutable dataset repositories.")
-            transient_job = JobRecord(
+            transient_job = RuntimeJob(
                 id=uuid.uuid4(),
-                organisation_id=str(request.workspace_id),
+                organization_id=str(request.workspace_id),
                 job_type=request.job_type.value,
                 payload=request.model_dump(mode="json"),
                 headers={},
-                status=JobStatus.running,
+                status=RuntimeJobStatus.running,
                 progress=0,
                 status_message="Dataset execution started.",
                 created_at=datetime.now(timezone.utc),
@@ -142,7 +138,7 @@ class DatasetQueryService:
     async def execute_job(
         self,
         *,
-        job_record: JobRecord,
+        job_record: MutableJobHandle,
         request: DatasetExecutionRequest,
     ) -> None:
         if self._federated_query_tool is None:
@@ -173,14 +169,14 @@ class DatasetQueryService:
                 "result": result,
                 "summary": summary,
             }
-            self._set_job_status(job_record, JobStatus.succeeded)
+            self._set_job_status(job_record, RuntimeJobStatus.succeeded)
             job_record.progress = 100
             job_record.status_message = summary
             job_record.finished_at = datetime.now(timezone.utc)
             job_record.error = None
         except Exception as exc:
             self._logger.exception("Dataset job %s failed: %s", job_record.id, exc)
-            self._set_job_status(job_record, JobStatus.failed)
+            self._set_job_status(job_record, RuntimeJobStatus.failed)
             job_record.progress = 100
             job_record.status_message = "Dataset execution failed."
             job_record.finished_at = datetime.now(timezone.utc)
@@ -315,6 +311,8 @@ class DatasetQueryService:
         dataset.bytes_estimate = execution_meta["bytes_scanned"]
         dataset.last_profiled_at = now
         dataset.updated_at = now
+        if self._dataset_repository is not None:
+            await self._dataset_repository.save(dataset)
 
         return {
             "dataset_id": str(dataset.id),
@@ -372,7 +370,7 @@ class DatasetQueryService:
 
         dataset.storage_uri = parquet_file.resolve().as_uri()
         dataset.dialect = "duckdb"
-        dataset.file_config_json = {
+        dataset.file_config = {
             **file_config,
             "format": "parquet",
             "source_format": "csv",
@@ -394,7 +392,7 @@ class DatasetQueryService:
         for index, row in enumerate(describe_rows):
             if len(row) < 2:
                 continue
-            column = DatasetColumnRecord(
+            column = DatasetColumnMetadata(
                 id=uuid.uuid4(),
                 dataset_id=dataset.id,
                 workspace_id=dataset.workspace_id,
@@ -418,6 +416,8 @@ class DatasetQueryService:
             change_summary="CSV ingest converted dataset to parquet.",
         )
         await self._replace_dataset_lineage(dataset)
+        if self._dataset_repository is not None:
+            await self._dataset_repository.save(dataset)
 
         return {
             "dataset_id": str(dataset.id),
@@ -430,7 +430,7 @@ class DatasetQueryService:
     async def _run_bulk_create(
         self,
         request: CreateDatasetBulkCreateJobRequest,
-        job_record: JobRecord,
+        job_record: MutableJobHandle,
     ) -> dict[str, Any]:
         created_count = 0
         reused_count = 0
@@ -508,7 +508,7 @@ class DatasetQueryService:
         schema_name: str,
         table_name: str,
         selected_columns: list[str],
-    ) -> DatasetRecord | None:
+    ) -> DatasetMetadata | None:
         candidates = await self._dataset_repository.list_for_workspace(
             workspace_id=workspace_id,
             project_id=project_id,
@@ -540,14 +540,14 @@ class DatasetQueryService:
         schema_name: str,
         table_name: str,
         columns: list[Any],
-    ) -> DatasetRecord:
-        selected_columns: list[DatasetColumnRecord] = []
+    ) -> DatasetMetadata:
+        selected_columns: list[DatasetColumnMetadata] = []
         for index, column in enumerate(columns):
             column_name = str(getattr(column, "name", "")).strip()
             if not column_name:
                 continue
             selected_columns.append(
-                DatasetColumnRecord(
+                DatasetColumnMetadata(
                     id=uuid.uuid4(),
                     dataset_id=uuid.uuid4(),  # placeholder overwritten below
                     workspace_id=request.workspace_id,
@@ -581,7 +581,7 @@ class DatasetQueryService:
             ),
         )
         now = datetime.now(timezone.utc)
-        dataset = DatasetRecord(
+        dataset = DatasetMetadata(
             id=uuid.uuid4(),
             workspace_id=request.workspace_id,
             project_id=request.project_id,
@@ -591,16 +591,16 @@ class DatasetQueryService:
             name=final_name,
             sql_alias=self._dataset_sql_alias(final_name),
             description=None,
-            tags_json=self._normalize_tags(list(request.tags or [])),
+            tags=self._normalize_tags(list(request.tags or [])),
             dataset_type="TABLE",
             dialect=None,
             catalog_name=None,
             schema_name=schema_name,
             table_name=table_name,
             sql_text=None,
-            referenced_dataset_ids_json=[],
-            federated_plan_json=None,
-            file_config_json=None,
+            referenced_dataset_ids=[],
+            federated_plan=None,
+            file_config=None,
             status="published",
             revision_id=None,
             row_count_estimate=None,
@@ -613,7 +613,7 @@ class DatasetQueryService:
 
         if not selected_columns:
             selected_columns.append(
-                DatasetColumnRecord(
+                DatasetColumnMetadata(
                     id=uuid.uuid4(),
                     dataset_id=dataset.id,
                     workspace_id=request.workspace_id,
@@ -641,14 +641,14 @@ class DatasetQueryService:
         max_export_rows = max(1, min(max_export_rows, settings.SQL_POLICY_MAX_EXPORT_ROWS_UPPER_BOUND))
         allow_dml = bool(defaults.allow_dml) if defaults else False
         redaction_rules = dict(defaults.redaction_rules or {}) if defaults else {}
-        policy = DatasetPolicyRecord(
+        policy = DatasetPolicyMetadata(
             id=uuid.uuid4(),
             dataset_id=dataset.id,
             workspace_id=request.workspace_id,
             max_rows_preview=max_preview_rows,
             max_export_rows=max_export_rows,
-            redaction_rules_json=redaction_rules,
-            row_filters_json=[],
+            redaction_rules=redaction_rules,
+            row_filters=[],
             allow_dml=allow_dml,
             created_at=now,
             updated_at=now,
@@ -661,6 +661,8 @@ class DatasetQueryService:
             change_summary="Auto-generated dataset created.",
         )
         await self._replace_dataset_lineage(dataset)
+        if self._dataset_repository is not None:
+            await self._dataset_repository.save(dataset)
         return dataset
 
     async def _ensure_unique_dataset_name(
@@ -737,7 +739,7 @@ class DatasetQueryService:
         *,
         dataset_id: uuid.UUID,
         workspace_id: uuid.UUID,
-    ) -> tuple[DatasetRecord, list[DatasetColumnRecord], DatasetPolicyRecord]:
+    ) -> tuple[DatasetMetadata, list[DatasetColumnMetadata], DatasetPolicyMetadata]:
         if self._dataset_repository is not None:
             dataset = await self._dataset_repository.get_for_workspace(
                 dataset_id=dataset_id,
@@ -765,14 +767,14 @@ class DatasetQueryService:
         else:
             policy = None
         if policy is None:
-            policy = DatasetPolicyRecord(
+            policy = DatasetPolicyMetadata(
                 id=uuid.uuid4(),
                 dataset_id=dataset.id,
                 workspace_id=dataset.workspace_id,
                 max_rows_preview=settings.SQL_DEFAULT_MAX_PREVIEW_ROWS,
                 max_export_rows=settings.SQL_DEFAULT_MAX_EXPORT_ROWS,
-                redaction_rules_json={},
-                row_filters_json=[],
+                redaction_rules={},
+                row_filters=[],
                 allow_dml=False,
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
@@ -781,19 +783,19 @@ class DatasetQueryService:
                 self._dataset_policy_repository.add(policy)
         return dataset, columns, policy
 
-    async def _get_or_create_policy(self, dataset: DatasetRecord) -> DatasetPolicyRecord:
+    async def _get_or_create_policy(self, dataset: DatasetMetadata) -> DatasetPolicyMetadata:
         policy = await self._dataset_policy_repository.get_for_dataset(dataset_id=dataset.id)
         if policy is not None:
             return policy
 
-        policy = DatasetPolicyRecord(
+        policy = DatasetPolicyMetadata(
             id=uuid.uuid4(),
             dataset_id=dataset.id,
             workspace_id=dataset.workspace_id,
             max_rows_preview=settings.SQL_DEFAULT_MAX_PREVIEW_ROWS,
             max_export_rows=settings.SQL_DEFAULT_MAX_EXPORT_ROWS,
-            redaction_rules_json={},
-            row_filters_json=[],
+            redaction_rules={},
+            row_filters=[],
             allow_dml=False,
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
@@ -804,8 +806,8 @@ class DatasetQueryService:
     async def _create_dataset_revision(
         self,
         *,
-        dataset: DatasetRecord,
-        policy: DatasetPolicyRecord,
+        dataset: DatasetMetadata,
+        policy: DatasetPolicyMetadata,
         created_by: uuid.UUID | None,
         change_summary: str,
     ) -> None:
@@ -850,29 +852,31 @@ class DatasetQueryService:
         }
         revision_id = uuid.uuid4()
         self._dataset_revision_repository.add(
-            DatasetRevisionRecord(
+            DatasetRevision(
                 id=revision_id,
                 dataset_id=dataset.id,
                 workspace_id=dataset.workspace_id,
                 revision_number=next_revision,
                 revision_hash=stable_payload_hash(snapshot),
                 change_summary=change_summary,
-                definition_json=definition,
-                schema_json=schema_snapshot,
-                policy_json=policy_snapshot,
-                source_bindings_json=source_bindings,
-                execution_characteristics_json=execution_characteristics,
+                definition=definition,
+                schema_snapshot=schema_snapshot,
+                policy=policy_snapshot,
+                source_bindings=source_bindings,
+                execution_characteristics=execution_characteristics,
                 status=dataset.status,
-                snapshot_json=snapshot,
+                snapshot=snapshot,
                 note=change_summary,
                 created_by=created_by,
                 created_at=datetime.now(timezone.utc),
             )
         )
         dataset.revision_id = revision_id
+        if self._dataset_repository is not None:
+            await self._dataset_repository.save(dataset)
 
     @staticmethod
-    def _build_dataset_definition_snapshot(dataset: DatasetRecord) -> dict[str, Any]:
+    def _build_dataset_definition_snapshot(dataset: DatasetMetadata) -> dict[str, Any]:
         return {
             "id": str(dataset.id),
             "workspace_id": str(dataset.workspace_id),
@@ -894,7 +898,7 @@ class DatasetQueryService:
             "status": dataset.status,
         }
 
-    def _build_dataset_source_bindings(self, dataset: DatasetRecord) -> list[dict[str, Any]]:
+    def _build_dataset_source_bindings(self, dataset: DatasetMetadata) -> list[dict[str, Any]]:
         dataset_type = str(dataset.dataset_type or "").upper()
         if dataset_type == "TABLE":
             return [
@@ -949,7 +953,7 @@ class DatasetQueryService:
             return bindings
         return []
 
-    async def _replace_dataset_lineage(self, dataset: DatasetRecord) -> None:
+    async def _replace_dataset_lineage(self, dataset: DatasetMetadata) -> None:
         if self._lineage_edge_repository is None:
             return
 
@@ -959,24 +963,24 @@ class DatasetQueryService:
             target_id=str(dataset.id),
         )
 
-        edges: list[LineageEdgeRecord] = []
+        edges: list[LineageEdge] = []
         if dataset.connection_id is not None:
             edges.append(
-                LineageEdgeRecord(
+                LineageEdge(
                     workspace_id=dataset.workspace_id,
                     source_type=LineageNodeType.CONNECTION.value,
                     source_id=str(dataset.connection_id),
                     target_type=LineageNodeType.DATASET.value,
                     target_id=str(dataset.id),
                     edge_type=LineageEdgeType.FEEDS.value,
-                    metadata_json={"connection_id": str(dataset.connection_id)},
+                    metadata={"connection_id": str(dataset.connection_id)},
                 )
             )
 
         dataset_type = str(dataset.dataset_type or "").upper()
         if dataset_type == "TABLE" and dataset.connection_id is not None and dataset.table_name:
             edges.append(
-                LineageEdgeRecord(
+                LineageEdge(
                     workspace_id=dataset.workspace_id,
                     source_type=LineageNodeType.SOURCE_TABLE.value,
                     source_id=build_source_table_resource_id(
@@ -988,7 +992,7 @@ class DatasetQueryService:
                     target_type=LineageNodeType.DATASET.value,
                     target_id=str(dataset.id),
                     edge_type=LineageEdgeType.MATERIALIZES_FROM.value,
-                    metadata_json={
+                    metadata={
                         "connection_id": str(dataset.connection_id),
                         "catalog_name": dataset.catalog_name,
                         "schema_name": dataset.schema_name,
@@ -1012,14 +1016,14 @@ class DatasetQueryService:
             )
             if storage_uri:
                 edges.append(
-                    LineageEdgeRecord(
+                    LineageEdge(
                         workspace_id=dataset.workspace_id,
                         source_type=LineageNodeType.FILE_RESOURCE.value,
                         source_id=build_file_resource_id(storage_uri),
                         target_type=LineageNodeType.DATASET.value,
                         target_id=str(dataset.id),
                         edge_type=LineageEdgeType.MATERIALIZES_FROM.value,
-                        metadata_json={
+                        metadata={
                             "storage_uri": storage_uri,
                             "file_config": dict(dataset.file_config_json or {}),
                         },
@@ -1036,29 +1040,29 @@ class DatasetQueryService:
                     continue
                 seen_ids.add(source_id)
                 edges.append(
-                    LineageEdgeRecord(
+                    LineageEdge(
                         workspace_id=dataset.workspace_id,
                         source_type=LineageNodeType.DATASET.value,
                         source_id=source_id,
                         target_type=LineageNodeType.DATASET.value,
                         target_id=str(dataset.id),
                         edge_type=LineageEdgeType.DERIVES_FROM.value,
-                        metadata_json={"match_type": "federated_child"},
+                        metadata={"match_type": "federated_child"},
                     )
                 )
 
         for edge in edges:
             self._lineage_edge_repository.add(edge)
 
-    async def _build_workflow(self, *, dataset: DatasetRecord):
+    async def _build_workflow(self, *, dataset: DatasetMetadata):
         return await self._dataset_execution_resolver.build_workflow_for_dataset(dataset=dataset)
 
     def _build_preview_sql(
         self,
         *,
         table_key: str,
-        columns: list[DatasetColumnRecord],
-        policy: DatasetPolicyRecord,
+        columns: list[DatasetColumnMetadata],
+        policy: DatasetPolicyMetadata,
         request: CreateDatasetPreviewJobRequest,
         effective_limit: int,
         dialect: str,
@@ -1131,7 +1135,7 @@ class DatasetQueryService:
         self,
         *,
         filters: dict[str, Any],
-        allowed_columns: list[DatasetColumnRecord],
+        allowed_columns: list[DatasetColumnMetadata],
         dialect: str,
     ) -> list[exp.Expression]:
         if not filters:
@@ -1208,7 +1212,7 @@ class DatasetQueryService:
     def _build_row_filter_expressions(
         self,
         *,
-        policy: DatasetPolicyRecord,
+        policy: DatasetPolicyMetadata,
         request_context: dict[str, Any],
         workspace_id: uuid.UUID,
         project_id: uuid.UUID | None,
@@ -1320,7 +1324,7 @@ class DatasetQueryService:
         }
 
     @staticmethod
-    def _set_job_status(job_record: JobRecord, desired_status: JobStatus) -> None:
+    def _set_job_status(job_record: MutableJobHandle, desired_status: RuntimeJobStatus) -> None:
         current_status = getattr(job_record, "status", None)
         if isinstance(current_status, enum.Enum):
             status_type = type(current_status)
@@ -1329,7 +1333,7 @@ class DatasetQueryService:
                 return
             except Exception:
                 pass
-        job_record.status = desired_status
+        job_record.status = desired_status.value
 
     @staticmethod
     def _extract_single_numeric(

@@ -99,13 +99,27 @@ across local development, self-hosted deployments, and embedded application scen
 
 ## Repository Layout
 
+Canonical runtime package surfaces now live under the root `langbridge.*`
+namespace:
+
+- `langbridge.contracts`
+- `langbridge.runtime`
+- `langbridge.federation`
+- `langbridge.semantic`
+- `langbridge.orchestrator`
+- `langbridge.hosting`
+- `langbridge.plugins`
+
+The legacy `langbridge.packages.*` layout remains in place as an incremental
+compatibility layer while the monolith namespace is normalized.
+
 Important areas in this repository:
 
 - `langbridge/packages/runtime/` - runtime services, providers, and execution logic
 - `langbridge/packages/federation/` - federated planning and execution engine
 - `langbridge/packages/semantic/` - semantic execution and semantic model logic
-- `langbridge/packages/connectors/` - connector implementations and connector-facing runtime APIs
-- `langbridge/packages/contracts/` - published runtime-facing contracts and schemas
+- `langbridge/packages/connectors/` - official connector implementations published as the separate `langbridge-connectors` package
+- `langbridge/packages/contracts/` - transitional compatibility layout behind the canonical `langbridge.contracts` surface
 - `langbridge/apps/runtime_worker/` - thin runtime worker assembly for local, self-hosted, and hybrid execution
 - `docs/` - architecture, deployment, and development documentation
 
@@ -201,9 +215,9 @@ Langbridge is actively evolving toward a cleaner package-oriented runtime archit
 The direction is:
 
 - thin assembly apps only where needed
-- core logic in packages
+- one canonical `langbridge.*` runtime namespace with modular internal boundaries
+- `langbridge-connectors` for official installable connectors
 - versioned runtime artifacts for downstream consumers
-- a clearer package-oriented runtime architecture
 
 ## License
 

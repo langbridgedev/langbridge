@@ -15,13 +15,13 @@ from typing import Any, Dict, List, Optional, Sequence
 import sqlglot
 from sqlglot import exp
 
-from langbridge.packages.common.langbridge_common.interfaces.agent_events import (
+from langbridge.packages.runtime.embeddings import EmbeddingProvider
+from langbridge.packages.runtime.events import (
     AgentEventVisibility,
-    IAgentEventEmitter,
+    AgentEventEmitter,
 )
-from langbridge.packages.common.langbridge_common.utils.embedding_provider import EmbeddingProvider
-from langbridge.packages.common.langbridge_common.utils.sql import enforce_preview_limit
 from langbridge.packages.orchestrator.langbridge_orchestrator.llm.provider import LLMProvider
+from langbridge.packages.runtime.utils.sql import enforce_preview_limit
 from .interfaces import (
     AnalyticalContext,
     AnalyticalField,
@@ -86,7 +86,7 @@ class SqlAnalystTool:
         llm_temperature: float = 0.0,
         priority: int = 0,
         embedder: Optional[EmbeddingProvider] = None,
-        event_emitter: Optional[IAgentEventEmitter] = None,
+        event_emitter: Optional[AgentEventEmitter] = None,
     ) -> None:
         self.llm = llm
         self.context = context

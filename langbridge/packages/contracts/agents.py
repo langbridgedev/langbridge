@@ -1,8 +1,4 @@
-from langbridge.packages.contracts._reexport import reexport_public_api
+from langbridge.contracts.agents import *  # noqa: F401,F403
+from langbridge.contracts.agents import __all__ as _contracts_all
 
-globals().update(
-    reexport_public_api("langbridge.packages.common.langbridge_common.contracts.agents", __name__)
-)
-
-__all__ = [name for name in globals() if not name.startswith("_")]
-from langbridge.packages.common.langbridge_common.contracts.agents import *
+__all__ = list(_contracts_all)

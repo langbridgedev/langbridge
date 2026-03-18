@@ -32,6 +32,44 @@ class ConnectorSyncState(RuntimeModel):
         return dict(self.state)
 
 
+class SqlJob(RuntimeModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    project_id: uuid.UUID | None = None
+    user_id: uuid.UUID
+    connection_id: uuid.UUID | None = None
+    workbench_mode: str
+    selected_datasets_json: list[dict[str, Any]] = Field(default_factory=list)
+    execution_mode: str = "single"
+    status: str = "queued"
+    query_text: str
+    query_hash: str
+    query_params_json: dict[str, Any] = Field(default_factory=dict)
+    requested_limit: int | None = None
+    enforced_limit: int = 1000
+    requested_timeout_seconds: int | None = None
+    enforced_timeout_seconds: int = 30
+    is_explain: bool = False
+    is_federated: bool = False
+    correlation_id: str | None = None
+    policy_snapshot_json: dict[str, Any] = Field(default_factory=dict)
+    result_columns_json: list[dict[str, Any]] | None = None
+    result_rows_json: list[dict[str, Any]] | None = None
+    row_count_preview: int = 0
+    total_rows_estimate: int | None = None
+    bytes_scanned: int | None = None
+    duration_ms: int | None = None
+    result_cursor: str | None = None
+    redaction_applied: bool = False
+    error_json: dict[str, Any] | None = None
+    warning_json: dict[str, Any] | None = None
+    stats_json: dict[str, Any] | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class SqlJobResultArtifact(RuntimeModel):
     id: uuid.UUID
     sql_job_id: uuid.UUID

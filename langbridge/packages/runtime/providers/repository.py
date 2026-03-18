@@ -2,32 +2,28 @@ from __future__ import annotations
 
 from typing import Any
 
-from langbridge.packages.common.langbridge_common.repositories.sql_repository import (
-    SqlJobResultArtifactRepository,
-)
 from langbridge.packages.common.langbridge_common.repositories.connector_repository import (
     ConnectorRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.connector_sync_repository import (
-    ConnectorSyncStateRepository,
-)
-from langbridge.packages.common.langbridge_common.repositories.dataset_repository import (
-    DatasetColumnRepository,
-    DatasetPolicyRepository,
-    DatasetRepository,
 )
 from langbridge.packages.common.langbridge_common.repositories.semantic_model_repository import (
     SemanticModelRepository,
 )
+from langbridge.packages.common.langbridge_common.repositories.sql_repository import (
+    SqlJobResultArtifactRepository,
+)
 from langbridge.packages.runtime.adapters import (
+    to_legacy_sql_job_result_artifact,
     to_runtime_connector,
-    to_runtime_dataset,
-    to_runtime_dataset_column,
-    to_runtime_dataset_policy,
     to_runtime_secret_reference,
     to_runtime_semantic_model,
     to_runtime_sql_job_result_artifact,
-    to_runtime_sync_state,
+)
+from langbridge.packages.runtime.models import SqlJobResultArtifact
+from langbridge.packages.runtime.ports import (
+    ConnectorSyncStateStore,
+    DatasetCatalogStore,
+    DatasetColumnStore,
+    DatasetPolicyStore,
 )
 from langbridge.packages.runtime.providers.protocols import (
     ConnectorMetadataProvider,
@@ -44,43 +40,35 @@ class RepositoryDatasetMetadataProvider(DatasetMetadataProvider):
     def __init__(
         self,
         *,
-        dataset_repository: DatasetRepository,
-        dataset_column_repository: DatasetColumnRepository | None = None,
-        dataset_policy_repository: DatasetPolicyRepository | None = None,
+        dataset_repository: DatasetCatalogStore,
+        dataset_column_repository: DatasetColumnStore | None = None,
+        dataset_policy_repository: DatasetPolicyStore | None = None,
     ) -> None:
         self._dataset_repository = dataset_repository
         self._dataset_column_repository = dataset_column_repository
         self._dataset_policy_repository = dataset_policy_repository
 
     async def get_dataset(self, *, workspace_id, dataset_id) -> Any:
-        dataset = await self._dataset_repository.get_for_workspace(
+        return await self._dataset_repository.get_for_workspace(
             dataset_id=dataset_id,
             workspace_id=workspace_id,
         )
-        return to_runtime_dataset(dataset)
 
     async def get_datasets(self, *, workspace_id, dataset_ids) -> list[Any]:
-        datasets = await self._dataset_repository.get_by_ids_for_workspace(
+        return await self._dataset_repository.get_by_ids_for_workspace(
             workspace_id=workspace_id,
             dataset_ids=dataset_ids,
         )
-        return [
-            runtime_dataset
-            for dataset in datasets
-            if (runtime_dataset := to_runtime_dataset(dataset)) is not None
-        ]
 
     async def get_dataset_columns(self, *, dataset_id) -> list[Any]:
         if self._dataset_column_repository is None:
             return []
-        columns = await self._dataset_column_repository.list_for_dataset(dataset_id=dataset_id)
-        return [to_runtime_dataset_column(column) for column in columns]
+        return await self._dataset_column_repository.list_for_dataset(dataset_id=dataset_id)
 
     async def get_dataset_policy(self, *, dataset_id) -> Any | None:
         if self._dataset_policy_repository is None:
             return None
-        policy = await self._dataset_policy_repository.get_for_dataset(dataset_id=dataset_id)
-        return to_runtime_dataset_policy(policy)
+        return await self._dataset_policy_repository.get_for_dataset(dataset_id=dataset_id)
 
 
 class RepositoryConnectorMetadataProvider(ConnectorMetadataProvider):
@@ -105,7 +93,7 @@ class RepositorySemanticModelMetadataProvider(SemanticModelMetadataProvider):
 
 
 class RepositorySyncStateProvider(SyncStateProvider):
-    def __init__(self, *, connector_sync_state_repository: ConnectorSyncStateRepository) -> None:
+    def __init__(self, *, connector_sync_state_repository: ConnectorSyncStateStore) -> None:
         self._connector_sync_state_repository = connector_sync_state_repository
 
     async def get_or_create_state(self, **kwargs: Any) -> Any:
@@ -115,26 +103,39 @@ class RepositorySyncStateProvider(SyncStateProvider):
             resource_name=kwargs["resource_name"],
         )
         if state is not None:
-            return to_runtime_sync_state(state)
+            return state
         state = kwargs["factory"]()
         self._connector_sync_state_repository.add(state)
-        return to_runtime_sync_state(state)
+        return state
 
     async def mark_failed(self, **kwargs: Any) -> None:
         state = kwargs["state"]
         state.status = kwargs["status"]
         state.error_message = kwargs["error_message"]
+        await self._connector_sync_state_repository.save(state)
 
 class SqlArtifactRepository(SqlJobResultArtifactProvider):
     def __init__(self, *, sql_job_result_artifact_repository: SqlJobResultArtifactRepository) -> None:
         self._sql_job_result_artifact_repository = sql_job_result_artifact_repository
 
     async def create_sql_job_result_artifact(self, **kwargs: Any) -> Any:
-        artifact = await self._sql_job_result_artifact_repository.create_sql_job_result_artifact(**kwargs)
-        return to_runtime_sql_job_result_artifact(artifact)
+        artifact = kwargs.get("artifact")
+        if artifact is None:
+            artifact = SqlJobResultArtifact.model_validate(kwargs)
+        elif not isinstance(artifact, SqlJobResultArtifact):
+            artifact = SqlJobResultArtifact.model_validate(artifact)
+        record = self._sql_job_result_artifact_repository.add(
+            to_legacy_sql_job_result_artifact(artifact)
+        )
+        return to_runtime_sql_job_result_artifact(record)
 
     async def list_sql_job_result_artifacts(self, **kwargs: Any) -> list[Any]:
-        artifacts = await self._sql_job_result_artifact_repository.list_sql_job_result_artifacts(**kwargs)
+        sql_job_id = kwargs.get("sql_job_id")
+        if sql_job_id is None:
+            return []
+        artifacts = await self._sql_job_result_artifact_repository.list_for_job(
+            sql_job_id=sql_job_id
+        )
         return [
             artifact
             for item in artifacts
