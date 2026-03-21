@@ -79,7 +79,7 @@ class SqlConnectorRemoteSource(RemoteSource):
         metadata = binding.metadata if isinstance(binding.metadata, dict) else {}
         parts = [
             metadata.get("physical_catalog", binding.catalog),
-            metadata.get("physical_schema", binding.schema),
+            metadata.get("physical_schema", binding.schema_name),
             metadata.get("physical_table", binding.table),
         ]
         return ".".join(part for part in parts if part)

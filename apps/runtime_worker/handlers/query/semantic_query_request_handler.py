@@ -274,8 +274,7 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
             row_count = len(data)
             response = SemanticQueryResponse(
                 id=uuid.uuid4(),
-                organization_id=request.organisation_id,
-                project_id=request.project_id,
+                workspace_id=request.workspace_id,
                 semantic_model_id=request.semantic_model_id
                 if request.semantic_model_id is not None
                 else uuid.uuid4(),
@@ -398,9 +397,9 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
                 "semantic_model_id is required for semantic_model query scope."
             )
 
-        semantic_model_record = await self._semantic_model_repository.get_for_scope(
+        semantic_model_record = await self._semantic_model_repository.get_for_workspace(
             model_id=request.semantic_model_id,
-            organization_id=request.organisation_id,
+            workspace_id=request.workspace_id,
         )
         if semantic_model_record is None:
             raise BusinessValidationError("Semantic model not found.")
@@ -412,8 +411,7 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
             semantic_query=semantic_query,
             semantic_model=semantic_model,
             semantic_model_id=semantic_model_id,
-            organization_id=request.organisation_id,
-            project_id=request.project_id,
+            workspace_id=request.workspace_id,
             raw_model_payload=raw_model_payload,
             event_emitter=event_emitter,
         )
@@ -424,8 +422,7 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         semantic_query: SemanticQuery,
         semantic_model: SemanticModel,
         semantic_model_id: uuid.UUID,
-        organization_id: uuid.UUID,
-        project_id: uuid.UUID | None,
+        workspace_id: uuid.UUID,
         raw_model_payload: Mapping[str, Any],
         event_emitter: BrokerJobEventEmitter,
     ) -> SemanticQueryResponse:
@@ -435,7 +432,7 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
             raise BusinessValidationError("Federated query tool is required for dataset-backed semantic queries.")
 
         workflow, workflow_dialect = await self._dataset_execution_resolver.build_semantic_workflow(
-            organization_id=organization_id,
+            workspace_id=workspace_id,
             workflow_id=f"workflow_semantic_dataset_{semantic_model_id.hex[:12]}",
             dataset_name=f"semantic_dataset_{semantic_model_id.hex[:12]}",
             semantic_model=semantic_model,
@@ -468,7 +465,7 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         )
         execution = await self._federated_query_tool.execute_federated_query(
             {
-                "workspace_id": str(organization_id),
+                "workspace_id": str(workspace_id),
                 "query": semantic_query.model_dump(by_alias=True, exclude_none=True),
                 "dialect": workflow_dialect,
                 "workflow": workflow.model_dump(mode="json"),
@@ -481,8 +478,7 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         data_payload = [row for row in rows_payload if isinstance(row, dict)]
         return SemanticQueryResponse(
             id=uuid.uuid4(),
-            organization_id=organization_id,
-            project_id=project_id,
+            workspace_id=workspace_id,
             semantic_model_id=semantic_model_id,
             data=data_payload,
             annotations=plan.annotations,
@@ -535,8 +531,7 @@ class SemanticQueryRequestHandler(BaseMessageHandler):
         job_record.progress = 70
         job_record.status_message = "Executing federated semantic query."
         execution = await self._query_execution_service.execute_unified_query(
-            organization_id=request.organisation_id,
-            project_id=request.project_id,
+            workspace_id=request.workspace_id,
             semantic_query=semantic_query,
             semantic_model_ids=request.semantic_model_ids,
             source_models=request.source_models,

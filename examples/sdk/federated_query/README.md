@@ -1,27 +1,29 @@
 # Local SDK Federated Query Notebook
 
-This example shows the Langbridge local runtime federating three live sources at query time:
+This example shows Langbridge federating live sources at query time from a local
+configured runtime.
+
+Sources:
 
 - a Postgres sales database
 - a Postgres CRM database
 - a local CSV with campaign attribution tags
 
-The notebook demonstrates both direct federated SQL and semantic querying across those sources through `LangbridgeClient.local(...)`.
+## What This Example Covers
 
-## What is in this example
+- `LangbridgeClient.local(...)`
+- dataset preview across multiple source types
+- semantic query across federated sources
+- direct federated SQL across multiple datasets
+
+## Files
 
 - `docker-compose.yml`
-  Starts the two Postgres databases and loads the seed data.
-- `seeds/sales`
-  Sales schema and seed scripts.
-- `seeds/crm`
-  CRM schema and seed scripts.
+- `seeds/sales/`
+- `seeds/crm/`
 - `marketing_campaign.csv`
-  Local campaign attribution data keyed by `contact_external_id`.
 - `langbridge_config.yml`
-  Local runtime config describing the three sources and the federated semantic model.
 - `example.ipynb`
-  Notebook walkthrough for dataset previews, semantic queries, and direct federated SQL.
 
 ## Install
 
@@ -34,13 +36,7 @@ pip install -e .
 pip install notebook ipykernel pandas
 ```
 
-Register a notebook kernel if needed:
-
-```bash
-python -m ipykernel install --user --name langbridge-sdk-demo --display-name "Langbridge SDK Demo"
-```
-
-## Start the source systems
+## Start The Source Systems
 
 From this example folder:
 
@@ -48,18 +44,13 @@ From this example folder:
 docker compose up -d --wait
 ```
 
-This starts:
-
-- `sales-db` on `localhost:5432`
-- `crm-db` on `localhost:5433`
-
 To tear the demo down later:
 
 ```bash
 docker compose down -v
 ```
 
-## Run the notebook
+## Run The Notebook
 
 From the repository root:
 
@@ -67,19 +58,21 @@ From the repository root:
 jupyter notebook examples/sdk/federated_query/example.ipynb
 ```
 
-## What the notebook demonstrates
+## What The Notebook Demonstrates
 
-1. Bootstrapping the local runtime with `LangbridgeClient.local(config_path="langbridge_config.yml")`
-2. Previewing each source-backed dataset through the runtime dataset service
-3. Running a semantic query that combines sales revenue with CRM segments and CSV campaign names
-4. Running a direct federated SQL join across all three sources at runtime
+1. Building a configured local runtime with `LangbridgeClient.local(config_path="langbridge_config.yml")`
+2. Previewing each runtime dataset
+3. Running a semantic query across sales, CRM, and CSV-backed data
+4. Running federated SQL joins at runtime
 
-## Join path
+## Join Path
 
-The example is intentionally keyed around the shared CRM contact identifier:
+The example uses the shared CRM contact identifier:
 
 - `sales.customers.crm_contact_external_id`
 - `crm.contacts.contact_external_id`
 - `marketing_campaign.csv.contact_external_id`
 
-That makes the federation story explicit: revenue lives in the sales database, lifecycle and segment live in the CRM database, and campaign tagging lives in the CSV.
+That keeps the federation story explicit: revenue, lifecycle data, and campaign
+tags remain in their original systems while the runtime joins them at execution
+time.

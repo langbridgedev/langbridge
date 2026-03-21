@@ -21,8 +21,8 @@ class UnifiedSourceModel:
 
 
 @dataclass(frozen=True)
-class TenantAwareQueryContext:
-    organization_id: UUID
+class WorkspaceAwareQueryContext:
+    workspace_id: UUID
     execution_connector_id: UUID
 
 
@@ -158,10 +158,10 @@ def build_unified_semantic_model(
     return unified_model, dataset_connector_map
 
 
-def apply_tenant_aware_context(
+def apply_workspace_aware_context(
     semantic_model: SemanticModel,
     *,
-    context: TenantAwareQueryContext,
+    context: WorkspaceAwareQueryContext,
     table_connector_map: Mapping[str, UUID] | None = None,
 ) -> SemanticModel:
     model_copy = semantic_model.model_copy(deep=True)
@@ -182,17 +182,17 @@ def apply_tenant_aware_context(
             connector_id = table_connector_map[dataset_key]
 
         dataset.catalog_name = _build_catalog_token(
-            organization_id=context.organization_id,
+            workspace_id=context.workspace_id,
             connector_id=connector_id,
         )
 
     return model_copy
 
 
-def _build_catalog_token(*, organization_id: UUID, connector_id: UUID) -> str:
-    org_token = organization_id.hex[:12]
+def _build_catalog_token(*, workspace_id: UUID, connector_id: UUID) -> str:
+    workspace_token = workspace_id.hex[:12]
     connector_token = connector_id.hex[:12]
-    return f"org_{org_token}__src_{connector_token}"
+    return f"ws_{workspace_token}__src_{connector_token}"
 
 
 def _materialized_dataset_key(model_key: str, dataset_key: str) -> str:

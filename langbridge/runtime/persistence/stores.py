@@ -177,15 +177,15 @@ class RepositoryConversationMemoryStore(ConversationMemoryStore):
         self,
         *,
         thread_id,
-        user_id,
         category: str,
         content: str,
         metadata_json=None,
+        actor_id=None,
     ) -> RuntimeConversationMemoryItem | None:
         return from_conversation_memory_record(
             self._repository.create_item(
                 thread_id=thread_id,
-                user_id=user_id,
+                actor_id=actor_id,
                 category=category,
                 content=content,
                 metadata_json=metadata_json,
@@ -299,7 +299,6 @@ class RepositoryDatasetCatalogStore(DatasetCatalogStore):
         self,
         *,
         workspace_id,
-        project_id=None,
         search=None,
         tags=None,
         dataset_types=None,
@@ -310,7 +309,6 @@ class RepositoryDatasetCatalogStore(DatasetCatalogStore):
             runtime_dataset
             for item in await self._repository.list_for_workspace(
                 workspace_id=workspace_id,
-                project_id=project_id,
                 search=search,
                 tags=tags,
                 dataset_types=dataset_types,

@@ -56,7 +56,7 @@ def main() -> int:
         )
     )
     parser.add_argument("--input", required=True, help="Path to semantic model YAML file.")
-    parser.add_argument("--workspace-id", required=True, help="Workspace/organization id.")
+    parser.add_argument("--workspace-id", required=True, help="Workspace id.")
     parser.add_argument("--connection-id", required=True, help="Legacy connector id for table bindings.")
     parser.add_argument(
         "--tag",

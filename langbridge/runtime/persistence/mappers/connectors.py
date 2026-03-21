@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from langbridge.runtime.models import (
@@ -11,11 +12,7 @@ from langbridge.runtime.models import (
 )
 from langbridge.runtime.persistence.db.connector import Connector
 from langbridge.runtime.persistence.db.connector_sync import ConnectorSyncStateRecord
-from langbridge.runtime.persistence.mappers.common import (
-    as_dict,
-    resolve_org_id,
-    resolve_project_id,
-)
+from langbridge.runtime.persistence.mappers.common import as_dict
 
 
 def to_secret_reference(value: Any) -> SecretReference:
@@ -69,8 +66,7 @@ def from_connector_record(value: Any | None) -> ConnectorMetadata | None:
         label=getattr(value, "label", None) or getattr(value, "name", None),
         icon=getattr(value, "icon", None),
         connector_type=getattr(value, "connector_type", None),
-        organization_id=resolve_org_id(value),
-        project_id=resolve_project_id(value),
+        workspace_id=getattr(value, "workspace_id", None),
         config=config or None,
         connection_metadata=to_connection_metadata(
             getattr(value, "connection_metadata", None)
@@ -90,15 +86,16 @@ def to_connector_record(value: ConnectorMetadata | Connector) -> Connector:
         return value
     return Connector(
         id=value.id,
+        workspace_id=value.workspace_id,
         name=value.name,
         description=value.description,
         connector_type=str(value.connector_type or ""),
         type=str(value.connector_type or "connector"),
-        config_json=value.config_json,
+        config_json=json.dumps(value.config or {}),
         connection_metadata_json=(
             None
             if value.connection_metadata is None
-            else value.connection_metadata.model_dump(exclude_none=True)
+            else value.connection_metadata.model_dump(exclude_none=True, by_alias=True)
         ),
         secret_references_json={
             str(key): item.model_dump(exclude_none=True)
@@ -158,6 +155,7 @@ def to_connector_sync_state_record(
         last_cursor=value.last_cursor,
         last_sync_at=value.last_sync_at,
         state_json=value.state_json,
+        dataset_ids_json=[str(item) for item in value.dataset_ids],
         status=value.status,
         error_message=value.error_message,
         records_synced=value.records_synced,

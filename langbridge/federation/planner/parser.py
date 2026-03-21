@@ -373,7 +373,7 @@ def _resolve_table(
             continue
         if binding.table != table_name:
             continue
-        if schema_name and (binding.schema or "") != schema_name:
+        if schema_name and (binding.schema_name or "") != schema_name:
             continue
         if catalog_name and (binding.catalog or "") != catalog_name:
             continue
@@ -394,7 +394,7 @@ def _table_ref(*, alias: str, binding: VirtualTableBinding) -> TableRef:
         table_key=binding.table_key,
         source_id=binding.source_id,
         connector_id=(str(binding.connector_id) if binding.connector_id is not None else None),
-        schema=binding.schema,
+        schema=binding.schema_name,
         table=binding.table,
         catalog=binding.catalog,
     )

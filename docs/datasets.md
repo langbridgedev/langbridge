@@ -1,90 +1,84 @@
 # Datasets
 
-Datasets are the common structured data contract in Langbridge.
+Datasets are Langbridge's structured execution contract.
 
-- connectors expose raw physical or external sources
-- datasets define reusable technical contracts over those sources
-- semantic models provide business meaning on top of datasets
-- SQL, semantic, and agent execution resolve structured workloads through dataset descriptors
+They sit between connectors and higher-level query surfaces:
+
+- connectors expose source-specific access
+- datasets normalize those sources into workspace-scoped runtime metadata
+- semantic, SQL, sync, and agent workloads resolve through datasets
 
 ## Why Datasets Exist
 
-Datasets keep execution concerns out of higher-level semantic definitions.
+Datasets let the runtime work with one structured concept even when the backing
+source differs.
 
-They capture things such as:
+They capture:
 
-- source contract (`source_kind`, `connector_kind`, `storage_kind`)
-- source binding (table, SQL, file, virtual, or federated metadata)
-- governed schema and allowed columns
-- preview and export policies
-- row filters and result redaction
-- canonical relation identity for federation
-- execution capabilities for pushdown, materialization, and federation
+- workspace ownership
+- source binding
+- relation identity
+- execution capabilities
+- schema and policy metadata
+- lineage and revision history
 
-## Data Model
+## Runtime Shape
 
-Core records:
+The runtime dataset metadata model lives in `langbridge/runtime/models/metadata.py`
+and centers on:
 
-- `datasets`
-- `dataset_columns`
-- `dataset_policies`
-- `dataset_revisions`
-- `lineage_edges`
-
-Datasets carry a normalized execution descriptor:
-
+- `workspace_id`
+- `connection_id`
+- `name`
+- `sql_alias`
+- `dataset_type`
 - `source_kind`
 - `connector_kind`
 - `storage_kind`
-- `relation_identity_json`
-- `execution_capabilities_json`
+- `relation_identity`
+- `execution_capabilities`
+- `columns`
+- `policy`
 
-This lets the runtime treat database tables, files, parquet-backed syncs, and
-virtual datasets as one structured execution surface.
+Important supporting records:
 
-## Versioning And Lineage
+- `DatasetMetadata`
+- `DatasetColumnMetadata`
+- `DatasetPolicyMetadata`
+- `DatasetRelationIdentity`
+- `DatasetExecutionCapabilities`
 
-Datasets are versioned so the runtime can preserve an execution-oriented history.
+## Workspace Scope
 
-Each revision stores:
+Datasets are resolved per workspace. That is the runtime boundary that matters
+for execution. Runtime-core dataset resolution does not depend on upstream
+product-account identity claims.
 
-- dataset definition snapshot
-- schema snapshot
-- policy snapshot
-- source binding snapshot
-- execution characteristics and relation identity
+## Source Types
 
-Lineage captures how datasets relate to:
+Datasets may represent:
 
-- connections
-- source tables
-- file resources
-- datasets
-- semantic models
+- database tables
+- SQL-defined virtual datasets
+- file-backed datasets
+- sync-materialized datasets
+- federated or derived datasets
 
-## Execution Architecture
+## Policies And Guardrails
 
-- runtime services load dataset metadata and policies
-- the worker resolves dataset descriptors and source bindings
-- the federated planner executes against the normalized dataset contract
-- connector secrets remain in connector or runtime secret stores
+Dataset policy is where the runtime applies:
 
-## Capability Model
+- preview row limits
+- export limits
+- redaction rules
+- row filters
+- DML permissions
 
-Execution is driven by explicit capabilities rather than coarse dataset types.
+That policy is reused across dataset preview, SQL, semantic, and agent-driven
+execution.
 
-Examples:
+## Current Direction
 
-- `supports_structured_scan`
-- `supports_sql_federation`
-- `supports_filter_pushdown`
-- `supports_projection_pushdown`
-- `supports_aggregation_pushdown`
-- `supports_join_pushdown`
-- `supports_materialization`
-
-## Direction
-
-- treat datasets as the core structured source contract
-- keep business semantics in semantic models
-- keep execution metadata and source bindings in datasets
+Langbridge is moving toward a richer dataset-first execution model driven by
+relation identity and execution capabilities rather than coarse dataset types
+alone.

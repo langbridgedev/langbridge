@@ -158,7 +158,10 @@ class FederatedQueryTool:
                     raise ValueError(
                         f"Source id '{binding.source_id}' maps to multiple connector ids in workflow '{workflow.id}'."
                     )
-            connector = await self._connector_provider.get_connector(connector_id)
+            connector = await self._connector_provider.get_connector(
+                workspace_id=UUID(str(workflow.workspace_id)),
+                connector_id=connector_id,
+            )
             if connector is None:
                 raise ValueError(f"Connector '{connector_id}' not found for source '{source_id}'.")
             resolved_config = self._resolve_connector_config(connector)
@@ -230,7 +233,7 @@ class FederatedQueryTool:
         runtime_config = dict(resolved_payload.get("config") or {})
 
         if connector.connection_metadata is not None:
-            metadata = connector.connection_metadata.model_dump(exclude_none=True)
+            metadata = connector.connection_metadata.model_dump(exclude_none=True, by_alias=True)
             extra = metadata.pop("extra", {})
             for key, value in metadata.items():
                 runtime_config.setdefault(key, value)

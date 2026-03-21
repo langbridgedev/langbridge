@@ -19,7 +19,6 @@ class JobType(str, Enum):
     AGENT = "agent"
     SEMANTIC_QUERY = "semantic_query"
     AGENTIC_SEMANTIC_MODEL = "agentic_semantic_model"
-    COPILOT_DASHBOARD = "copilot_dashboard"
     SQL = "sql"
     DATASET_PREVIEW = "dataset_preview"
     DATASET_PROFILE = "dataset_profile"
@@ -34,6 +33,10 @@ class SqlWorkbenchMode(str, Enum):
 
 
 _CONNECTOR_SYNC_MODES = {"INCREMENTAL", "FULL_REFRESH", "WEBHOOK_ASSISTED"}
+
+
+def _actor_id_field() -> Any:
+    return Field()
 
 
 class SqlSelectedDataset(RuntimeRequestModel):
@@ -74,8 +77,7 @@ class CreateSqlJobRequest(RuntimeRequestModel):
     job_type: JobType = JobType.SQL
     sql_job_id: uuid.UUID
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID = _actor_id_field()
     workbench_mode: SqlWorkbenchMode = SqlWorkbenchMode.dataset
     connection_id: uuid.UUID | None = None
     execution_mode: Literal["single", "federated"] = "single"
@@ -133,9 +135,8 @@ class CreateSqlJobRequest(RuntimeRequestModel):
 
 class CreateSemanticQueryJobRequest(RuntimeRequestModel):
     job_type: JobType = JobType.SEMANTIC_QUERY
-    organisation_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    workspace_id: uuid.UUID
+    actor_id: uuid.UUID = _actor_id_field()
     query_scope: Literal["semantic_model", "unified"] = "semantic_model"
     semantic_model_id: uuid.UUID | None = None
     connector_id: uuid.UUID | None = None
@@ -176,7 +177,7 @@ class DatasetSelectionColumnRequest(RuntimeRequestModel):
 
 
 class DatasetSelectionRequest(RuntimeRequestModel):
-    schema: str = Field(..., min_length=1, max_length=255)
+    schema_name: str = Field(..., alias="schema", min_length=1, max_length=255)
     table: str = Field(..., min_length=1, max_length=255)
     columns: list[DatasetSelectionColumnRequest] = Field(default_factory=list)
 
@@ -192,8 +193,7 @@ class CreateDatasetPreviewJobRequest(RuntimeRequestModel):
     job_type: JobType = JobType.DATASET_PREVIEW
     dataset_id: uuid.UUID
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID = _actor_id_field()
     requested_limit: int | None = Field(default=None, ge=1)
     enforced_limit: int = Field(..., ge=1)
     filters: dict[str, Any] = Field(default_factory=dict)
@@ -213,8 +213,7 @@ class CreateDatasetProfileJobRequest(RuntimeRequestModel):
     job_type: JobType = JobType.DATASET_PROFILE
     dataset_id: uuid.UUID
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID = _actor_id_field()
     user_context: dict[str, Any] = Field(default_factory=dict)
     correlation_id: str | None = None
     operation: Literal["profile"] = "profile"
@@ -224,8 +223,7 @@ class CreateDatasetCsvIngestJobRequest(RuntimeRequestModel):
     job_type: JobType = JobType.DATASET_CSV_INGEST
     dataset_id: uuid.UUID
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID = _actor_id_field()
     storage_uri: str | None = None
     correlation_id: str | None = None
     operation: Literal["csv_ingest"] = "csv_ingest"
@@ -234,8 +232,7 @@ class CreateDatasetCsvIngestJobRequest(RuntimeRequestModel):
 class CreateDatasetBulkCreateJobRequest(RuntimeRequestModel):
     job_type: JobType = JobType.DATASET_BULK_CREATE
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID = _actor_id_field()
     connection_id: uuid.UUID
     selections: list[DatasetSelectionRequest] = Field(default_factory=list)
     naming_template: str = "{schema}.{table}"
@@ -257,8 +254,7 @@ class CreateDatasetBulkCreateJobRequest(RuntimeRequestModel):
 class CreateConnectorSyncJobRequest(RuntimeRequestModel):
     job_type: JobType = JobType.CONNECTOR_SYNC
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID = _actor_id_field()
     connection_id: uuid.UUID
     resource_names: list[str] = Field(default_factory=list)
     sync_mode: str = "INCREMENTAL"
@@ -282,7 +278,6 @@ class CreateConnectorSyncJobRequest(RuntimeRequestModel):
 class CreateAgentJobRequest(RuntimeRequestModel):
     job_type: JobType
     agent_definition_id: uuid.UUID
-    organisation_id: uuid.UUID
-    project_id: uuid.UUID
-    user_id: uuid.UUID
+    workspace_id: uuid.UUID
+    actor_id: uuid.UUID = _actor_id_field()
     thread_id: uuid.UUID

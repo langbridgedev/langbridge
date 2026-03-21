@@ -3,8 +3,6 @@ from __future__ import annotations
 import uuid
 from typing import Any, Protocol
 
-from langbridge.contracts.connectors import ConnectorDTO
-from langbridge.contracts.semantic import SemanticModelRecordResponse
 from langbridge.runtime.models import (
     ConnectorMetadata,
     ConnectorSyncState,
@@ -27,65 +25,26 @@ from langbridge.runtime.models import (
 
 
 class IConnectorStore(Protocol):
-    async def get_by_name(self, name: str) -> ConnectorDTO | None: ...
+    async def get_by_name(self, name: str) -> ConnectorMetadata | None: ...
 
-    async def get_by_id(self, connector_id: uuid.UUID) -> ConnectorDTO | None: ...
+    async def get_by_id(self, connector_id: uuid.UUID) -> ConnectorMetadata | None: ...
 
     async def get_by_ids(
         self,
         connector_ids: list[uuid.UUID],
-    ) -> list[ConnectorDTO]: ...
+    ) -> list[ConnectorMetadata]: ...
 
 
 class ISemanticModelStore(Protocol):
     async def get_by_id(
         self,
         model_id: uuid.UUID,
-    ) -> SemanticModelRecordResponse | None: ...
+    ) -> SemanticModelMetadata | None: ...
 
     async def get_by_ids(
         self,
         model_ids: list[uuid.UUID],
-    ) -> list[SemanticModelRecordResponse]: ...
-
-
-class IDashboardSnapshotReader(Protocol):
-    async def read_snapshot(
-        self,
-        *,
-        organization_id: uuid.UUID,
-        dashboard_id: uuid.UUID,
-        snapshot_reference: str,
-    ) -> dict[str, Any] | None: ...
-
-
-class IDashboardSnapshotWriter(Protocol):
-    async def write_snapshot(
-        self,
-        *,
-        organization_id: uuid.UUID,
-        dashboard_id: uuid.UUID,
-        data: dict[str, Any],
-    ) -> str: ...
-
-
-class IDashboardSnapshotDeleter(Protocol):
-    async def delete_snapshot(
-        self,
-        *,
-        organization_id: uuid.UUID,
-        dashboard_id: uuid.UUID,
-        snapshot_reference: str,
-    ) -> None: ...
-
-
-class IDashboardSnapshotStorage(
-    IDashboardSnapshotReader,
-    IDashboardSnapshotWriter,
-    IDashboardSnapshotDeleter,
-    Protocol,
-):
-    """Composite protocol for dashboard snapshot backends."""
+    ) -> list[SemanticModelMetadata]: ...
 
 
 class DatasetMetadataProvider(Protocol):
@@ -120,13 +79,18 @@ class SemanticModelMetadataProvider(Protocol):
     async def get_semantic_model(
         self,
         *,
-        organization_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         semantic_model_id: uuid.UUID,
     ) -> SemanticModelMetadata | None: ...
 
 
 class ConnectorMetadataProvider(Protocol):
-    async def get_connector(self, connector_id: uuid.UUID) -> ConnectorMetadata | None: ...
+    async def get_connector(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        connector_id: uuid.UUID,
+    ) -> ConnectorMetadata | None: ...
 
 
 class SyncStateProvider(Protocol):
@@ -202,7 +166,7 @@ class ConversationMemoryStore(Protocol):
         self,
         *,
         thread_id: uuid.UUID,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         category: str,
         content: str,
         metadata_json: dict[str, Any] | None = None,
@@ -247,7 +211,6 @@ class DatasetCatalogStore(Protocol):
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None = None,
         search: str | None = None,
         tags: list[str] | None = None,
         dataset_types: list[str] | None = None,
@@ -360,10 +323,6 @@ __all__ = [
     "AgentDefinitionStore",
     "ConnectorMetadataProvider",
     "IConnectorStore",
-    "IDashboardSnapshotDeleter",
-    "IDashboardSnapshotReader",
-    "IDashboardSnapshotStorage",
-    "IDashboardSnapshotWriter",
     "ISemanticModelStore",
     "ConnectorSyncStateStore",
     "ConversationMemoryStore",

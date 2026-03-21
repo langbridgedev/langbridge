@@ -16,7 +16,7 @@ from sqlalchemy import (
     Text,
     UUID,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from .base import Base
 
@@ -26,17 +26,12 @@ class SqlJobRecord(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("organizations.id"),
+        ForeignKey("workspaces.id"),
         nullable=False,
         index=True,
     )
-    project_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("projects.id"),
-        nullable=True,
-        index=True,
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"),
+    actor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
         nullable=False,
         index=True,
     )
@@ -114,13 +109,14 @@ class SqlJobResultArtifactRecord(Base):
         index=True,
     )
     workspace_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("organizations.id"),
+        ForeignKey("workspaces.id"),
         nullable=False,
         index=True,
     )
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"),
+    created_by_actor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
         nullable=False,
+        index=True,
     )
     format: Mapped[str] = mapped_column(String(32), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -141,6 +137,7 @@ class SqlJobResultArtifactRecord(Base):
     __table_args__ = (
         Index("ix_sql_job_result_artifact_workspace_created_at", "workspace_id", "created_at"),
     )
+    created_by = synonym("created_by_actor_id")
 
 
 class SqlSavedQueryRecord(Base):
@@ -148,22 +145,17 @@ class SqlSavedQueryRecord(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("organizations.id"),
+        ForeignKey("workspaces.id"),
         nullable=False,
         index=True,
     )
-    project_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("projects.id"),
-        nullable=True,
-        index=True,
-    )
-    created_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"),
+    created_by_actor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
         nullable=False,
         index=True,
     )
-    updated_by: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id"),
+    updated_by_actor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
         nullable=False,
         index=True,
     )
@@ -206,6 +198,8 @@ class SqlSavedQueryRecord(Base):
         Index("ix_sql_saved_query_workspace_created_at", "workspace_id", "created_at"),
         Index("ix_sql_saved_query_workspace_updated_at", "workspace_id", "updated_at"),
     )
+    created_by = synonym("created_by_actor_id")
+    updated_by = synonym("updated_by_actor_id")
 
 
 class SqlWorkspacePolicyRecord(Base):
@@ -213,7 +207,7 @@ class SqlWorkspacePolicyRecord(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("organizations.id"),
+        ForeignKey("workspaces.id"),
         nullable=False,
         unique=True,
         index=True,
@@ -231,9 +225,10 @@ class SqlWorkspacePolicyRecord(Base):
         nullable=True,
     )
     budget_limit_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id"),
+    updated_by_actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
         nullable=True,
+        index=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -247,4 +242,3 @@ class SqlWorkspacePolicyRecord(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-

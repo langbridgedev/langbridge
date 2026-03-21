@@ -10,8 +10,8 @@ from langbridge.contracts.jobs.semantic_query_job import (
 
 def test_semantic_query_job_contract_accepts_single_model_scope() -> None:
     payload = CreateSemanticQueryJobRequest(
-        organisation_id=uuid.uuid4(),
-        user_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        actor_id=uuid.uuid4(),
         query_scope="semantic_model",
         semantic_model_id=uuid.uuid4(),
         query={"measures": ["orders.total"]},
@@ -23,8 +23,8 @@ def test_semantic_query_job_contract_accepts_single_model_scope() -> None:
 
 def test_semantic_query_job_contract_accepts_unified_scope() -> None:
     payload = CreateSemanticQueryJobRequest(
-        organisation_id=uuid.uuid4(),
-        user_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        actor_id=uuid.uuid4(),
         query_scope="unified",
         semantic_model_ids=[uuid.uuid4(), uuid.uuid4()],
         query={"dimensions": ["orders.id"], "limit": 10},
@@ -39,8 +39,8 @@ def test_semantic_query_job_contract_accepts_unified_scope() -> None:
 def test_semantic_query_job_contract_requires_unified_model_ids() -> None:
     with pytest.raises(ValidationError):
         CreateSemanticQueryJobRequest(
-            organisation_id=uuid.uuid4(),
-            user_id=uuid.uuid4(),
+            workspace_id=uuid.uuid4(),
+            actor_id=uuid.uuid4(),
             query_scope="unified",
             query={"dimensions": ["orders.id"]},
         )

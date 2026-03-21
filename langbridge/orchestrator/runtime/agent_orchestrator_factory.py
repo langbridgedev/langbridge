@@ -406,7 +406,7 @@ class AgentOrchestratorFactory:
         semantic_model = load_semantic_model(semantic_model_entry.content_yaml)
         raw_model_payload = self._parse_yaml_payload(semantic_model_entry.content_yaml)
         workflow, _workflow_dialect = await self._dataset_execution_resolver.build_semantic_workflow(
-            organization_id=semantic_model_entry.organization_id,
+            workspace_id=semantic_model_entry.workspace_id,
             workflow_id=f"workflow_semantic_agent_{semantic_model_entry.id.hex[:12]}",
             dataset_name=semantic_model_entry.name or f"semantic_model_{semantic_model_entry.id.hex[:8]}",
             semantic_model=semantic_model,
@@ -429,7 +429,7 @@ class AgentOrchestratorFactory:
         federated_executor = _FederatedSqlExecutor(
             federated_query_tool=self._federated_query_tool,
             workflow=workflow,
-            workspace_id=str(semantic_model_entry.organization_id),
+            workspace_id=str(semantic_model_entry.workspace_id),
         )
         return SqlAnalystTool(
             llm=llm_provider,
@@ -604,7 +604,7 @@ class AgentOrchestratorFactory:
         workflow: FederationWorkflow,
     ) -> AnalyticalContext:
         datasets = await self._build_context_dataset_bindings(
-            workspace_id=semantic_model_entry.organization_id,
+            workspace_id=semantic_model_entry.workspace_id,
             workflow=workflow,
         )
         dimensions: list[AnalyticalField] = []

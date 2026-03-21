@@ -57,8 +57,18 @@ class MemoryConnectorProvider(ConnectorMetadataProvider):
     def __init__(self, connectors: dict[uuid.UUID, ConnectorMetadata] | None = None) -> None:
         self._connectors = dict(connectors or {})
 
-    async def get_connector(self, connector_id: uuid.UUID) -> ConnectorMetadata | None:
-        return self._connectors.get(connector_id)
+    async def get_connector(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        connector_id: uuid.UUID,
+    ) -> ConnectorMetadata | None:
+        connector = self._connectors.get(connector_id)
+        if connector is None:
+            return None
+        if connector.workspace_id is None or connector.workspace_id == workspace_id:
+            return connector
+        return None
 
     def upsert(self, connector: ConnectorMetadata) -> None:
         self._connectors[connector.id] = connector
@@ -74,13 +84,13 @@ class MemorySemanticModelProvider(SemanticModelMetadataProvider):
     async def get_semantic_model(
         self,
         *,
-        organization_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         semantic_model_id: uuid.UUID,
     ) -> SemanticModelMetadata | None:
-        return self._semantic_models.get((organization_id, semantic_model_id))
+        return self._semantic_models.get((workspace_id, semantic_model_id))
 
     def upsert(self, semantic_model: SemanticModelMetadata) -> None:
-        self._semantic_models[(semantic_model.organization_id, semantic_model.id)] = semantic_model
+        self._semantic_models[(semantic_model.workspace_id, semantic_model.id)] = semantic_model
 
 
 class MemorySyncStateProvider(SyncStateProvider):

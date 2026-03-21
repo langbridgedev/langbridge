@@ -118,7 +118,7 @@ class DatasetQueryService:
                 raise BusinessValidationError("Bulk dataset creation requires mutable dataset repositories.")
             transient_job = RuntimeJob(
                 id=uuid.uuid4(),
-                organization_id=str(request.workspace_id),
+                workspace_id=str(request.workspace_id),
                 job_type=request.job_type.value,
                 payload=request.model_dump(mode="json"),
                 headers={},
@@ -252,8 +252,7 @@ class DatasetQueryService:
             policy=policy,
             request_context=request.user_context,
             workspace_id=request.workspace_id,
-            project_id=request.project_id,
-            user_id=request.user_id,
+            actor_id=request.actor_id,
             dialect=dialect,
         )
         count_sql = self._build_count_sql(table_key=table_key, filters=base_filters, dialect=dialect)
@@ -412,7 +411,7 @@ class DatasetQueryService:
         await self._create_dataset_revision(
             dataset=dataset,
             policy=await self._get_or_create_policy(dataset),
-            created_by=dataset.updated_by or request.user_id,
+            created_by=dataset.updated_by or request.actor_id,
             change_summary="CSV ingest converted dataset to parquet.",
         )
         await self._replace_dataset_lineage(dataset)
@@ -442,14 +441,13 @@ class DatasetQueryService:
         for index, selection in enumerate(request.selections):
             job_record.progress = min(95, 10 + int((index / total) * 85))
             job_record.status_message = (
-                f"Processing {selection.schema}.{selection.table} ({index + 1}/{total})"
+                f"Processing {selection.schema_name}.{selection.table} ({index + 1}/{total})"
             )
             try:
                 existing = await self._find_existing_table_dataset(
                     workspace_id=request.workspace_id,
-                    project_id=request.project_id,
                     connection_id=request.connection_id,
-                    schema_name=selection.schema,
+                    schema_name=selection.schema_name,
                     table_name=selection.table,
                     selected_columns=[column.name for column in selection.columns],
                 )
@@ -458,7 +456,7 @@ class DatasetQueryService:
                     dataset_ids.append(str(existing.id))
                     items.append(
                         {
-                            "schema": selection.schema,
+                            "schema": selection.schema_name,
                             "table": selection.table,
                             "dataset_id": str(existing.id),
                             "created": False,
@@ -468,7 +466,7 @@ class DatasetQueryService:
 
                 dataset = await self._create_table_dataset_from_selection(
                     request=request,
-                    schema_name=selection.schema,
+                    schema_name=selection.schema_name,
                     table_name=selection.table,
                     columns=selection.columns,
                 )
@@ -476,7 +474,7 @@ class DatasetQueryService:
                 dataset_ids.append(str(dataset.id))
                 items.append(
                     {
-                        "schema": selection.schema,
+                        "schema": selection.schema_name,
                         "table": selection.table,
                         "dataset_id": str(dataset.id),
                         "created": True,
@@ -485,7 +483,7 @@ class DatasetQueryService:
             except Exception as exc:  # noqa: BLE001 - continue processing the remaining selections
                 errors.append(
                     {
-                        "schema": selection.schema,
+                        "schema": selection.schema_name,
                         "table": selection.table,
                         "error": sanitize_sql_error_message(str(exc)),
                     }
@@ -503,7 +501,6 @@ class DatasetQueryService:
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
         connection_id: uuid.UUID,
         schema_name: str,
         table_name: str,
@@ -511,7 +508,6 @@ class DatasetQueryService:
     ) -> DatasetMetadata | None:
         candidates = await self._dataset_repository.list_for_workspace(
             workspace_id=workspace_id,
-            project_id=project_id,
             dataset_types=["TABLE"],
             limit=5000,
         )
@@ -572,7 +568,6 @@ class DatasetQueryService:
         )
         final_name = await self._ensure_unique_dataset_name(
             workspace_id=request.workspace_id,
-            project_id=request.project_id,
             base_name=base_name,
             suffix_seed=self._selection_signature(
                 schema_name,
@@ -584,10 +579,9 @@ class DatasetQueryService:
         dataset = DatasetMetadata(
             id=uuid.uuid4(),
             workspace_id=request.workspace_id,
-            project_id=request.project_id,
             connection_id=request.connection_id,
-            created_by=request.user_id,
-            updated_by=request.user_id,
+            created_by=request.actor_id,
+            updated_by=request.actor_id,
             name=final_name,
             sql_alias=self._dataset_sql_alias(final_name),
             description=None,
@@ -657,7 +651,7 @@ class DatasetQueryService:
         await self._create_dataset_revision(
             dataset=dataset,
             policy=policy,
-            created_by=request.user_id,
+            created_by=request.actor_id,
             change_summary="Auto-generated dataset created.",
         )
         await self._replace_dataset_lineage(dataset)
@@ -669,13 +663,11 @@ class DatasetQueryService:
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
         base_name: str,
         suffix_seed: str,
     ) -> str:
         rows = await self._dataset_repository.list_for_workspace(
             workspace_id=workspace_id,
-            project_id=project_id,
             limit=5000,
         )
         taken = {row.name.strip().lower() for row in rows if row.name}
@@ -880,7 +872,6 @@ class DatasetQueryService:
         return {
             "id": str(dataset.id),
             "workspace_id": str(dataset.workspace_id),
-            "project_id": str(dataset.project_id) if dataset.project_id else None,
             "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
             "name": dataset.name,
             "description": dataset.description,
@@ -1102,8 +1093,7 @@ class DatasetQueryService:
                 policy=policy,
                 request_context=request.user_context,
                 workspace_id=request.workspace_id,
-                project_id=request.project_id,
-                user_id=request.user_id,
+                actor_id=request.actor_id,
                 dialect=dialect,
             )
         )
@@ -1215,8 +1205,7 @@ class DatasetQueryService:
         policy: DatasetPolicyMetadata,
         request_context: dict[str, Any],
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID,
+        actor_id: uuid.UUID,
         dialect: str,
     ) -> list[exp.Expression]:
         templates = list(policy.row_filters_json or [])
@@ -1225,8 +1214,7 @@ class DatasetQueryService:
 
         render_context: dict[str, Any] = {
             "workspace_id": str(workspace_id),
-            "project_id": str(project_id) if project_id else None,
-            "user_id": str(user_id),
+            "actor_id": str(actor_id),
         }
         render_context.update(request_context or {})
 

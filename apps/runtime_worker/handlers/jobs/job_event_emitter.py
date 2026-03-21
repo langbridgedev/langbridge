@@ -106,7 +106,7 @@ class BrokerJobEventEmitter(AgentEventEmitter):
             message_type=payload.message_type,
             payload=payload,
             headers=MessageHeaders.default().model_copy(
-                update={"organisation_id": str(self._job_record.organisation_id)}
+                update={"workspace_id": str(self._job_record.workspace_id)}
             ),
         )
         try:

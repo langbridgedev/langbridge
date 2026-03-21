@@ -10,9 +10,8 @@ from .base import BaseMessagePayload, MessageType, resolve_payload_model
 
 
 class MessageHeaders(_Base):
-    organisation_id: str | None = None
-    project_id: str | None = None
-    user_id: str | None = None
+    workspace_id: str | None = None
+    actor_id: str | None = None
     correlation_id: str | None = None
     request_id: str | None = None
 

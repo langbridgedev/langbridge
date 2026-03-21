@@ -21,8 +21,7 @@ def from_semantic_model_record(value: Any | None) -> SemanticModelMetadata | Non
     return SemanticModelMetadata(
         id=getattr(value, "id"),
         connector_id=getattr(value, "connector_id", None),
-        organization_id=getattr(value, "organization_id"),
-        project_id=getattr(value, "project_id", None),
+        workspace_id=getattr(value, "workspace_id"),
         name=str(getattr(value, "name")),
         description=getattr(value, "description", None),
         content_yaml=str(getattr(value, "content_yaml")),

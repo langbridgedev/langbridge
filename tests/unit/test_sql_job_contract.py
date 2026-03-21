@@ -14,7 +14,7 @@ def test_sql_job_contract_requires_connection_for_single_mode() -> None:
         CreateSqlJobRequest(
             sql_job_id=uuid.uuid4(),
             workspace_id=uuid.uuid4(),
-            user_id=uuid.uuid4(),
+            actor_id=uuid.uuid4(),
             execution_mode="single",
             query="SELECT 1",
             enforced_limit=100,
@@ -27,7 +27,7 @@ def test_sql_job_contract_requires_federated_datasets() -> None:
         CreateSqlJobRequest(
             sql_job_id=uuid.uuid4(),
             workspace_id=uuid.uuid4(),
-            user_id=uuid.uuid4(),
+            actor_id=uuid.uuid4(),
             execution_mode="federated",
             query="SELECT * FROM sales.orders",
             enforced_limit=1000,
@@ -41,7 +41,7 @@ def test_sql_job_contract_accepts_dataset_backed_federated_execution() -> None:
     payload = CreateSqlJobRequest(
         sql_job_id=uuid.uuid4(),
         workspace_id=uuid.uuid4(),
-        user_id=uuid.uuid4(),
+        actor_id=uuid.uuid4(),
         execution_mode="federated",
         query="SELECT * FROM shop.public.orders",
         enforced_limit=1000,

@@ -238,7 +238,6 @@ class _SdkAdapter(Protocol):
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
         search: str | None,
     ) -> DatasetListResult: ...
 
@@ -247,8 +246,7 @@ class _SdkAdapter(Protocol):
         *,
         dataset_id: uuid.UUID,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         limit: int | None,
         filters: dict[str, Any] | None,
         sort: list[dict[str, Any]] | None,
@@ -262,8 +260,7 @@ class _SdkAdapter(Protocol):
         *,
         semantic_models: list[str],
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         measures: list[str] | None,
         dimensions: list[str] | None,
         filters: list[dict[str, Any]] | None,
@@ -278,8 +275,7 @@ class _SdkAdapter(Protocol):
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         query: str,
         connection_id: uuid.UUID | None,
         connection_name: str | None,
@@ -296,9 +292,8 @@ class _SdkAdapter(Protocol):
     def ask_agent(
         self,
         *,
-        organization_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        workspace_id: uuid.UUID,
+        actor_id: uuid.UUID | None,
         message: str,
         agent_id: uuid.UUID | None,
         agent_name: str | None,
@@ -472,7 +467,6 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
         search: str | None,
     ) -> DatasetListResult:
         payload = RuntimeDatasetListResponse.model_validate(
@@ -500,8 +494,7 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         *,
         dataset_id: uuid.UUID,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         limit: int | None,
         filters: dict[str, Any] | None,
         sort: list[dict[str, Any]] | None,
@@ -509,14 +502,12 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         timeout_s: float,
         poll_interval_s: float,
     ) -> DatasetQueryResult:
-        payload = DatasetPreviewRequest(
-            workspace_id=workspace_id,
-            project_id=project_id,
-            limit=limit,
-            filters=filters or {},
-            sort=sort or [],
-            user_context=user_context or {},
-        ).model_dump(mode="json")
+        payload = {
+            "limit": limit,
+            "filters": filters or {},
+            "sort": sort or [],
+            "user_context": user_context or {},
+        }
         return DatasetQueryResult.model_validate(
             self._request(
                 "POST",
@@ -530,8 +521,7 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         *,
         semantic_models: list[str],
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         measures: list[str] | None,
         dimensions: list[str] | None,
         filters: list[dict[str, Any]] | None,
@@ -541,22 +531,20 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         timeout_s: float,
         poll_interval_s: float,
     ) -> SemanticQueryResult:
+        payload = {
+            "semantic_models": semantic_models,
+            "measures": measures or [],
+            "dimensions": dimensions or [],
+            "filters": filters or [],
+            "time_dimensions": time_dimensions or [],
+            "limit": limit,
+            **({"order": order} if order is not None else {}),
+        }
         return SemanticQueryResult.model_validate(
             self._request(
                 "POST",
                 "/api/runtime/v1/semantic/query",
-                json={
-                    "semantic_models": semantic_models,
-                    "workspace_id": str(workspace_id),
-                    **({"project_id": str(project_id)} if project_id else {}),
-                    **({"user_id": str(user_id)} if user_id else {}),
-                    "measures": measures or [],
-                    "dimensions": dimensions or [],
-                    "filters": filters or [],
-                    "time_dimensions": time_dimensions or [],
-                    "limit": limit,
-                    "order": order,
-                },
+                json=payload,
             )
         )
 
@@ -564,8 +552,7 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         query: str,
         connection_id: uuid.UUID | None,
         connection_name: str | None,
@@ -579,33 +566,34 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         poll_interval_s: float,
     ) -> SqlQueryResult:
         normalized_datasets = _normalize_selected_datasets(selected_datasets)
+        payload = {
+            "query": query,
+            **({"connection_id": str(connection_id)} if connection_id else {}),
+            **({"connection_name": connection_name} if connection_name else {}),
+            "selected_datasets": [item.model_dump(mode="json") for item in normalized_datasets],
+            "query_dialect": _coerce_sql_dialect(query_dialect).value,
+            "params": params or {},
+            **({"requested_limit": requested_limit} if requested_limit is not None else {}),
+            **(
+                {"requested_timeout_seconds": requested_timeout_seconds}
+                if requested_timeout_seconds is not None
+                else {}
+            ),
+            "explain": explain,
+        }
         return SqlQueryResult.model_validate(
             self._request(
                 "POST",
                 "/api/runtime/v1/sql/query",
-                json={
-                    "workspace_id": str(workspace_id),
-                    **({"project_id": str(project_id)} if project_id else {}),
-                    **({"user_id": str(user_id)} if user_id else {}),
-                    "query": query,
-                    **({"connection_id": str(connection_id)} if connection_id else {}),
-                    **({"connection_name": connection_name} if connection_name else {}),
-                    "selected_datasets": [item.model_dump(mode="json") for item in normalized_datasets],
-                    "query_dialect": _coerce_sql_dialect(query_dialect).value,
-                    "params": params or {},
-                    "requested_limit": requested_limit,
-                    "requested_timeout_seconds": requested_timeout_seconds,
-                    "explain": explain,
-                },
+                json=payload,
             )
         )
 
     def ask_agent(
         self,
         *,
-        organization_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        workspace_id: uuid.UUID,
+        actor_id: uuid.UUID | None,
         message: str,
         agent_id: uuid.UUID | None,
         agent_name: str | None,
@@ -620,9 +608,6 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
                 "POST",
                 "/api/runtime/v1/agents/ask",
                 json={
-                    "organization_id": str(organization_id),
-                    **({"project_id": str(project_id)} if project_id else {}),
-                    **({"user_id": str(user_id)} if user_id else {}),
                     "message": message,
                     **({"agent_id": str(agent_id)} if agent_id else {}),
                     **({"agent_name": agent_name} if agent_name else {}),
@@ -712,7 +697,6 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
         search: str | None,
     ) -> DatasetListResult:
         payload = DatasetListResponse.model_validate(
@@ -721,7 +705,6 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
                 "/api/v1/datasets",
                 params={
                     "workspace_id": str(workspace_id),
-                    **({"project_id": str(project_id)} if project_id else {}),
                     **({"search": search} if search else {}),
                 },
             )
@@ -744,8 +727,7 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         *,
         dataset_id: uuid.UUID,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         limit: int | None,
         filters: dict[str, Any] | None,
         sort: list[dict[str, Any]] | None,
@@ -755,7 +737,6 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
     ) -> DatasetQueryResult:
         payload = DatasetPreviewRequest(
             workspace_id=workspace_id,
-            project_id=project_id,
             limit=limit,
             filters=filters or {},
             sort=sort or [],
@@ -783,8 +764,7 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         *,
         semantic_models: list[str],
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         measures: list[str] | None,
         dimensions: list[str] | None,
         filters: list[dict[str, Any]] | None,
@@ -803,8 +783,7 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         query: str,
         connection_id: uuid.UUID | None,
         connection_name: str | None,
@@ -823,7 +802,6 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         )
         execute_request = SqlExecuteRequest(
             workspace_id=workspace_id,
-            project_id=project_id,
             workbench_mode=workbench_mode,
             connection_id=connection_id,
             query=query,
@@ -887,9 +865,8 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
     def ask_agent(
         self,
         *,
-        organization_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        workspace_id: uuid.UUID,
+        actor_id: uuid.UUID | None,
         message: str,
         agent_id: uuid.UUID | None,
         agent_name: str | None,
@@ -906,9 +883,9 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
             thread = ThreadResponse.model_validate(
                 self._request(
                     "POST",
-                    f"/api/v1/thread/{organization_id}/",
+                    f"/api/v1/thread/{workspace_id}/",
                     json=ThreadCreateRequest(
-                        project_id=project_id,
+                        workspace_id=workspace_id,
                         title=title,
                         metadata_json=metadata_json,
                     ).model_dump(mode="json"),
@@ -920,14 +897,14 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
 
         chat = self._request(
             "POST",
-            f"/api/v1/thread/{organization_id}/{resolved_thread_id}/chat",
+            f"/api/v1/thread/{workspace_id}/{resolved_thread_id}/chat",
             json=ThreadChatRequest(message=message, agent_id=agent_id).model_dump(mode="json"),
         )
         job_id = uuid.UUID(str(chat["job_id"]))
 
         def _fetch_job() -> AgentJobStateResponse:
             return AgentJobStateResponse.model_validate(
-                self._request("GET", f"/api/v1/jobs/{organization_id}/{job_id}")
+                self._request("GET", f"/api/v1/jobs/{workspace_id}/{job_id}")
             )
 
         job = _wait_for_terminal(_fetch_job, timeout_s=timeout_s, poll_interval_s=poll_interval_s)
@@ -1000,7 +977,6 @@ class LocalRuntimeAdapter(_SdkAdapter):
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
         search: str | None,
     ) -> DatasetListResult:
         list_method = getattr(self._runtime_host, "list_datasets", None)
@@ -1023,8 +999,7 @@ class LocalRuntimeAdapter(_SdkAdapter):
         *,
         dataset_id: uuid.UUID,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         limit: int | None,
         filters: dict[str, Any] | None,
         sort: list[dict[str, Any]] | None,
@@ -1032,16 +1007,15 @@ class LocalRuntimeAdapter(_SdkAdapter):
         timeout_s: float,
         poll_interval_s: float,
     ) -> DatasetQueryResult:
-        resolved_user_id = _coalesce_uuid(
-            user_id,
-            getattr(getattr(self._runtime_host, "context", None), "user_id", None),
-            "user_id",
+        resolved_actor_id = _coalesce_uuid(
+            actor_id,
+            getattr(getattr(self._runtime_host, "context", None), "actor_id", None),
+            "actor_id",
         )
         request = CreateDatasetPreviewJobRequest(
             dataset_id=dataset_id,
             workspace_id=workspace_id,
-            project_id=project_id,
-            user_id=resolved_user_id,
+            actor_id=resolved_actor_id,
             requested_limit=limit,
             enforced_limit=limit or 100,
             filters=filters or {},
@@ -1076,8 +1050,7 @@ class LocalRuntimeAdapter(_SdkAdapter):
         *,
         semantic_models: list[str],
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         measures: list[str] | None,
         dimensions: list[str] | None,
         filters: list[dict[str, Any]] | None,
@@ -1140,8 +1113,7 @@ class LocalRuntimeAdapter(_SdkAdapter):
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         query: str,
         connection_id: uuid.UUID | None,
         connection_name: str | None,
@@ -1186,10 +1158,10 @@ class LocalRuntimeAdapter(_SdkAdapter):
             )
 
         normalized_datasets = _normalize_selected_datasets(selected_datasets)
-        resolved_user_id = _coalesce_uuid(
-            user_id,
-            getattr(getattr(self._runtime_host, "context", None), "user_id", None),
-            "user_id",
+        resolved_actor_id = _coalesce_uuid(
+            actor_id,
+            getattr(getattr(self._runtime_host, "context", None), "actor_id", None),
+            "actor_id",
         )
         workbench_mode = (
             SqlWorkbenchMode.dataset if normalized_datasets else SqlWorkbenchMode.direct_sql
@@ -1198,8 +1170,7 @@ class LocalRuntimeAdapter(_SdkAdapter):
         request = CreateSqlJobRequest(
             sql_job_id=sql_job_id,
             workspace_id=workspace_id,
-            project_id=project_id,
-            user_id=resolved_user_id,
+            actor_id=resolved_actor_id,
             workbench_mode=workbench_mode,
             connection_id=connection_id,
             execution_mode=("federated" if normalized_datasets else "single"),
@@ -1243,9 +1214,8 @@ class LocalRuntimeAdapter(_SdkAdapter):
     def ask_agent(
         self,
         *,
-        organization_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID | None,
+        workspace_id: uuid.UUID,
+        actor_id: uuid.UUID | None,
         message: str,
         agent_id: uuid.UUID | None,
         agent_name: str | None,
@@ -1409,12 +1379,10 @@ class _DatasetClient:
         self,
         *,
         workspace_id: uuid.UUID | None = None,
-        project_id: uuid.UUID | None = None,
         search: str | None = None,
     ) -> DatasetListResult:
         return self._owner._adapter.list_datasets(
             workspace_id=_coalesce_uuid(workspace_id, self._owner.default_workspace_id, "workspace_id"),
-            project_id=project_id or self._owner.default_project_id,
             search=search,
         )
 
@@ -1424,8 +1392,7 @@ class _DatasetClient:
         *,
         dataset_id: uuid.UUID | None = None,
         workspace_id: uuid.UUID | None = None,
-        project_id: uuid.UUID | None = None,
-        user_id: uuid.UUID | None = None,
+        actor_id: uuid.UUID | None = None,
         limit: int | None = None,
         filters: dict[str, Any] | list[dict[str, Any]] | None = None,
         sort: list[dict[str, Any]] | None = None,
@@ -1453,7 +1420,6 @@ class _DatasetClient:
                 item
                 for item in self.list(
                     workspace_id=resolved_workspace_id,
-                    project_id=project_id or self._owner.default_project_id,
                 ).items
                 if item.id is not None and item.name == dataset_name
             ]
@@ -1467,8 +1433,7 @@ class _DatasetClient:
         return self._owner._adapter.query_dataset(
             dataset_id=resolved_dataset_id,
             workspace_id=resolved_workspace_id,
-            project_id=project_id or self._owner.default_project_id,
-            user_id=user_id or self._owner.default_user_id,
+            actor_id=actor_id or self._owner.default_actor_id,
             limit=limit,
             filters=filters if isinstance(filters, dict) else None,
             sort=sort,
@@ -1487,8 +1452,7 @@ class _SemanticQueryClient:
         semantic_models: list[str] | str | None = None,
         *,
         workspace_id: uuid.UUID | None = None,
-        project_id: uuid.UUID | None = None,
-        user_id: uuid.UUID | None = None,
+        actor_id: uuid.UUID | None = None,
         measures: list[str] | None = None,
         dimensions: list[str] | None = None,
         time_dimensions: list[dict[str, Any]] | None = None,
@@ -1506,8 +1470,7 @@ class _SemanticQueryClient:
         return self._owner._adapter.query_semantic(
             semantic_models=normalized_models,
             workspace_id=_coalesce_uuid(workspace_id, self._owner.default_workspace_id, "workspace_id"),
-            project_id=project_id or self._owner.default_project_id,
-            user_id=user_id or self._owner.default_user_id,
+            actor_id=actor_id or self._owner.default_actor_id,
             measures=measures,
             dimensions=dimensions,
             filters=filters,
@@ -1528,8 +1491,7 @@ class _SqlClient:
         *,
         query: str,
         workspace_id: uuid.UUID | None = None,
-        project_id: uuid.UUID | None = None,
-        user_id: uuid.UUID | None = None,
+        actor_id: uuid.UUID | None = None,
         connection_id: uuid.UUID | None = None,
         connection_name: str | None = None,
         selected_datasets: list[SqlSelectedDataset | dict[str, Any]] | None = None,
@@ -1543,8 +1505,7 @@ class _SqlClient:
     ) -> SqlQueryResult:
         return self._owner._adapter.query_sql(
             workspace_id=_coalesce_uuid(workspace_id, self._owner.default_workspace_id, "workspace_id"),
-            project_id=project_id or self._owner.default_project_id,
-            user_id=user_id or self._owner.default_user_id,
+            actor_id=actor_id or self._owner.default_actor_id,
             query=query,
             connection_id=connection_id,
             connection_name=connection_name,
@@ -1569,9 +1530,8 @@ class _AgentClient:
         *,
         agent_id: uuid.UUID | None = None,
         agent_name: str | None = None,
-        organization_id: uuid.UUID | None = None,
-        project_id: uuid.UUID | None = None,
-        user_id: uuid.UUID | None = None,
+        workspace_id: uuid.UUID | None = None,
+        actor_id: uuid.UUID | None = None,
         thread_id: uuid.UUID | None = None,
         title: str | None = None,
         metadata_json: dict[str, Any] | None = None,
@@ -1579,13 +1539,12 @@ class _AgentClient:
         poll_interval_s: float = 0.5,
     ) -> AgentAskResult:
         return self._owner._adapter.ask_agent(
-            organization_id=_coalesce_uuid(
-                organization_id or self._owner.default_organization_id,
+            workspace_id=_coalesce_uuid(
+                workspace_id,
                 self._owner.default_workspace_id,
-                "organization_id",
+                "workspace_id",
             ),
-            project_id=project_id or self._owner.default_project_id,
-            user_id=user_id or self._owner.default_user_id,
+            actor_id=actor_id or self._owner.default_actor_id,
             agent_id=agent_id,
             agent_name=agent_name,
             message=message,
@@ -1603,15 +1562,11 @@ class LangbridgeClient:
         *,
         adapter: _SdkAdapter,
         default_workspace_id: uuid.UUID | None = None,
-        default_organization_id: uuid.UUID | None = None,
-        default_project_id: uuid.UUID | None = None,
-        default_user_id: uuid.UUID | None = None,
+        default_actor_id: uuid.UUID | None = None,
     ) -> None:
         self._adapter = adapter
         self.default_workspace_id = default_workspace_id
-        self.default_organization_id = default_organization_id
-        self.default_project_id = default_project_id
-        self.default_user_id = default_user_id
+        self.default_actor_id = default_actor_id
         self.connectors = _ConnectorClient(self)
         self.sync = _SyncClient(self)
         self.datasets = _DatasetClient(self)
@@ -1637,9 +1592,7 @@ class LangbridgeClient:
         timeout: float = 30.0,
         http_client: httpx.Client | None = None,
         default_workspace_id: uuid.UUID | None = None,
-        default_organization_id: uuid.UUID | None = None,
-        default_project_id: uuid.UUID | None = None,
-        default_user_id: uuid.UUID | None = None,
+        default_actor_id: uuid.UUID | None = None,
     ) -> "LangbridgeClient":
         runtime_host_defaults = _discover_runtime_host_defaults(
             base_url=base_url,
@@ -1654,9 +1607,7 @@ class LangbridgeClient:
                 timeout=timeout,
                 http_client=http_client,
                 default_workspace_id=default_workspace_id or runtime_host_defaults.get("workspace_id"),
-                default_organization_id=default_organization_id or runtime_host_defaults.get("organization_id"),
-                default_project_id=default_project_id,
-                default_user_id=default_user_id or runtime_host_defaults.get("user_id"),
+                default_actor_id=default_actor_id or runtime_host_defaults.get("actor_id"),
             )
         return cls.for_remote_api(
             base_url=base_url,
@@ -1664,9 +1615,7 @@ class LangbridgeClient:
             timeout=timeout,
             http_client=http_client,
             default_workspace_id=default_workspace_id,
-            default_organization_id=default_organization_id,
-            default_project_id=default_project_id,
-            default_user_id=default_user_id,
+            default_actor_id=default_actor_id,
         )
 
     @classmethod
@@ -1674,29 +1623,24 @@ class LangbridgeClient:
         cls,
         *,
         config_path: str,
-        user_id: uuid.UUID | None = None,
+        actor_id: uuid.UUID | None = None,
         workspace_id: uuid.UUID | None = None,
-        tenant_id: uuid.UUID | None = None,
-        project_id: uuid.UUID | None = None,
         request_id: str | None = None,
         roles: list[str] | tuple[str, ...] | None = None,
     ) -> "LangbridgeClient":
-        from langbridge.runtime import build_configured_local_runtime
+        from langbridge.runtime.local_config import build_configured_local_runtime
 
         runtime_host = build_configured_local_runtime(
             config_path=config_path,
-            tenant_id=tenant_id,
             workspace_id=workspace_id,
-            user_id=user_id,
+            actor_id=actor_id,
             roles=roles,
             request_id=request_id,
         )
         return cls.for_local_runtime(
             runtime_host=runtime_host,
             default_workspace_id=runtime_host.context.workspace_id,
-            default_organization_id=runtime_host.context.tenant_id,
-            default_project_id=project_id,
-            default_user_id=runtime_host.context.user_id,
+            default_actor_id=runtime_host.context.actor_id,
         )
 
     @classmethod
@@ -1708,9 +1652,7 @@ class LangbridgeClient:
         timeout: float = 30.0,
         http_client: httpx.Client | None = None,
         default_workspace_id: uuid.UUID | None = None,
-        default_organization_id: uuid.UUID | None = None,
-        default_project_id: uuid.UUID | None = None,
-        default_user_id: uuid.UUID | None = None,
+        default_actor_id: uuid.UUID | None = None,
     ) -> "LangbridgeClient":
         return cls(
             adapter=RemoteApiAdapter(
@@ -1720,9 +1662,7 @@ class LangbridgeClient:
                 client=http_client,
             ),
             default_workspace_id=default_workspace_id,
-            default_organization_id=default_organization_id,
-            default_project_id=default_project_id,
-            default_user_id=default_user_id,
+            default_actor_id=default_actor_id,
         )
 
     @classmethod
@@ -1734,9 +1674,7 @@ class LangbridgeClient:
         timeout: float = 30.0,
         http_client: httpx.Client | None = None,
         default_workspace_id: uuid.UUID | None = None,
-        default_organization_id: uuid.UUID | None = None,
-        default_project_id: uuid.UUID | None = None,
-        default_user_id: uuid.UUID | None = None,
+        default_actor_id: uuid.UUID | None = None,
     ) -> "LangbridgeClient":
         discovered_defaults = _discover_runtime_host_defaults(
             base_url=base_url,
@@ -1752,9 +1690,7 @@ class LangbridgeClient:
                 client=http_client,
             ),
             default_workspace_id=default_workspace_id or discovered_defaults.get("workspace_id"),
-            default_organization_id=default_organization_id or discovered_defaults.get("organization_id"),
-            default_project_id=default_project_id,
-            default_user_id=default_user_id or discovered_defaults.get("user_id"),
+            default_actor_id=default_actor_id or discovered_defaults.get("actor_id"),
         )
 
     @classmethod
@@ -1763,18 +1699,14 @@ class LangbridgeClient:
         *,
         runtime_host: Any,
         default_workspace_id: uuid.UUID | None = None,
-        default_organization_id: uuid.UUID | None = None,
-        default_project_id: uuid.UUID | None = None,
-        default_user_id: uuid.UUID | None = None,
+        default_actor_id: uuid.UUID | None = None,
     ) -> "LangbridgeClient":
         return cls(
             adapter=LocalRuntimeAdapter(
                 runtime_host=runtime_host,
             ),
             default_workspace_id=default_workspace_id,
-            default_organization_id=default_organization_id,
-            default_project_id=default_project_id,
-            default_user_id=default_user_id,
+            default_actor_id=default_actor_id,
         )
 
 
@@ -1801,7 +1733,7 @@ def _discover_runtime_host_defaults(
         if owns_client:
             client.close()
     defaults: dict[str, uuid.UUID] = {}
-    for key in ("workspace_id", "organization_id", "user_id"):
+    for key in ("workspace_id", "actor_id"):
         try:
             defaults[key] = uuid.UUID(str(payload.get(key)))
         except (TypeError, ValueError, AttributeError):

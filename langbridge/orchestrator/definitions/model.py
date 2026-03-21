@@ -167,7 +167,7 @@ class ObservabilityConfig(BaseModel):
     capture_prompts: bool = Field(True, description="Persist prompts/responses for debugging.")
     audit_fields: List[str] = Field(
         default_factory=list,
-        description="Optional list of fields to include in audit logs (e.g., user_id, project_id).",
+        description="Optional list of fields to include in audit logs (e.g., actor_id, workspace_id).",
     )
 
 class AgentFeatures(BaseModel):

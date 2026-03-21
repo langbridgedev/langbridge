@@ -74,7 +74,7 @@ class MemoryItem(BaseModel):
 
     id: Optional[str] = None
     thread_id: Optional[str] = None
-    user_id: Optional[str] = None
+    actor_id: Optional[str] = None
     category: str
     content: str
     metadata: Dict[str, Any] = Field(default_factory=dict)

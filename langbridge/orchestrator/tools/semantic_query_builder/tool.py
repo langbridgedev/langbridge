@@ -40,7 +40,7 @@ class SemanticQueryServiceLike(Protocol):
         self,
         *,
         semantic_model_id: UUID,
-        organization_id: UUID,
+        workspace_id: UUID,
     ) -> SemanticQueryMetaResponse: ...
 
     async def query_request(
@@ -93,7 +93,7 @@ class SemanticQueryBuilderCopilotTool:
         self.llm_temperature = llm_temperature
         self.max_tokens = max_tokens
         self.system_prompt = system_prompt or self.DEFAULT_SYSTEM_PROMPT
-        self._meta_cache: Dict[Tuple[UUID, Optional[UUID], UUID], SemanticQueryMetaResponse] = {}
+        self._meta_cache: Dict[Tuple[UUID, UUID], SemanticQueryMetaResponse] = {}
 
     def run(self, request: QueryBuilderCopilotRequest) -> QueryBuilderCopilotResponse:
         """Blocking helper that wraps the async implementation."""
@@ -112,8 +112,7 @@ class SemanticQueryBuilderCopilotTool:
         """Primary entrypoint for the copilot tool."""
 
         meta = await self._get_meta(
-            organization_id=request.organization_id,
-            project_id=request.project_id,
+            workspace_id=request.workspace_id,
             semantic_model_id=request.semantic_model_id,
         )
         prompt = self._build_prompt(request, meta)
@@ -148,17 +147,16 @@ class SemanticQueryBuilderCopilotTool:
     async def _get_meta(
         self,
         *,
-        organization_id: UUID,
-        project_id: Optional[UUID],
+        workspace_id: UUID,
         semantic_model_id: UUID,
     ) -> SemanticQueryMetaResponse:
-        cache_key = (organization_id, project_id, semantic_model_id)
+        cache_key = (workspace_id, semantic_model_id)
         cached = self._meta_cache.get(cache_key)
         if cached:
             return cached
         meta = await self.semantic_query_service.get_meta(
             semantic_model_id=semantic_model_id,
-            organization_id=organization_id,
+            workspace_id=workspace_id,
         )
         self._meta_cache[cache_key] = meta
         return meta
@@ -244,8 +242,7 @@ class SemanticQueryBuilderCopilotTool:
     ) -> SemanticQueryResponse:
         payload = semantic_query.model_dump(by_alias=True, exclude_none=True)
         query_request = SemanticQueryRequest(
-            organization_id=request.organization_id,
-            project_id=request.project_id,
+            workspace_id=request.workspace_id,
             semantic_model_id=request.semantic_model_id,
             query=payload,
         )

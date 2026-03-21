@@ -25,7 +25,7 @@ class RuntimeRegistrationRequest(_Base):
 
 class RuntimeRegistrationResponse(_Base):
     ep_id: UUID
-    tenant_id: UUID
+    workspace_id: UUID
     access_token: str
     token_type: str = "bearer"
     expires_at: datetime
@@ -55,7 +55,7 @@ class RuntimeCapabilitiesUpdateResponse(_Base):
 
 class RuntimeInstanceResponse(_Base):
     ep_id: UUID
-    tenant_id: UUID
+    workspace_id: UUID
     display_name: str | None = None
     status: str
     tags: list[str] = Field(default_factory=list)

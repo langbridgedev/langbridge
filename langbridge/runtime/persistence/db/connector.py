@@ -1,14 +1,13 @@
-import uuid
-from sqlalchemy import UUID, Boolean, Column, String, ForeignKey, JSON
-from sqlalchemy.orm import Mapped, relationship
+from sqlalchemy import UUID, Boolean, Column, ForeignKey, JSON, String
+
 from .base import Base
-from .associations import organization_connectors, project_connectors
-from .auth import Organization, Project
+
 
 class Connector(Base):
     __tablename__ = "connectors"
 
     id = Column(UUID(as_uuid=True), primary_key=True, index=True)
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False, index=True)
     name = Column(String(255), unique=True, nullable=False, index=True)
     description = Column(String(1024))
     connector_type = Column(String(50), nullable=False)
@@ -22,18 +21,11 @@ class Connector(Base):
     # polymorphic
     __mapper_args__ = {"polymorphic_identity": "connector", "polymorphic_on": type}
 
-    # backrefs to orgs/projects
-    organizations: Mapped[list["Organization"]] = relationship(
-        "Organization", secondary=organization_connectors, back_populates="connectors"
-    )
-    projects: Mapped[list["Project"]] = relationship(
-        "Project", secondary=project_connectors, back_populates="connectors"
-    )
-
 class DatabaseConnector(Connector):
     __tablename__ = "database_connectors"
     id = Column(UUID(as_uuid=True), ForeignKey("connectors.id"), primary_key=True)
     __mapper_args__ = {"polymorphic_identity": "database_connector"}
+
 
 class APIConnector(Connector):
     __tablename__ = "api_connectors"

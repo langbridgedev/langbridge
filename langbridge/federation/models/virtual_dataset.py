@@ -27,7 +27,7 @@ class VirtualTableBinding(BaseModel):
     table_key: str
     source_id: str
     connector_id: UUID | None = None
-    schema: str | None = None
+    schema_name: str | None = Field(default=None, alias="schema")
     table: str
     catalog: str | None = None
     stats: TableStatistics | None = None
@@ -36,7 +36,7 @@ class VirtualTableBinding(BaseModel):
 
     @property
     def full_name(self) -> str:
-        parts = [self.catalog, self.schema, self.table]
+        parts = [self.catalog, self.schema_name, self.table]
         return ".".join([part for part in parts if part])
 
 

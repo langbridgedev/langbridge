@@ -1,32 +1,15 @@
 # Runtime Host Sync Example
 
-This example starts a self-hosted Langbridge runtime host alongside a local
+This example runs a self-hosted Langbridge runtime host next to a local
 Stripe-like mock API and syncs the `customers` resource into a runtime-managed
-dataset. It is scoped to this folder only: the compose stack mounts this folder,
-keeps runtime state in named volumes, and does not depend on Langbridge Cloud.
+dataset.
 
-The runtime host uses the current host image and CLI shape:
-
-```bash
-python -m langbridge serve --config /example/langbridge_config.yml --host 0.0.0.0 --port 8000
-```
+It is fully runtime-scoped and does not depend on `langbridge-cloud`.
 
 ## What This Example Starts
 
-- `runtime-host`: the existing self-hosted runtime host image from `Dockerfile.host`
-- `mock-stripe`: a local HTTP API that exposes `/v1/account` and `/v1/customers`
-
-## Files In This Folder
-
-- `docker-compose.yml`: starts the runtime host plus the mock Stripe service
-- `langbridge_config.yml`: self-hosted runtime config with a `stripe` connector
-- `mock_stripe.py`: local Stripe-like API used for sync testing
-- `README.md`: walkthrough for connector discovery, sync, state inspection, and dataset preview
-
-## Prerequisites
-
-- Docker
-- Docker Compose v2
+- `runtime-host`: self-hosted runtime host
+- `mock-stripe`: local HTTP API exposing `/v1/account` and `/v1/customers`
 
 ## Start The Stack
 
@@ -36,10 +19,10 @@ From this directory:
 docker compose up --build -d
 ```
 
-The services listen on:
+Services:
 
 - runtime host: `http://localhost:8000`
-- mock Stripe API: `http://localhost:12111`
+- mock API: `http://localhost:12111`
 
 ## Check Health
 
@@ -48,7 +31,7 @@ curl http://localhost:12111/health
 curl http://localhost:8000/api/runtime/v1/health
 ```
 
-## Inspect Connectors And Sync Resources
+## Discover Connectors And Sync Resources
 
 List configured connectors:
 
@@ -56,7 +39,7 @@ List configured connectors:
 curl http://localhost:8000/api/runtime/v1/connectors
 ```
 
-List syncable resources for the Stripe connector:
+List syncable resources:
 
 ```bash
 curl http://localhost:8000/api/runtime/v1/connectors/billing_demo/sync/resources
@@ -77,7 +60,7 @@ SYNC_RESPONSE=$(curl -s -X POST http://localhost:8000/api/runtime/v1/connectors/
 printf '%s\n' "$SYNC_RESPONSE"
 ```
 
-The sync response includes the runtime-managed dataset name in
+The sync response returns the runtime-managed dataset name in
 `resources[0].dataset_names[0]`.
 
 ## Inspect Sync State
@@ -88,13 +71,9 @@ curl http://localhost:8000/api/runtime/v1/connectors/billing_demo/sync/states
 
 ## List And Preview The Synced Dataset
 
-List datasets:
-
 ```bash
 curl http://localhost:8000/api/runtime/v1/datasets
 ```
-
-Preview the dataset returned by the sync response:
 
 ```bash
 DATASET_NAME=$(printf '%s' "$SYNC_RESPONSE" | python -c "import json,sys; print(json.load(sys.stdin)['resources'][0]['dataset_names'][0])")
@@ -104,10 +83,7 @@ curl -X POST "http://localhost:8000/api/runtime/v1/datasets/${DATASET_NAME}/prev
   -d '{"limit": 5}'
 ```
 
-## Use The Runtime CLI Against The Hosted API
-
-If `langbridge` is installed locally, the same runtime host can be exercised with
-the current CLI:
+## Use The CLI Against The Hosted Runtime
 
 ```bash
 langbridge connectors list --url http://localhost:8000
@@ -120,13 +96,7 @@ langbridge datasets preview --url http://localhost:8000 --dataset "$DATASET_NAME
 
 ## Notes
 
-- The runtime config intentionally defines only a portable local runtime plus a
-  Stripe connector. No cloud control plane or hosted orchestration is involved.
-- The compose stack mounts only this folder and keeps `.langbridge` plus synced
-  dataset artifacts in named Docker volumes so the repository does not get
-  polluted with runtime state.
-- If you want to stop and remove all persisted example state, run:
-
-```bash
-docker compose down -v
-```
+- runtime sync state is workspace-scoped inside the runtime
+- the resulting synced dataset is owned by the runtime, not by a cloud control plane
+- if you later enable host auth, send a bearer token and see `docs/deployment/self-hosted.md`
+- remove all persisted example state with `docker compose down -v`

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 
 from langbridge.contracts.base import _Base
 from langbridge.contracts.jobs.type import JobType
@@ -16,9 +16,8 @@ from langbridge.contracts.semantic.semantic_query import (
 
 class CreateSemanticQueryJobRequest(_Base):
     job_type: JobType = JobType.SEMANTIC_QUERY
-    organisation_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    workspace_id: uuid.UUID
+    actor_id: uuid.UUID
     query_scope: Literal["semantic_model", "unified"] = "semantic_model"
     semantic_model_id: uuid.UUID | None = None
     connector_id: uuid.UUID | None = None

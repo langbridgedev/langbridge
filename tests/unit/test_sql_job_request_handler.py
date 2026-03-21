@@ -14,7 +14,6 @@ from apps.runtime_worker.messaging.contracts.jobs.sql_job import (
 )
 from langbridge.contracts.connectors import (
     ConnectionPolicy,
-    ConnectorResponse,
 )
 from langbridge.runtime.models import (
     CreateSqlJobRequest,
@@ -54,19 +53,19 @@ class _FakeSqlArtifactRepository:
 
 
 class _FakeConnectorRepository:
-    def __init__(self, *connector_ids: uuid.UUID) -> None:
+    def __init__(self, *connector_ids: uuid.UUID, workspace_id: uuid.UUID | None = None) -> None:
         resolved_ids = connector_ids or (uuid.uuid4(),)
+        resolved_workspace_id = workspace_id or uuid.uuid4()
         self._connectors = {
             connector_id: SimpleNamespace(
                 id=connector_id,
+                workspace_id=resolved_workspace_id,
                 name=f"test-connector-{connector_id}",
                 description=None,
                 version=None,
                 label="test-connector",
                 icon=None,
                 connector_type="POSTGRES",
-                organization_id=uuid.uuid4(),
-                project_id=None,
                 config={"config": {}},
                 connection_policy=ConnectionPolicy(redaction_rules={"secret": "hash"}),
                 is_managed=False,
@@ -78,6 +77,12 @@ class _FakeConnectorRepository:
         if connector_id in self._connectors:
             return self._connectors[connector_id]
         return next(iter(self._connectors.values()))
+
+    async def get_by_id_for_workspace(self, *, connector_id, workspace_id):
+        connector = await self.get_by_id(connector_id)
+        if connector is None or connector.workspace_id != workspace_id:
+            return None
+        return connector
 
 
 class _FakeDatasetRepository:
@@ -135,14 +140,13 @@ class _FakeFederatedQueryTool:
 @pytest.mark.anyio
 async def test_sql_job_request_handler_executes_and_redacts(monkeypatch) -> None:
     workspace_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     connection_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
     job = SqlJobRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=user_id,
+        actor_id=actor_id,
         connection_id=connection_id,
         execution_mode="single",
         status="queued",
@@ -162,27 +166,10 @@ async def test_sql_job_request_handler_executes_and_redacts(monkeypatch) -> None
     )
     fake_connector = _FakeSqlConnector()
 
-    def _fake_from_connector(connector, organization_id, project_id=None):
-        return ConnectorResponse(
-            id=connection_id,
-            name="test-connector",
-            connector_type="POSTGRES",
-            organization_id=organization_id,
-            project_id=project_id,
-            config={"config": {}},
-            connection_policy=ConnectionPolicy(redaction_rules={"secret": "hash"}),
-        )
-
-    monkeypatch.setattr(
-        ConnectorResponse,
-        "from_connector",
-        staticmethod(_fake_from_connector),
-    )
-
     handler = SqlJobRequestHandler(
         sql_job_repository=_FakeSqlJobRepository(job),
         sql_job_result_artifact_repository=_FakeSqlArtifactRepository(),
-        connector_repository=_FakeConnectorRepository(connection_id),
+        connector_repository=_FakeConnectorRepository(connection_id, workspace_id=workspace_id),
     )
 
     async def _fake_create_sql_connector(*, connector_type, connector_payload):
@@ -194,7 +181,7 @@ async def test_sql_job_request_handler_executes_and_redacts(monkeypatch) -> None
     request = CreateSqlJobRequest(
         sql_job_id=job.id,
         workspace_id=workspace_id,
-        user_id=user_id,
+        actor_id=actor_id,
         connection_id=connection_id,
         execution_mode="single",
         query="SELECT secret FROM dbo.users",
@@ -223,15 +210,14 @@ async def test_sql_job_request_handler_executes_and_redacts(monkeypatch) -> None
 @pytest.mark.anyio
 async def test_sql_job_request_handler_executes_dataset_backed_federated_query_and_redacts() -> None:
     workspace_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     crm_connector_id = uuid.uuid4()
     billing_connector_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
     job = SqlJobRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=user_id,
+        actor_id=actor_id,
         connection_id=None,
         execution_mode="federated",
         status="queued",
@@ -252,7 +238,6 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query_a
     crm_dataset = DatasetRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=crm_connector_id,
         created_by=None,
         updated_by=None,
@@ -281,7 +266,6 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query_a
     billing_dataset = DatasetRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=billing_connector_id,
         created_by=None,
         updated_by=None,
@@ -320,7 +304,7 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query_a
     request = CreateSqlJobRequest(
         sql_job_id=job.id,
         workspace_id=workspace_id,
-        user_id=user_id,
+        actor_id=actor_id,
         execution_mode="federated",
         query=(
             "SELECT a.id, b.secret "
@@ -370,14 +354,13 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query_a
 @pytest.mark.anyio
 async def test_sql_job_request_handler_executes_dataset_backed_federated_query() -> None:
     workspace_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     warehouse_connector_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
     job = SqlJobRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=user_id,
+        actor_id=actor_id,
         connection_id=None,
         execution_mode="federated",
         status="queued",
@@ -402,7 +385,6 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query()
     shopify_dataset = DatasetRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=None,
         created_by=None,
         updated_by=None,
@@ -434,7 +416,6 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query()
     customer_dataset = DatasetRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=warehouse_connector_id,
         created_by=None,
         updated_by=None,
@@ -473,7 +454,7 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query()
     request = CreateSqlJobRequest(
         sql_job_id=job.id,
         workspace_id=workspace_id,
-        user_id=user_id,
+        actor_id=actor_id,
         execution_mode="federated",
         query=job.query_text,
         query_dialect="tsql",
@@ -509,13 +490,12 @@ async def test_sql_job_request_handler_executes_dataset_backed_federated_query()
 @pytest.mark.anyio
 async def test_sql_job_request_handler_federated_mode_requires_tool() -> None:
     workspace_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
     job = SqlJobRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=user_id,
+        actor_id=actor_id,
         connection_id=None,
         execution_mode="federated",
         status="queued",
@@ -541,7 +521,7 @@ async def test_sql_job_request_handler_federated_mode_requires_tool() -> None:
     request = CreateSqlJobRequest(
         sql_job_id=job.id,
         workspace_id=workspace_id,
-        user_id=user_id,
+        actor_id=actor_id,
         execution_mode="federated",
         query="SELECT * FROM crm.public.accounts",
         query_dialect="tsql",

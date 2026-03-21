@@ -68,7 +68,7 @@ class JobRecord(Base):
     __tablename__ = "jobs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    organisation_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     job_type: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     
     payload: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)

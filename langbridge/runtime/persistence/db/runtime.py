@@ -15,7 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from .base import Base
 
@@ -38,7 +38,7 @@ class RuntimeInstanceRecord(Base):
     __tablename__ = "ep_runtime_instances"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     capabilities: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
@@ -69,7 +69,7 @@ class RuntimeInstanceRecord(Base):
     )
 
     __table_args__ = (
-        Index("ix_ep_runtime_instances_tenant_status_seen", "tenant_id", "status", "last_seen_at"),
+        Index("ix_ep_runtime_instances_workspace_status_seen", "workspace_id", "status", "last_seen_at"),
     )
 
 
@@ -77,7 +77,7 @@ class RuntimeRegistrationTokenRecord(Base):
     __tablename__ = "ep_runtime_registration_tokens"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     token_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
@@ -87,11 +87,7 @@ class RuntimeRegistrationTokenRecord(Base):
         nullable=True,
         index=True,
     )
-    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id"),
-        nullable=True,
-    )
+    created_by_actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     runtime: Mapped[RuntimeInstanceRecord | None] = relationship(
@@ -104,7 +100,7 @@ class EdgeTaskRecord(Base):
     __tablename__ = "edge_task_records"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     message_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     message_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     status: Mapped[EdgeTaskStatus] = mapped_column(
@@ -145,7 +141,7 @@ class EdgeTaskRecord(Base):
     )
 
     __table_args__ = (
-        Index("ix_edge_task_records_tenant_status_runtime", "tenant_id", "status", "target_runtime_id"),
+        Index("ix_edge_task_records_workspace_status_runtime", "workspace_id", "status", "target_runtime_id"),
     )
 
 
@@ -153,7 +149,7 @@ class EdgeResultReceiptRecord(Base):
     __tablename__ = "edge_result_receipts"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     runtime_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     request_id: Mapped[str] = mapped_column(String(128), nullable=False)
     task_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -171,5 +167,5 @@ class EdgeResultReceiptRecord(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("tenant_id", "runtime_id", "request_id", name="uq_edge_result_receipt_request"),
+        UniqueConstraint("workspace_id", "runtime_id", "request_id", name="uq_edge_result_receipt_workspace_request"),
     )

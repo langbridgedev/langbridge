@@ -1,61 +1,72 @@
 # Runtime Interfaces
 
-Langbridge exposes runtime functionality through a small number of public surfaces.
+Langbridge exposes runtime functionality through a small set of public surfaces.
 
-This repository documents the runtime-facing interfaces rather than any product-specific
-application API.
+These docs describe runtime interfaces owned by this repository. Hosted
+control-plane APIs belong to `langbridge-cloud`.
 
-## Main Runtime Surfaces
+## Main Interfaces
 
-- Python packages under `langbridge/packages/*`
-- worker assembly in `langbridge/apps/runtime_worker`
-- runtime contracts in `langbridge/packages/contracts`
-- semantic model contract in `docs/semantic-model.md`
-- dataset contract in `docs/datasets.md`
+- Python package: `langbridge.*`
+- Python SDK: `langbridge.client.LangbridgeClient`
+- runtime host HTTP API: `/api/runtime/v1/*`
+- runtime contracts: `langbridge.contracts.*`
+- semantic model contract: `docs/semantic-model.md`
+- dataset contract: `docs/datasets.md`
 
-## Interface Categories
+## Python Runtime Surface
 
-### Embedded Python Use
+Use the Python package when you want to:
 
-Use the runtime packages directly when you want to embed Langbridge into an
-application or service.
+- embed Langbridge inside an application
+- build a configured local runtime
+- register connectors or plugins
+- compose runtime services directly
 
-Typical areas include:
+Important namespaces:
 
-- connector access
-- semantic execution
-- federated execution
-- dataset operations
-- agent-style runtime execution
+- `langbridge.runtime`
+- `langbridge.client`
+- `langbridge.plugins`
+- `langbridge.semantic`
+- `langbridge.federation`
 
-### Worker Runtime
+## Runtime Host HTTP API
 
-Use the runtime worker when you want Langbridge to execute queued or delegated work
-as a standalone runtime process.
+The self-hosted runtime host serves runtime-owned endpoints for:
 
-The worker is the main execution surface for:
+- `GET /api/runtime/v1/health`
+- `GET /api/runtime/v1/info`
+- `GET /api/runtime/v1/datasets`
+- `POST /api/runtime/v1/datasets/{dataset_ref}/preview`
+- `POST /api/runtime/v1/semantic/query`
+- `POST /api/runtime/v1/sql/query`
+- `POST /api/runtime/v1/agents/ask`
+- `GET /api/runtime/v1/connectors`
+- `GET /api/runtime/v1/connectors/{connector_name}/sync/resources`
+- `GET /api/runtime/v1/connectors/{connector_name}/sync/states`
+- `POST /api/runtime/v1/connectors/{connector_name}/sync`
 
-- SQL jobs
-- semantic query jobs
-- dataset preview and profile jobs
-- connector sync jobs
-- agent and analytical runtime jobs
+The current host serves configured local runtimes.
 
-### Contracts And Schemas
+## SDK Access Patterns
 
-Published runtime contracts should stay explicit and versionable.
+`LangbridgeClient` supports three main runtime-facing modes:
 
-The most important runtime contracts are:
+- `LangbridgeClient.local(...)` for in-process configured runtimes
+- `LangbridgeClient.for_runtime_host(...)` for the self-hosted runtime host
+- `LangbridgeClient.remote(...)` for automatic detection of runtime host versus remote API
 
-- dataset request and result payloads
-- SQL and semantic execution payloads
-- runtime-safe job contracts
-- semantic model schema
+The runtime host path is the main self-hosted SDK story in this repo.
 
-## Related Docs
+## Identity Model
 
-- `docs/semantic-model.md`
-- `docs/datasets.md`
-- `docs/architecture/execution-plane.md`
-- `docs/features/sql.md`
-- `docs/features/semantic.md`
+Runtime interfaces are workspace-scoped. Runtime-core identity uses:
+
+- `workspace_id`
+- `actor_id`
+- `roles`
+- `request_id`
+
+If a cloud or product surface carries richer identity, it should be translated at
+the boundary into this runtime context.

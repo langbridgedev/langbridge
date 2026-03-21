@@ -15,8 +15,8 @@ class RuntimeInfoResponse(RuntimeModel):
     runtime_mode: str
     config_path: str
     workspace_id: uuid.UUID
-    organization_id: uuid.UUID
-    user_id: uuid.UUID | None = None
+    actor_id: uuid.UUID | None = None
+    roles: list[str] = Field(default_factory=list)
     default_semantic_model: str | None = None
     default_agent: str | None = None
     capabilities: list[str] = Field(default_factory=list)
@@ -54,9 +54,6 @@ class RuntimeConnectorListResponse(RuntimeModel):
 
 
 class RuntimeDatasetPreviewRequest(RuntimeRequestModel):
-    workspace_id: uuid.UUID | None = None
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID | None = None
     limit: int | None = Field(default=None, ge=1)
     filters: dict[str, Any] = Field(default_factory=dict)
     sort: list[dict[str, Any]] = Field(default_factory=list)
@@ -82,9 +79,6 @@ class RuntimeDatasetPreviewResponse(RuntimeModel):
 class RuntimeSemanticQueryRequest(RuntimeRequestModel):
     semantic_models: list[str] = Field(default_factory=list)
     semantic_model: str | None = None
-    workspace_id: uuid.UUID | None = None
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID | None = None
     measures: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
     filters: list[dict[str, Any]] = Field(default_factory=list)
@@ -118,9 +112,6 @@ class RuntimeSemanticQueryResponse(RuntimeModel):
 
 
 class RuntimeSqlQueryRequest(RuntimeRequestModel):
-    workspace_id: uuid.UUID | None = None
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID | None = None
     query: str = Field(..., min_length=1)
     connection_id: uuid.UUID | None = None
     connection_name: str | None = None
@@ -148,9 +139,6 @@ class RuntimeSqlQueryResponse(RuntimeModel):
 
 
 class RuntimeAgentAskRequest(RuntimeRequestModel):
-    organization_id: uuid.UUID | None = None
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID | None = None
     message: str = Field(..., min_length=1)
     agent_id: uuid.UUID | None = None
     agent_name: str | None = None

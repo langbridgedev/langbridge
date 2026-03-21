@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 import uuid
 from dataclasses import dataclass
@@ -139,7 +137,7 @@ class AgentExecutionService:
         await self._thread_repository.save(thread)
         await memory_manager.write_back(
             thread_id=thread.id,
-            user_id=thread.created_by,
+            actor_id=thread.created_by,
             user_query=user_query,
             response=response,
         )

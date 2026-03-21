@@ -1,44 +1,53 @@
 # Execution Plane
 
-The execution plane is where Langbridge workloads actually run.
+The execution plane is where Langbridge runtime requests actually run.
 
-In this repository, that means the runtime worker plus the runtime services it
-uses to resolve datasets, instantiate connectors, execute queries, and produce
-result payloads.
+Today that primarily means the configured runtime host plus the runtime services
+it composes. The queued worker is another execution shape that reuses the same
+runtime-owned execution primitives.
 
 ## Responsibilities
 
-- consume runtime work items or jobs
-- resolve datasets, connectors, and secrets
-- execute semantic and SQL workloads
-- run federated planning and execution
-- enforce runtime limits, retries, and guardrails
-- persist or emit result payloads and execution metadata
+- build a runtime context for each request
+- resolve datasets, connectors, semantic models, and secrets
+- execute dataset preview, SQL, semantic, sync, and agent workloads
+- route structured work through federation when needed
+- enforce runtime limits, redaction, and guardrails
+- return rows, summaries, artifacts, and sync state
 
 ## Main Components
 
-- worker runtime: `langbridge/apps/runtime_worker/main.py`
-- message dispatcher: `langbridge/apps/runtime_worker/handlers/dispatcher.py`
-- SQL job handler: `langbridge/apps/runtime_worker/handlers/query/sql_job_request_handler.py`
-- semantic query handler: `langbridge/apps/runtime_worker/handlers/query/semantic_query_request_handler.py`
-- dataset job handler: `langbridge/apps/runtime_worker/handlers/query/dataset_job_request_handler.py`
-- federated tool integration: `langbridge/packages/runtime/execution/federated_query_tool.py`
+- host API: `langbridge/runtime/hosting/app.py`
+- host auth: `langbridge/runtime/hosting/auth.py`
+- configured local runtime builder: `langbridge/runtime/local_config.py`
+- runtime host facade: `langbridge/runtime/services/runtime_host.py`
+- dataset query service: `langbridge/runtime/services/dataset_query_service.py`
+- SQL query service: `langbridge/runtime/services/sql_query_service.py`
+- semantic query service: `langbridge/runtime/services/semantic_query_execution_service.py`
+- connector sync runtime: `langbridge/runtime/services/dataset_sync_service.py`
+- agent execution service: `langbridge/runtime/services/agent_execution_service.py`
+- federated execution bridge: `langbridge/runtime/execution/federated_query_tool.py`
+- federated engine: `langbridge/federation/*`
+- queued worker assembly: `apps/runtime_worker/main.py`
 
 ## Execution Modes
 
-- **Embedded runtime**: execution happens in-process through runtime packages
-- **Local worker**: execution happens in a local runtime worker process
-- **Self-hosted runtime**: execution happens in customer-managed infrastructure
-- **Hybrid runtime**: execution happens in customer-managed infrastructure while integrating with external orchestration systems
+- Embedded runtime: `LangbridgeClient.local(...)` or direct runtime composition
+- Self-hosted runtime host: `langbridge serve --config ...`
+- Queued worker: `python -m langbridge.apps.runtime_worker.main`
+- Hybrid runtime: runtime executes in customer infrastructure while integrating with a separate control layer
 
-## Worker Lifecycle
+The current HTTP host only serves configured local runtimes in this release.
+
+## Request Lifecycle
 
 ```mermaid
 flowchart TD
-    M[Runtime Work Item] --> D[Worker Dispatcher]
-    D --> H[Job Handler]
-    H --> C[Connector + Dataset Resolution]
-    C --> FQE[Federated Planner / Executor]
-    FQE --> OUT[Rows / Artifacts / Metrics]
-    OUT --> EVT[Persist or Emit Result]
+    R[HTTP Request or SDK Call] --> A[Auth and Runtime Context]
+    A --> D[Dataset and Connector Resolution]
+    D --> S[Runtime Service]
+    S --> F[Federated Query Tool when needed]
+    F --> C[Connectors and Source Systems]
+    C --> O[Rows, Sync Results, Agent Output]
+    O --> R2[Runtime Response]
 ```

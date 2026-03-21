@@ -285,7 +285,6 @@ class _InMemoryDatasetRepository:
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None = None,
         search: str | None = None,
         tags=None,
         dataset_types=None,
@@ -307,8 +306,6 @@ class _InMemoryDatasetRepository:
         items: list[DatasetMetadata] = []
         for dataset in self._datasets.values():
             if dataset.workspace_id != workspace_id:
-                continue
-            if project_id is not None and dataset.project_id not in {None, project_id}:
                 continue
             if normalized_search:
                 haystacks = [
@@ -599,10 +596,10 @@ class _InMemoryConversationMemoryRepository:
         self,
         *,
         thread_id: uuid.UUID,
-        user_id: uuid.UUID | None,
         category: str,
         content: str,
         metadata_json: dict[str, Any] | None = None,
+        actor_id: uuid.UUID | None = None,
     ) -> RuntimeConversationMemoryItem | None:
         clean_content = str(content or "").strip()
         if not clean_content:
@@ -617,7 +614,7 @@ class _InMemoryConversationMemoryRepository:
         item = RuntimeConversationMemoryItem(
             id=uuid.uuid4(),
             thread_id=thread_id,
-            user_id=user_id,
+            actor_id=actor_id,
             category=category_enum,
             content=clean_content,
             metadata=dict(metadata_json or {}),
@@ -808,10 +805,30 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
     def __getattr__(self, name: str) -> Any:
         return getattr(self._runtime_host, name)
 
+    def with_context(self, context: RuntimeContext) -> "ConfiguredLocalRuntimeHost":
+        return ConfiguredLocalRuntimeHost(
+            config_path=self._config_path,
+            context=context,
+            runtime_host=self._runtime_host.with_context(context),
+            datasets=self._datasets,
+            datasets_by_id=self._datasets_by_id,
+            connectors=self._connectors,
+            semantic_models=self._semantic_models,
+            agents=self._agents,
+            default_agent=self._default_agent,
+            default_semantic_model_name=self._default_semantic_model_name,
+            dataset_repository=self._dataset_repository,
+            dataset_column_repository=self._dataset_column_repository,
+            dataset_policy_repository=self._dataset_policy_repository,
+            connector_sync_state_repository=self._connector_sync_state_repository,
+            secret_provider_registry=self._secret_provider_registry,
+            thread_repository=self._thread_repository,
+            thread_message_repository=self._thread_message_repository,
+        )
+
     async def list_datasets(self) -> list[dict[str, Any]]:
         records = await self._dataset_repository.list_for_workspace(
             workspace_id=self.context.workspace_id,
-            project_id=None,
             limit=1000,
             offset=0,
         )
@@ -894,8 +911,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         if len(semantic_model_records) == 1:
             semantic_model_record = semantic_model_records[0]
             result = await self._runtime_host.query_semantic(
-                organization_id=self.context.workspace_id,
-                project_id=None,
+                workspace_id=self.context.workspace_id,
                 semantic_model_id=semantic_model_record.id,
                 semantic_query=semantic_query,
             )
@@ -904,8 +920,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             connector_id = None
         else:
             result = await self._runtime_host.query_unified_semantic(
-                organization_id=self.context.workspace_id,
-                project_id=None,
+                workspace_id=self.context.workspace_id,
                 semantic_model_ids=[record.id for record in semantic_model_records],
                 semantic_query=semantic_query,
             )
@@ -948,8 +963,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         request = CreateSqlJobRequest(
             sql_job_id=uuid.uuid4(),
             workspace_id=self.context.workspace_id,
-            project_id=None,
-            user_id=self.context.user_id,
+            actor_id=self.context.actor_id,
             workbench_mode=SqlWorkbenchMode.direct_sql,
             connection_id=connector.id,
             execution_mode="single",
@@ -978,15 +992,14 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         agent_name: str | None = None,
     ) -> dict[str, Any]:
         agent = self._resolve_agent(agent_name)
-        user_id = self.context.user_id or _stable_uuid("local-runtime-user", str(self._config_path))
+        actor_id = self.context.actor_id or _stable_uuid("local-runtime-actor", str(self._config_path))
         thread_id = uuid.uuid4()
         timestamp = datetime.now(timezone.utc)
         thread = RuntimeThread(
             id=thread_id,
-            organization_id=self.context.workspace_id,
-            project_id=self.context.workspace_id,
+            workspace_id=self.context.workspace_id,
             title=agent.config.name,
-            created_by=user_id,
+            created_by=actor_id,
             state=RuntimeThreadState.processing,
             metadata={"runtime_mode": "local_config"},
             created_at=timestamp,
@@ -1010,9 +1023,8 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             request=CreateAgentJobRequest(
                 job_type=JobType.AGENT,
                 agent_definition_id=agent.id,
-                organisation_id=self.context.workspace_id,
-                project_id=self.context.workspace_id,
-                user_id=user_id,
+                workspace_id=self.context.workspace_id,
+                actor_id=actor_id,
                 thread_id=thread_id,
             ),
             event_emitter=None,
@@ -1193,8 +1205,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
                 active_state.updated_at = datetime.now(timezone.utc)
                 summary = await self._runtime_host.sync_dataset(
                     workspace_id=self.context.workspace_id,
-                    project_id=None,
-                    user_id=self.context.user_id,
+                    actor_id=self.context.actor_id,
                     connection_id=connector.id,
                     connector_record=connector,
                     connector_type=connector_type,
@@ -1491,7 +1502,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         runtime_payload = build_connector_runtime_payload(
             config_json=connector.config,
             connection_metadata=(
-                connector.connection_metadata.model_dump(mode="json")
+                connector.connection_metadata.model_dump(mode="json", by_alias=True)
                 if connector.connection_metadata is not None
                 else None
             ),
@@ -1645,7 +1656,7 @@ class ConfiguredLocalRuntimeHostFactory:
         context: RuntimeContext,
     ) -> ConfiguredLocalRuntimeHost:
         resolved_config_path = Path(config_path).resolve()
-        local_runtime_config = ConfiguredLocalRuntimeHostFactory._load_config(resolved_config_path)
+        local_runtime_config: LocalRuntimeConfig = ConfiguredLocalRuntimeHostFactory._load_config(resolved_config_path)
         resources = ConfiguredLocalRuntimeHostFactory._build_resources(
             config_path=resolved_config_path,
             config=local_runtime_config,
@@ -1702,6 +1713,7 @@ class ConfiguredLocalRuntimeHostFactory:
         llm_connections = ConfiguredLocalRuntimeHostFactory._build_llm_connection_records(
             config_path=config_path,
             config=config,
+            context=context,
         )
         agents = ConfiguredLocalRuntimeHostFactory._build_agent_records(
             config_path=config_path,
@@ -1795,8 +1807,7 @@ class ConfiguredLocalRuntimeHostFactory:
                 name=connector.name,
                 description=connector.description,
                 connector_type=connector_type,
-                organization_id=context.workspace_id,
-                project_id=None,
+                workspace_id=context.workspace_id,
                 config={"config": connection_payload},
                 connection_metadata=_extract_connection_metadata(merged_connection),
                 secret_references=dict(connector.secrets or {}),
@@ -1891,11 +1902,10 @@ class ConfiguredLocalRuntimeHostFactory:
             datasets[dataset.name] = DatasetMetadata(
                 id=dataset_id,
                 workspace_id=context.workspace_id,
-                project_id=None,
                 connection_id=connector.id,
-                owner_id=context.user_id,
-                created_by=context.user_id,
-                updated_by=context.user_id,
+                owner_id=context.actor_id,
+                created_by=context.actor_id,
+                updated_by=context.actor_id,
                 name=dataset.name,
                 sql_alias=_dataset_sql_alias(dataset.name),
                 description=dataset.description,
@@ -1983,6 +1993,7 @@ class ConfiguredLocalRuntimeHostFactory:
         *,
         config_path: Path,
         config: LocalRuntimeConfig,
+        context: RuntimeContext,
     ) -> dict[str, LocalRuntimeLLMConnectionRecord]:
         records: dict[str, LocalRuntimeLLMConnectionRecord] = {}
         now = datetime.now(timezone.utc)
@@ -2001,6 +2012,7 @@ class ConfiguredLocalRuntimeHostFactory:
                     model=llm_connection.model,
                     configuration=dict(llm_connection.configuration or {}),
                     is_active=True,
+                    workspace_id=context.workspace_id,
                     created_at=now,
                     updated_at=now,
                 ),
@@ -2230,8 +2242,7 @@ class ConfiguredLocalRuntimeHostFactory:
         for semantic_model in semantic_models.values():
             records[semantic_model.id] = SemanticModelMetadata(
                 id=semantic_model.id,
-                organization_id=context.workspace_id,
-                project_id=None,
+                workspace_id=context.workspace_id,
                 name=semantic_model.name,
                 description=semantic_model.semantic_model.description,
                 content_yaml=semantic_model.semantic_model.yml_dump(),
@@ -2326,8 +2337,7 @@ class ConfiguredLocalRuntimeHostFactory:
                 (context.workspace_id, record.id): SemanticModelMetadata(
                     id=record.id,
                     connector_id=None,
-                    organization_id=context.workspace_id,
-                    project_id=None,
+                    workspace_id=context.workspace_id,
                     name=record.name,
                     description=record.semantic_model.description,
                     content_yaml=record.semantic_model.yml_dump(),
@@ -2441,18 +2451,17 @@ class ConfiguredLocalRuntimeHostFactory:
 def build_configured_local_runtime(
     *,
     config_path: str | Path,
-    tenant_id: uuid.UUID | None = None,
     workspace_id: uuid.UUID | None = None,
-    user_id: uuid.UUID | None = None,
+    actor_id: uuid.UUID | None = None,
     roles: list[str] | tuple[str, ...] | None = None,
     request_id: str | None = None,
 ) -> ConfiguredLocalRuntimeHost:
     resolved_config_path = Path(config_path).resolve()
-    runtime_tenant_id = tenant_id or _stable_uuid("tenant", str(resolved_config_path))
+    # Use a stable UUID based on the config path for the workspace ID if not provided, to ensure consistency across runs with the same config.
+    resolved_workspace_id = workspace_id or _stable_uuid("workspace", str(resolved_config_path))
     context = RuntimeContext.build(
-        tenant_id=runtime_tenant_id,
-        workspace_id=workspace_id or runtime_tenant_id,
-        user_id=user_id or _stable_uuid("user", str(resolved_config_path)),
+        workspace_id=resolved_workspace_id,
+        actor_id=actor_id or _stable_uuid("actor", str(resolved_config_path)),
         roles=roles,
         request_id=request_id or f"local-runtime:{resolved_config_path.name}",
     )

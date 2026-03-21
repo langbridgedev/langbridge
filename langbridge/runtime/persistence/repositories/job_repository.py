@@ -34,20 +34,20 @@ class JobRepository(AsyncBaseRepository[JobRecord]):
         self._session.add(event)
         return event
 
-    async def list_for_organisation_and_type(
+    async def list_for_workspace_and_type(
         self,
         *,
-        organisation_id: str,
+        workspace_id: str,
         job_type: str | None = None,
         limit: int = 50,
     ) -> list[JobRecord]:
         stmt = (
             select(JobRecord)
             .options(
-                selectinload(JobRecord.job_events),
-                selectinload(JobRecord.job_tasks),
-            )
-            .where(JobRecord.organisation_id == organisation_id)
+            selectinload(JobRecord.job_events),
+            selectinload(JobRecord.job_tasks),
+        )
+            .where(JobRecord.workspace_id == workspace_id)
             .order_by(desc(JobRecord.created_at))
             .limit(max(1, limit))
         )

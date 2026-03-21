@@ -14,21 +14,21 @@ class ThreadRepository(AsyncBaseRepository[Thread]):
     def __init__(self, session: AsyncSession):
         super().__init__(session, Thread)
 
-    def _select_for_user(self, user_id: uuid.UUID):
+    def _select_for_actor(self, actor_id: uuid.UUID):
         return (
             select(Thread)
-            .filter(Thread.created_by == user_id)
+            .filter(Thread.created_by_actor_id == actor_id)
             .order_by(Thread.created_at.desc())
         )
 
-    async def list_for_user(self, user_id: uuid.UUID) -> list[Thread]:
-        result = await self._session.scalars(self._select_for_user(user_id))
+    async def list_for_actor(self, actor_id: uuid.UUID) -> list[Thread]:
+        result = await self._session.scalars(self._select_for_actor(actor_id))
         return list(result.all())
 
-    async def get_for_user(self, thread_id: uuid.UUID, user_id: uuid.UUID) -> Thread | None:
+    async def get_for_actor(self, thread_id: uuid.UUID, actor_id: uuid.UUID) -> Thread | None:
         stmt = (
             select(Thread)
             .filter(Thread.id == thread_id)
-            .filter(Thread.created_by == user_id)
+            .filter(Thread.created_by_actor_id == actor_id)
         )
         return await self._session.scalar(stmt)

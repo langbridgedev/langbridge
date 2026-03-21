@@ -135,9 +135,8 @@ def test_create_semantic_query_request_accepts_unified_camel_case_payload() -> N
     target_model_id = uuid.uuid4()
     request = CreateSemanticQueryJobRequest.model_validate(
         {
-            "organisationId": str(uuid.uuid4()),
-            "projectId": str(uuid.uuid4()),
-            "userId": str(uuid.uuid4()),
+            "workspaceId": str(uuid.uuid4()),
+            "actorId": str(uuid.uuid4()),
             "queryScope": "unified",
             "semanticModelIds": [
                 str(source_model_id),
@@ -177,8 +176,8 @@ def test_create_semantic_query_request_requires_semantic_model_for_standard_scop
     with pytest.raises(ValidationError):
         CreateSemanticQueryJobRequest.model_validate(
             {
-                "organisationId": str(uuid.uuid4()),
-                "userId": str(uuid.uuid4()),
+                "workspaceId": str(uuid.uuid4()),
+                "actorId": str(uuid.uuid4()),
                 "queryScope": "semantic_model",
                 "query": {"measures": ["orders.total"]},
             }
@@ -195,6 +194,7 @@ def test_embedding_provider_accepts_runtime_llm_connection_shape(monkeypatch) ->
             provider=LLMProvider.OPENAI,
             model="gpt-4.1",
             api_key="secret",
+            workspace_id=uuid.uuid4(),
         )
     )
 

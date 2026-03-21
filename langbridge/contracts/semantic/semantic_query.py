@@ -13,22 +13,19 @@ class SemanticQueryMetaResponse(_Base):
     name: str
     description: str | None = None
     connector_id: UUID | None = None
-    organization_id: UUID
-    project_id: UUID | None = None
+    workspace_id: UUID
     semantic_model: dict[str, Any]
 
 
 class SemanticQueryRequest(_Base):
-    organization_id: UUID
-    project_id: UUID | None = None
+    workspace_id: UUID
     semantic_model_id: UUID
     query: dict[str, Any]
 
 
 class SemanticQueryResponse(_Base):
     id: UUID
-    organization_id: UUID
-    project_id: UUID | None = None
+    workspace_id: UUID
     semantic_model_id: UUID
     data: list[dict[str, Any]]
     annotations: list[dict[str, Any]]
@@ -58,8 +55,7 @@ class UnifiedSemanticMetricRequest(_Base):
 
 
 class UnifiedSemanticQueryRequest(_Base):
-    organization_id: UUID
-    project_id: UUID | None = None
+    workspace_id: UUID
     connector_id: UUID | None = None
     semantic_model_ids: list[UUID]
     source_models: list[UnifiedSemanticSourceModelRequest] = Field(default_factory=list)
@@ -75,8 +71,7 @@ class UnifiedSemanticQueryRequest(_Base):
 
 
 class UnifiedSemanticQueryMetaRequest(_Base):
-    organization_id: UUID
-    project_id: UUID | None = None
+    workspace_id: UUID
     connector_id: UUID | None = None
     semantic_model_ids: list[UUID]
     source_models: list[UnifiedSemanticSourceModelRequest] = Field(default_factory=list)
@@ -92,16 +87,14 @@ class UnifiedSemanticQueryMetaRequest(_Base):
 
 class UnifiedSemanticQueryMetaResponse(_Base):
     connector_id: UUID
-    organization_id: UUID
-    project_id: UUID | None = None
+    workspace_id: UUID
     semantic_model_ids: list[UUID]
     semantic_model: dict[str, Any]
 
 
 class UnifiedSemanticQueryResponse(_Base):
     id: UUID
-    organization_id: UUID
-    project_id: UUID | None = None
+    workspace_id: UUID
     connector_id: UUID
     semantic_model_ids: list[UUID]
     data: list[dict[str, Any]]

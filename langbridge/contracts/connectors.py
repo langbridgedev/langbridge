@@ -98,8 +98,7 @@ class ConnectorDTO(_Base):
     label: Optional[str] = None
     icon: Optional[str] = None
     connector_type: Optional[str] = None
-    organization_id: UUID
-    project_id: Optional[UUID] = None
+    workspace_id: UUID
     config: Optional[Dict[str, Any]] = None
     connection_metadata: ConnectionMetadata | None = None
     secret_references: dict[str, SecretReference] = Field(default_factory=dict)
@@ -129,8 +128,7 @@ class ConnectorResponse(_Base):
     label: Optional[str] = None
     icon: Optional[str] = None
     connector_type: Optional[str] = None
-    organization_id: UUID
-    project_id: Optional[UUID] = None
+    workspace_id: UUID
     config: Optional[Dict[str, Any]] = None
     connection_metadata: ConnectionMetadata | None = None
     secret_references: dict[str, SecretReference] = Field(default_factory=dict)
@@ -142,19 +140,10 @@ class ConnectorResponse(_Base):
     @staticmethod
     def from_connector(
         connector: Connector,
-        organization_id: Optional[UUID] = None,
-        project_id: Optional[UUID] = None,
+        workspace_id: Optional[UUID] = None,
         plugin_metadata: "ConnectorPluginMetadata | None" = None,
     ) -> "ConnectorResponse":
         config = _parse_connector_config(connector.config_json)
-
-        resolved_org_id = organization_id
-        if resolved_org_id is None and getattr(connector, "organizations", None):
-            resolved_org_id = cast(UUID, connector.organizations[0].id)
-
-        if resolved_org_id is None:
-            raise ValueError("ConnectorResponse requires organization_id")
-
         raw_metadata = getattr(connector, "connection_metadata_json", None)
         raw_secret_refs = getattr(connector, "secret_references_json", None)
         raw_policy = getattr(connector, "access_policy_json", None)
@@ -167,8 +156,7 @@ class ConnectorResponse(_Base):
             label=cast(Optional[str], connector.name),
             icon="",
             connector_type=cast(Optional[str], connector.connector_type),
-            organization_id=resolved_org_id,
-            project_id=project_id,
+            workspace_id=workspace_id,
             config=config,
             is_managed=connector.is_managed,
             connection_metadata=(
@@ -198,8 +186,7 @@ class CreateConnectorRequest(_Base):
     version: Optional[str] = None
     label: Optional[str] = None
     connector_type: str
-    organization_id: UUID
-    project_id: Optional[UUID] = None
+    workspace_id: UUID
     config: Optional[Dict[str, Any]] = None
     connection_metadata: ConnectionMetadata | None = None
     secret_references: dict[str, SecretReference] = Field(default_factory=dict)
@@ -214,8 +201,7 @@ class UpdateConnectorRequest(_Base):
     label: Optional[str] = None
     icon: Optional[str] = None
     connector_type: Optional[str] = None
-    organization_id: UUID
-    project_id: Optional[UUID] = None
+    workspace_id: UUID
     config: Optional[Dict[str, Any]] = None
     connection_metadata: ConnectionMetadata | None = None
     secret_references: dict[str, SecretReference] | None = None

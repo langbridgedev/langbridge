@@ -28,8 +28,7 @@ class LLMConnectionBase(BaseModel):
         default=None,
         description="Description of the LLM connection",
     )
-    organization_id: UUID | None = None
-    project_id: UUID | None = None
+    workspace_id: UUID | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -44,8 +43,7 @@ class LLMConnectionUpdate(BaseModel):
     model: str
     configuration: dict[str, Any]
     is_active: bool
-    organization_id: UUID | None = None
-    project_id: UUID | None = None
+    workspace_id: UUID | None = None
 
 
 class LLMConnectionResponse(LLMConnectionBase):
@@ -53,8 +51,7 @@ class LLMConnectionResponse(LLMConnectionBase):
     is_active: bool
     created_at: datetime | None = None
     updated_at: datetime | None = None
-    organization_id: UUID | None = None
-    project_id: UUID | None = None
+    workspace_id: UUID | None = None
 
 
 class LLMConnectionSecretResponse(LLMConnectionResponse):

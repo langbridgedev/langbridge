@@ -14,8 +14,7 @@ from langbridge.contracts.jobs.type import JobType
 class CreateConnectorSyncJobRequest(_Base):
     job_type: JobType = JobType.CONNECTOR_SYNC
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID
     connection_id: uuid.UUID
     resource_names: list[str] = Field(default_factory=list)
     sync_mode: ConnectorSyncMode = ConnectorSyncMode.INCREMENTAL

@@ -14,11 +14,6 @@ _MODULE_EXPORTS = {
     ),
     "agentic_semantic_model_job": ("CreateAgenticSemanticModelJobRequest",),
     "connector_job": ("CreateConnectorSyncJobRequest",),
-    "copilot_dashboard_job": (
-        "CreateCopilotDashboardJobRequest",
-        "CopilotDashboardAssistRequest",
-        "CopilotDashboardJobResponse",
-    ),
     "dataset_job": (
         "CreateDatasetPreviewJobRequest",
         "CreateDatasetProfileJobRequest",

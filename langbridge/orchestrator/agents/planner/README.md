@@ -35,7 +35,7 @@ class PlanningConstraints(BaseModel):
     timebox_seconds: int = 30
 
 class PlannerRequest(BaseModel):
-    user_id: str | None
+    actor_id: str | None
     question: str
     context: dict[str, Any] | None
     constraints: PlanningConstraints

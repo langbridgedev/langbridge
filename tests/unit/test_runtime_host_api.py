@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+from jose import jwt
 
 from langbridge import LangbridgeClient
 from langbridge.runtime import build_configured_local_runtime
 from langbridge.runtime.hosting import create_runtime_api_app
+from langbridge.runtime.hosting.auth import RuntimeAuthConfig, RuntimeAuthMode
 from tests.unit._runtime_host_sync_helpers import (
     mock_stripe_api,
     runtime_storage_dirs,
@@ -96,18 +100,18 @@ agents:
 
     runtime = build_configured_local_runtime(config_path=str(config_path))
 
-    async def fake_ask_agent(*, prompt: str, agent_name: str | None = None):
-        return {
-            "thread_id": str(runtime.context.workspace_id),
-            "job_id": str(runtime.context.user_id),
-            "summary": f"{agent_name or 'default'} answered {prompt}",
-            "result": {"text": "ok"},
-            "visualization": None,
-            "error": None,
-            "events": [],
-        }
+    async def fake_agent_execute(*, job_id, request, event_emitter=None):
+        return SimpleNamespace(
+            response={
+                "summary": f"{runtime._agents['commerce_analyst'].config.name} answered runtime prompt",
+                "result": {"text": "ok"},
+                "visualization": None,
+                "error": None,
+                "events": [],
+            }
+        )
 
-    runtime.ask_agent = fake_ask_agent  # type: ignore[assignment]
+    runtime._runtime_host.services.agent_execution.execute = fake_agent_execute  # type: ignore[assignment]
     return runtime
 
 
@@ -119,7 +123,9 @@ def test_runtime_host_api_exposes_runtime_features(tmp_path: Path) -> None:
     info = client.get("/api/runtime/v1/info")
     assert info.status_code == 200
     assert info.json()["runtime_mode"] == "configured_local"
-    assert info.json()["organization_id"] == str(runtime.context.tenant_id)
+    assert info.json()["workspace_id"] == str(runtime.context.workspace_id)
+    assert info.json()["actor_id"] == str(runtime.context.actor_id)
+    assert info.json()["roles"] == list(runtime.context.roles)
 
     datasets = client.get("/api/runtime/v1/datasets")
     assert datasets.status_code == 200
@@ -280,3 +286,98 @@ def test_runtime_host_api_supports_connector_sync(tmp_path: Path) -> None:
         assert states.json()["items"][0]["resource_name"] == "customers"
         assert states.json()["items"][0]["status"] == "succeeded"
         assert states.json()["items"][0]["dataset_names"] == [synced_dataset_name]
+
+
+def test_runtime_host_api_static_token_auth_scopes_runtime_requests(tmp_path: Path) -> None:
+    runtime = _build_runtime(tmp_path)
+    authenticated_workspace_id = runtime.context.workspace_id
+    authenticated_actor_id = uuid.uuid4()
+    captured: dict[str, object] = {}
+
+    async def fake_query_dataset(*, request):
+        captured["workspace_id"] = request.workspace_id
+        captured["actor_id"] = request.actor_id
+        captured["request_id"] = request.correlation_id
+        return {
+            "dataset_name": "shopify_orders",
+            "columns": [{"name": "country"}],
+            "rows": [{"country": "United Kingdom"}],
+            "row_count_preview": 1,
+            "effective_limit": request.enforced_limit,
+            "redaction_applied": False,
+        }
+
+    runtime._runtime_host.services.dataset_query.query_dataset = fake_query_dataset  # type: ignore[assignment]
+    app = create_runtime_api_app(
+        runtime_host=runtime,
+        auth_config=RuntimeAuthConfig(
+            mode=RuntimeAuthMode.static_token,
+            static_token="runtime-token",
+            static_workspace_id=authenticated_workspace_id,
+            static_actor_id=authenticated_actor_id,
+            static_roles=("runtime:viewer",),
+        ),
+    )
+    client = TestClient(app)
+    headers = {
+        "Authorization": "Bearer runtime-token",
+        "X-Request-Id": "req-static-auth",
+    }
+
+    info = client.get("/api/runtime/v1/info", headers=headers)
+    assert info.status_code == 200
+    assert info.json()["workspace_id"] == str(authenticated_workspace_id)
+    assert info.json()["actor_id"] == str(authenticated_actor_id)
+    assert info.json()["roles"] == ["runtime:viewer"]
+
+    datasets = client.get("/api/runtime/v1/datasets", headers=headers)
+    dataset_id = datasets.json()["items"][0]["id"]
+
+    preview = client.post(
+        f"/api/runtime/v1/datasets/{dataset_id}/preview",
+        headers=headers,
+        json={"limit": 1},
+    )
+    assert preview.status_code == 200
+    assert preview.json()["status"] == "succeeded"
+    assert captured == {
+        "workspace_id": authenticated_workspace_id,
+        "actor_id": authenticated_actor_id,
+        "request_id": "req-static-auth",
+    }
+
+
+def test_runtime_host_api_jwt_auth_exposes_authenticated_identity(tmp_path: Path) -> None:
+    runtime = _build_runtime(tmp_path)
+    workspace_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+    token = jwt.encode(
+        {
+            "workspace_id": str(workspace_id),
+            "actor_id": str(actor_id),
+            "roles": ["runtime:editor", "sql:query"],
+            "sub": str(actor_id),
+        },
+        "runtime-jwt-secret",
+        algorithm="HS256",
+    )
+    app = create_runtime_api_app(
+        runtime_host=runtime,
+        auth_config=RuntimeAuthConfig(
+            mode=RuntimeAuthMode.jwt,
+            jwt_secret="runtime-jwt-secret",
+        ),
+    )
+    client = TestClient(app)
+
+    info = client.get(
+        "/api/runtime/v1/info",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "X-Request-Id": "req-jwt-auth",
+        },
+    )
+    assert info.status_code == 200
+    assert info.json()["workspace_id"] == str(workspace_id)
+    assert info.json()["actor_id"] == str(actor_id)
+    assert info.json()["roles"] == ["runtime:editor", "sql:query"]

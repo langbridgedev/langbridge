@@ -57,13 +57,10 @@ class _FakeDatasetRepository:
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None = None,
         dataset_types: list[str] | None = None,
         limit: int = 5000,
     ) -> list[DatasetRecord]:
         rows = [item for item in self._datasets.values() if item.workspace_id == workspace_id]
-        if project_id is not None:
-            rows = [item for item in rows if item.project_id == project_id]
         if dataset_types:
             allowed = {value.upper() for value in dataset_types}
             rows = [item for item in rows if str(item.dataset_type).upper() in allowed]
@@ -124,7 +121,7 @@ def _build_job_record(*, workspace_id: uuid.UUID, job_type: JobType) -> JobRecor
     now = datetime.now(timezone.utc)
     return JobRecord(
         id=uuid.uuid4(),
-        organisation_id=str(workspace_id),
+        workspace_id=str(workspace_id),
         job_type=job_type.value,
         payload={},
         headers={},
@@ -140,17 +137,16 @@ def _build_job_record(*, workspace_id: uuid.UUID, job_type: JobType) -> JobRecor
 @pytest.mark.anyio
 async def test_dataset_preview_enforces_limit_and_applies_redaction_and_rls() -> None:
     workspace_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     connection_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
 
     dataset = DatasetRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=connection_id,
-        created_by=user_id,
-        updated_by=user_id,
+        created_by=actor_id,
+        updated_by=actor_id,
         name="orders_dataset",
         description=None,
         tags_json=["sales"],
@@ -250,7 +246,7 @@ async def test_dataset_preview_enforces_limit_and_applies_redaction_and_rls() ->
     request = CreateDatasetPreviewJobRequest(
         dataset_id=dataset.id,
         workspace_id=workspace_id,
-        user_id=user_id,
+        actor_id=actor_id,
         requested_limit=50,
         enforced_limit=25,
         filters={"customer_id": {"operator": "eq", "value": 42}},
@@ -282,17 +278,16 @@ async def test_dataset_preview_enforces_limit_and_applies_redaction_and_rls() ->
 @pytest.mark.anyio
 async def test_dataset_sql_preview_blocks_dml_statements() -> None:
     workspace_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     connection_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
 
     dataset = DatasetRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=connection_id,
-        created_by=user_id,
-        updated_by=user_id,
+        created_by=actor_id,
+        updated_by=actor_id,
         name="unsafe_sql_dataset",
         description=None,
         tags_json=[],
@@ -354,7 +349,7 @@ async def test_dataset_sql_preview_blocks_dml_statements() -> None:
     request = CreateDatasetPreviewJobRequest(
         dataset_id=dataset.id,
         workspace_id=workspace_id,
-        user_id=user_id,
+        actor_id=actor_id,
         enforced_limit=25,
     )
     message = DatasetJobRequestMessage(
@@ -374,16 +369,15 @@ async def test_dataset_sql_preview_blocks_dml_statements() -> None:
 @pytest.mark.anyio
 async def test_file_dataset_preview_builds_file_backed_workflow() -> None:
     workspace_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
 
     dataset = DatasetRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=None,
-        created_by=user_id,
-        updated_by=user_id,
+        created_by=actor_id,
+        updated_by=actor_id,
         name="orders_file",
         description=None,
         tags_json=[],
@@ -452,7 +446,7 @@ async def test_file_dataset_preview_builds_file_backed_workflow() -> None:
         job_request=CreateDatasetPreviewJobRequest(
             dataset_id=dataset.id,
             workspace_id=workspace_id,
-            user_id=user_id,
+            actor_id=actor_id,
             enforced_limit=10,
         ).model_dump(mode="json"),
     )
@@ -469,16 +463,15 @@ async def test_file_dataset_preview_builds_file_backed_workflow() -> None:
 @pytest.mark.anyio
 async def test_api_connector_file_dataset_preview_ignores_synthetic_schema() -> None:
     workspace_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
 
     dataset = DatasetRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=None,
-        created_by=user_id,
-        updated_by=user_id,
+        created_by=actor_id,
+        updated_by=actor_id,
         name="hubspot_deals",
         description=None,
         tags_json=[],
@@ -547,7 +540,7 @@ async def test_api_connector_file_dataset_preview_ignores_synthetic_schema() -> 
         job_request=CreateDatasetPreviewJobRequest(
             dataset_id=dataset.id,
             workspace_id=workspace_id,
-            user_id=user_id,
+            actor_id=actor_id,
             enforced_limit=10,
         ).model_dump(mode="json"),
     )
@@ -563,7 +556,7 @@ async def test_api_connector_file_dataset_preview_ignores_synthetic_schema() -> 
 @pytest.mark.anyio
 async def test_csv_ingest_job_converts_file_dataset_to_parquet(tmp_path, monkeypatch) -> None:
     workspace_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
     source_file = tmp_path / "orders.csv"
     source_file.write_text("order_id,amount\n1,12.5\n2,18.0\n", encoding="utf-8")
@@ -572,10 +565,9 @@ async def test_csv_ingest_job_converts_file_dataset_to_parquet(tmp_path, monkeyp
     dataset = DatasetRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=None,
-        created_by=user_id,
-        updated_by=user_id,
+        created_by=actor_id,
+        updated_by=actor_id,
         name="orders_csv",
         description=None,
         tags_json=[],
@@ -614,7 +606,7 @@ async def test_csv_ingest_job_converts_file_dataset_to_parquet(tmp_path, monkeyp
         job_request={
             "dataset_id": str(dataset.id),
             "workspace_id": str(workspace_id),
-            "user_id": str(user_id),
+            "actor_id": str(actor_id),
             "storage_uri": source_file.resolve().as_uri(),
         },
     )
@@ -631,17 +623,16 @@ async def test_csv_ingest_job_converts_file_dataset_to_parquet(tmp_path, monkeyp
 @pytest.mark.anyio
 async def test_dataset_bulk_create_reuses_existing_and_creates_missing() -> None:
     workspace_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     connection_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
 
     existing_dataset = DatasetRecord(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=connection_id,
-        created_by=user_id,
-        updated_by=user_id,
+        created_by=actor_id,
+        updated_by=actor_id,
         name="public.orders",
         description=None,
         tags_json=["auto-generated"],
@@ -710,8 +701,7 @@ async def test_dataset_bulk_create_reuses_existing_and_creates_missing() -> None
 
     request = CreateDatasetBulkCreateJobRequest(
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=user_id,
+        actor_id=actor_id,
         connection_id=connection_id,
         selections=[
             {

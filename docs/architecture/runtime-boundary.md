@@ -1,76 +1,108 @@
 # Runtime Boundary
 
-## Purpose
+This repository exists to build and ship the Langbridge runtime product.
 
-`langbridge/` is the runtime repository.
+## Langbridge Versus Langbridge Cloud
 
-Its job is to produce portable execution capabilities that work in:
+`langbridge/` owns:
 
-- local development
+- embedded runtime execution
+- self-hosted runtime hosting
+- workspace-scoped runtime identity
+- runtime-owned auth, connectors, datasets, semantic query, federation, and orchestration
+- runtime-owned ports, providers, services, contracts, and persistence
+- thin runtime assemblies such as the queued worker
+
+`langbridge-cloud/` owns:
+
+- hosted control-plane APIs
+- cloud web application surfaces
+- hosted worker orchestration and cloud-only operations
+- product-account and control-plane administration
+- cloud migrations and control-plane persistence
+
+## What Belongs In This Repo
+
+Code belongs here when it must exist for the runtime to execute workloads in:
+
 - embedded Python use
-- self-hosted deployments
-- hybrid enterprise deployments
+- local development
+- self-hosted deployment
+- hybrid customer-managed deployment
 
-## What Belongs In This Repository
+That includes:
 
-Code belongs in `langbridge/` when it is required to execute workloads even if
-no separate hosted product exists.
+- `langbridge.runtime`
+- `langbridge.client`
+- `langbridge.connectors`
+- `langbridge.plugins`
+- `langbridge.semantic`
+- `langbridge.federation`
+- `langbridge.orchestrator`
+- `langbridge.contracts`
+- `apps/runtime_worker`
 
-This includes:
+## What Should Stay Out
 
-- runtime host and execution APIs
-- semantic execution
-- federated planning and execution
-- connectors
-- dataset execution primitives
-- runtime-safe agent execution primitives
-- local runtime configuration
-- reusable runtime libraries and packages
-- versioned runtime contracts and schemas
+Do not treat this repo as the home for:
 
-## What Does Not Belong Here
+- control-plane product APIs
+- cloud UI flows
+- external product identity models as runtime-core identity
+- cloud-only orchestration glue
+- cloud-only operational tooling
 
-This repository should avoid application surfaces that primarily exist to manage
-or deliver a hosted product experience.
-
-Examples include:
-
-- application UIs
-- application-level user or organization management
-- product-auth-specific application logic
-- hosted orchestration glue that is not required by the runtime itself
-- operational tooling that is only meaningful for a hosted control layer
-
-## Target Shape
-
-The runtime repo should continue moving toward a package-oriented structure:
+## Current Shape
 
 ```text
 langbridge/
-  packages/
-    contracts/
-    runtime/
-    semantic/
-    federation/
-    connectors/
-    ...
-  apps/
-    runtime_worker/
-  docs/
+  client/
+  connectors/
+  contracts/
+  federation/
+  orchestrator/
+  plugins/
+  runtime/
+  semantic/
+apps/
+  runtime_worker/
+packages/
+  sdk/
 ```
 
-## Package Direction
+`packages/sdk` is packaging for a separate SDK distribution. It is not the old
+architecture model for the repo.
 
-- core logic should live in packages
-- assembly apps should stay thin
-- runtime surfaces should remain portable
-- interfaces should be explicit and versionable
+## Runtime-Owned Identity And Auth
 
-## Definition Of Done
+Runtime-core identity is limited to:
 
-The runtime boundary is healthy when:
+- `workspace_id`
+- `actor_id`
+- `roles`
+- `request_id`
 
-- runtime logic is portable and reusable
-- docs describe the runtime without depending on private product surfaces
-- runtime packages do not depend on private app code
-- public concepts are expressed as contracts and packages rather than hidden integrations
+Self-hosted runtime auth is intentionally thin:
+
+- no auth
+- static bearer token
+- JWT bearer token
+
+If a richer cloud product identity exists, it should be translated into this
+runtime context at the boundary rather than pushed into runtime-core execution.
+
+## Runtime-Owned Ports
+
+Ports and adapters that define runtime behavior should stay runtime-owned even
+when a cloud product provides one implementation.
+
+Examples:
+
+- dataset and connector metadata providers
+- semantic model providers
+- sync state providers
+- credential providers
+- runtime host and execution services
+
+The runtime may integrate with a control plane through adapters, but the port
+definitions and execution behavior stay here.

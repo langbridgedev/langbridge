@@ -1,24 +1,32 @@
 # Semantic Feature
 
 Langbridge semantic modeling provides business-facing analytical structure on top
-of runtime datasets and connectors.
+of runtime datasets.
 
-## Capabilities
+## Current Shape
 
-- canonical semantic model schema
-- semantic compilation and execution
-- dimension and measure modeling
-- semantic relationships across datasets
-- integration with federated execution
+- the standard semantic model lives in `langbridge.semantic.model`
+- loaders live in `langbridge.semantic.loader`
+- semantic execution is performed by `langbridge.runtime.services.semantic_query_execution_service`
+- structured execution routes through federation when needed
 
-## Runtime Behavior
+## What Semantic Models Do
 
-- semantic requests are normalized into the runtime semantic model
-- runtime services resolve referenced datasets and source bindings
-- execution routes through the federated planner when structured data access is required
+- map business members to runtime datasets
+- define dimensions, measures, filters, relationships, and metrics
+- normalize legacy payload aliases into the current contract
+- support unified semantic models separately from dataset-backed standard models
+
+## Runtime Relationship
+
+Semantic models are workspace-scoped runtime metadata. They are not a separate
+control-plane-only concept in this repo.
+
+The runtime resolves semantic models to datasets, then uses the same execution
+substrate as SQL and dataset query paths.
 
 ## Related Docs
 
 - `docs/semantic-model.md`
-- `docs/features/federation.md`
 - `docs/datasets.md`
+- `docs/features/federation.md`

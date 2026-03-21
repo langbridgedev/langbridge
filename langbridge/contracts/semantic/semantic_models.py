@@ -4,27 +4,19 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from langbridge.contracts.base import _Base
 
 
 class SemanticModelCreateRequest(_Base):
     connector_id: UUID | None = None
-    organization_id: UUID
-    project_id: UUID | None = None
+    workspace_id: UUID
     name: str
     description: str | None = None
     model_yaml: str | None = None
     auto_generate: bool = False
     source_dataset_ids: list[UUID] | None = None
-
-    @field_validator("project_id", mode="before")
-    @classmethod
-    def normalize_project_id(cls, value: object) -> object:
-        if isinstance(value, str) and value.strip() == "":
-            return None
-        return value
 
     @model_validator(mode="after")
     def _validate_dataset_generation(self) -> "SemanticModelCreateRequest":
@@ -35,25 +27,16 @@ class SemanticModelCreateRequest(_Base):
 
 class SemanticModelUpdateRequest(_Base):
     connector_id: UUID | None = None
-    project_id: UUID | None = None
     name: str | None = None
     description: str | None = None
     model_yaml: str | None = None
     auto_generate: bool = False
     source_dataset_ids: list[UUID] | None = None
 
-    @field_validator("project_id", mode="before")
-    @classmethod
-    def normalize_project_id(cls, value: object) -> object:
-        if isinstance(value, str) and value.strip() == "":
-            return None
-        return value
-
 
 class SemanticModelRecordResponse(_Base):
     id: UUID
-    organization_id: UUID
-    project_id: UUID | None = None
+    workspace_id: UUID
     name: str
     description: str | None = None
     content_yaml: str
@@ -106,20 +89,13 @@ class SemanticModelSelectionGenerateResponse(_Base):
 
 
 class SemanticModelAgenticJobCreateRequest(_Base):
-    project_id: UUID | None = None
+    workspace_id: UUID
     name: str
     description: str | None = None
     filename: str | None = None
     dataset_ids: list[UUID]
     question_prompts: list[str]
     include_sample_values: bool = False
-
-    @field_validator("project_id", mode="before")
-    @classmethod
-    def normalize_project_id(cls, value: object) -> object:
-        if isinstance(value, str) and value.strip() == "":
-            return None
-        return value
 
     @model_validator(mode="after")
     def _validate_dataset_ids(self) -> "SemanticModelAgenticJobCreateRequest":

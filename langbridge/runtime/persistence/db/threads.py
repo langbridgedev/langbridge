@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from sqlalchemy import JSON, String, Text, Enum as SAEnum, ForeignKey, DateTime, Integer, UUID, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from .base import Base
 
@@ -25,8 +25,7 @@ class Thread(Base):
     __tablename__ = "threads"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     title: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     state: Mapped[ThreadState] = mapped_column(SAEnum(ThreadState, name="thread_state"), nullable=False, default=ThreadState.awaiting_user_input)
@@ -36,12 +35,13 @@ class Thread(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="cascade"), nullable=False)
+    created_by_actor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     
     messages: Mapped[list["ThreadMessage"]] = relationship(
         "ThreadMessage", backref="thread", cascade="all, delete-orphan", lazy="selectin"
     )
     last_message_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_by = synonym("created_by_actor_id")
 
 
 class ThreadMessage(Base):
@@ -74,7 +74,7 @@ class ConversationMemoryItem(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     thread_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("threads.id", ondelete="cascade"), index=True)
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    actor_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     category: Mapped[MemoryCategory] = mapped_column(
         SAEnum(MemoryCategory, name="memory_category"),
         nullable=False,

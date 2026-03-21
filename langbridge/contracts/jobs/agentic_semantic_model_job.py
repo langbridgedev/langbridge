@@ -11,9 +11,8 @@ from langbridge.contracts.jobs.type import JobType
 
 class CreateAgenticSemanticModelJobRequest(_Base):
     job_type: JobType = JobType.AGENTIC_SEMANTIC_MODEL
-    organisation_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    workspace_id: uuid.UUID
+    actor_id: uuid.UUID
     semantic_model_id: uuid.UUID
     dataset_ids: List[uuid.UUID] = Field(default_factory=list)
     question_prompts: List[str] = Field(default_factory=list)

@@ -34,7 +34,7 @@ class ConnectionMetadata(RuntimeModel):
     host: str | None = None
     port: int | None = None
     database: str | None = None
-    schema: str | None = None
+    schema_name: str | None = Field(default=None, alias="schema")
     warehouse: str | None = None
     role: str | None = None
     account: str | None = None
@@ -50,8 +50,7 @@ class ConnectorMetadata(RuntimeModel):
     label: str | None = None
     icon: str | None = None
     connector_type: str | None = None
-    organization_id: uuid.UUID | None = None
-    project_id: uuid.UUID | None = None
+    workspace_id: uuid.UUID | None = None
     config: dict[str, Any] | None = None
     connection_metadata: ConnectionMetadata | None = None
     secret_references: dict[str, SecretReference] = Field(default_factory=dict)
@@ -141,7 +140,6 @@ class DatasetRelationIdentity(RuntimeModel):
 class DatasetMetadata(RuntimeModel):
     id: uuid.UUID
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
     connection_id: uuid.UUID | None = None
     owner_id: uuid.UUID | None = None
     created_by: uuid.UUID | None = None
@@ -207,8 +205,7 @@ class DatasetMetadata(RuntimeModel):
 class SemanticModelMetadata(RuntimeModel):
     id: uuid.UUID
     connector_id: uuid.UUID | None = None
-    organization_id: uuid.UUID
-    project_id: uuid.UUID | None = None
+    workspace_id: uuid.UUID
     name: str
     description: str | None = None
     content_yaml: str

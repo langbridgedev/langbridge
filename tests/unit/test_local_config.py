@@ -189,7 +189,7 @@ semantic_models:
                 request=CreateDatasetPreviewJobRequest(
                     dataset_id=dataset_record.id,
                     workspace_id=runtime.context.workspace_id,
-                    user_id=runtime.context.user_id,
+                    actor_id=runtime.context.actor_id,
                     requested_limit=5,
                     enforced_limit=5,
                 )
@@ -242,7 +242,7 @@ def test_configured_local_runtime_syncs_connector_resources(tmp_path: Path) -> N
                 request=CreateDatasetPreviewJobRequest(
                     dataset_id=synced_dataset_id,
                     workspace_id=runtime.context.workspace_id,
-                    user_id=runtime.context.user_id,
+                    actor_id=runtime.context.actor_id,
                     requested_limit=10,
                     enforced_limit=10,
                 )

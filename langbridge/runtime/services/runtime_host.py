@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from langbridge.runtime.context import RuntimeContext
@@ -45,6 +45,9 @@ class RuntimeHost:
     context: RuntimeContext
     providers: RuntimeProviders
     services: RuntimeServices
+
+    def with_context(self, context: RuntimeContext) -> "RuntimeHost":
+        return replace(self, context=context)
 
     async def query_dataset(self, *args: Any, **kwargs: Any) -> Any:
         if self.services.dataset_query is None:

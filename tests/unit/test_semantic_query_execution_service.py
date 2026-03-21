@@ -192,7 +192,7 @@ class _FakeSemanticModelProvider:
     async def get_semantic_model(
         self,
         *,
-        organization_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         semantic_model_id: uuid.UUID,
     ) -> _ModelRecord | None:
         return self._models.get(semantic_model_id)
@@ -239,7 +239,6 @@ def _dataset_stub(
     return SimpleNamespace(
         id=dataset_id,
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=connection_id,
         created_by=None,
         updated_by=None,
@@ -276,7 +275,7 @@ def _dataset_stub(
 async def test_execute_unified_query_routes_through_federated_tool() -> None:
     pytest.importorskip("pyarrow")
 
-    organization_id = uuid.uuid4()
+    workspace_id = uuid.uuid4()
     model_id = uuid.uuid4()
     connector_id = uuid.uuid4()
     dataset_id = uuid.uuid4()
@@ -308,7 +307,7 @@ async def test_execute_unified_query_routes_through_federated_tool() -> None:
             {
                 dataset_id: _dataset_stub(
                     dataset_id=dataset_id,
-                    workspace_id=organization_id,
+                    workspace_id=workspace_id,
                     connection_id=connector_id,
                     name="orders_table",
                     dataset_type="TABLE",
@@ -329,8 +328,7 @@ async def test_execute_unified_query_routes_through_federated_tool() -> None:
     )
 
     result = await service.execute_unified_query(
-        organization_id=organization_id,
-        project_id=None,
+        workspace_id=workspace_id,
         semantic_query=SemanticQuery(dimensions=["Orders__orders.id"], limit=10),
         semantic_model_ids=[model_id],
         relationships=None,
@@ -347,7 +345,7 @@ async def test_execute_unified_query_routes_through_federated_tool() -> None:
 async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() -> None:
     pytest.importorskip("pyarrow")
 
-    organization_id = uuid.uuid4()
+    workspace_id = uuid.uuid4()
     model_id = uuid.uuid4()
     legacy_connector_id = uuid.uuid4()
     warehouse_connector_id = uuid.uuid4()
@@ -386,7 +384,7 @@ async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() 
         {
             file_dataset_id: _dataset_stub(
                 dataset_id=file_dataset_id,
-                workspace_id=organization_id,
+                workspace_id=workspace_id,
                 connection_id=None,
                 name="orders_file",
                 dataset_type="FILE",
@@ -398,7 +396,7 @@ async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() 
             ),
             table_dataset_id: _dataset_stub(
                 dataset_id=table_dataset_id,
-                workspace_id=organization_id,
+                workspace_id=workspace_id,
                 connection_id=warehouse_connector_id,
                 name="inventory_table",
                 dataset_type="TABLE",
@@ -422,8 +420,7 @@ async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() 
     )
 
     result = await service.execute_unified_query(
-        organization_id=organization_id,
-        project_id=None,
+        workspace_id=workspace_id,
         semantic_query=SemanticQuery(dimensions=["Inventory__orders.id"], limit=10),
         semantic_model_ids=[model_id],
         relationships=None,
@@ -436,7 +433,6 @@ async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() 
     inventory_binding = workflow["dataset"]["tables"]["Inventory__inventory"]
     assert orders_binding["metadata"]["source_kind"] == "file"
     assert inventory_binding["connector_id"] == str(warehouse_connector_id)
-
 
 
 

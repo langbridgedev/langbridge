@@ -35,8 +35,7 @@ class ConnectorSyncState(RuntimeModel):
 class SqlJob(RuntimeModel):
     id: uuid.UUID
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID
     connection_id: uuid.UUID | None = None
     workbench_mode: str
     selected_datasets_json: list[dict[str, Any]] = Field(default_factory=list)

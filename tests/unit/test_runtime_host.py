@@ -5,7 +5,6 @@ import uuid
 import pytest
 
 from langbridge.runtime import RuntimeContext
-from langbridge.runtime.bootstrap import build_hosted_runtime
 from langbridge.runtime.services.runtime_host import (
     RuntimeHost,
     RuntimeProviders,
@@ -43,12 +42,28 @@ class _SemanticQueryService:
         return {"kind": "semantic", **kwargs}
 
 
+def test_runtime_context_build_is_workspace_scoped() -> None:
+    workspace_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+
+    context = RuntimeContext.build(
+        workspace_id=workspace_id,
+        actor_id=actor_id,
+        roles=["runtime:viewer"],
+        request_id="req-runtime-context",
+    )
+
+    assert context.workspace_id == workspace_id
+    assert context.actor_id == actor_id
+    assert context.roles == ("runtime:viewer",)
+    assert context.request_id == "req-runtime-context"
+
+
 @pytest.mark.anyio
 async def test_runtime_host_delegates_to_runtime_services() -> None:
     context = RuntimeContext.build(
-        tenant_id=uuid.uuid4(),
         workspace_id=uuid.uuid4(),
-        user_id=uuid.uuid4(),
+        actor_id=uuid.uuid4(),
         roles=["admin"],
         request_id="req-runtime-host",
     )
@@ -75,15 +90,3 @@ async def test_runtime_host_delegates_to_runtime_services() -> None:
     assert sync_result["kind"] == "sync"
     assert agent_result["kind"] == "agent"
     assert semantic_result["kind"] == "semantic"
-
-
-def test_build_hosted_runtime_exposes_dataset_and_sql_services() -> None:
-    host = build_hosted_runtime(
-        context=RuntimeContext.build(tenant_id=uuid.uuid4()),
-        control_plane_base_url="https://control-plane.example.com",
-        service_token="runtime-service-token",
-    )
-
-    assert host.services.dataset_query is not None
-    assert host.services.sql_query is not None
-    assert host.services.semantic_query is not None

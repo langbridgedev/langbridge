@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from langbridge.runtime.errors import BusinessValidationError
+from langbridge.runtime.models.metadata import DatasetMetadata
 from langbridge.runtime.ports import DatasetCatalogStore
 from langbridge.runtime.providers import DatasetMetadataProvider
 from langbridge.runtime.utils.datasets import (
@@ -42,7 +43,7 @@ class DatasetExecutionResolver:
     async def build_workflow_for_dataset(
         self,
         *,
-        dataset: Any,
+        dataset: DatasetMetadata,
     ) -> tuple[FederationWorkflow, str, str]:
         dataset_type = str(dataset.dataset_type or "").upper()
         if dataset_type in {"TABLE", "SQL", "FILE"}:
@@ -68,7 +69,7 @@ class DatasetExecutionResolver:
     async def build_semantic_workflow(
         self,
         *,
-        organization_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         workflow_id: str,
         dataset_name: str,
         semantic_model: SemanticModel,
@@ -92,7 +93,7 @@ class DatasetExecutionResolver:
                     f"Semantic dataset '{dataset_key}' must declare dataset_id for federated execution."
                 )
             dataset = await self._load_dataset(
-                workspace_id=organization_id,
+                workspace_id=workspace_id,
                 dataset_id=dataset_ref,
                 table_key=dataset_key,
             )
@@ -118,8 +119,8 @@ class DatasetExecutionResolver:
         ]
         workflow = self._build_workflow_from_bindings(
             workflow_id=workflow_id,
-            workspace_id=str(organization_id),
-            dataset_id=f"semantic_dataset_{organization_id.hex[:12]}",
+            workspace_id=str(workspace_id),
+            dataset_id=f"semantic_dataset_{workspace_id.hex[:12]}",
             dataset_name=dataset_name,
             table_bindings=table_bindings,
             relationships=relationships,
@@ -229,7 +230,7 @@ class DatasetExecutionResolver:
     async def _build_federated_dataset_workflow(
         self,
         *,
-        dataset: Any,
+        dataset: DatasetMetadata,
     ) -> tuple[FederationWorkflow, str, str]:
         if self._dataset_provider is None and self._dataset_repository is None:
             raise BusinessValidationError(
@@ -371,7 +372,7 @@ class DatasetExecutionResolver:
         return DatasetExecutionResolver._parse_uuid(raw_value, context="semantic dataset dataset_id")
 
     @staticmethod
-    def _resolve_file_storage_uri(dataset: Any) -> str:
+    def _resolve_file_storage_uri(dataset: DatasetMetadata) -> str:
         file_config = dict(dataset.file_config_json or {})
         storage_uri = (
             str(dataset.storage_uri or "").strip()
@@ -382,7 +383,7 @@ class DatasetExecutionResolver:
         return storage_uri
 
     @staticmethod
-    def _resolve_file_format(dataset: Any, *, storage_uri: str) -> str:
+    def _resolve_file_format(dataset: DatasetMetadata, *, storage_uri: str) -> str:
         file_config = dict(dataset.file_config_json or {})
         configured = str(file_config.get("format") or file_config.get("file_format") or "").strip().lower()
         if configured in {"csv", "parquet"}:
@@ -399,7 +400,7 @@ class DatasetExecutionResolver:
     @staticmethod
     def _logical_table_name(
         *,
-        dataset: Any,
+        dataset: DatasetMetadata,
         logical_table_name: str | None,
     ) -> str:
         candidate = (logical_table_name or dataset.table_name or "").strip()
@@ -411,7 +412,7 @@ class DatasetExecutionResolver:
     @staticmethod
     def _logical_schema_name(
         *,
-        dataset: Any,
+        dataset: DatasetMetadata,
         logical_schema: str | None,
     ) -> str | None:
         if logical_schema is not None:
@@ -599,7 +600,7 @@ def build_file_scan_sql(*, storage_uri: str, file_config: dict[str, Any] | None 
 
 
 def build_binding_for_dataset(
-    dataset: Any,
+    dataset: DatasetMetadata,
     *,
     table_key: str | None = None,
     logical_schema: str | None = None,

@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from langbridge.contracts.semantic import SemanticModelRecordResponse
 from langbridge.runtime.persistence.db.dataset import DatasetColumnRecord, DatasetRecord
+from langbridge.runtime.models import SemanticModelMetadata
 from langbridge.orchestrator.runtime.agent_orchestrator_factory import (
     AgentOrchestratorFactory,
     AgentToolConfig,
@@ -27,13 +27,13 @@ class _StaticLLM:
 
 
 class _SemanticModelStore:
-    def __init__(self, entries: dict[uuid.UUID, SemanticModelRecordResponse]) -> None:
+    def __init__(self, entries: dict[uuid.UUID, SemanticModelMetadata]) -> None:
         self._entries = entries
 
-    async def get_by_id(self, model_id: uuid.UUID) -> SemanticModelRecordResponse | None:
+    async def get_by_id(self, model_id: uuid.UUID) -> SemanticModelMetadata | None:
         return self._entries.get(model_id)
 
-    async def get_by_ids(self, model_ids: list[uuid.UUID]) -> list[SemanticModelRecordResponse]:
+    async def get_by_ids(self, model_ids: list[uuid.UUID]) -> list[SemanticModelMetadata]:
         return [self._entries[model_id] for model_id in model_ids if model_id in self._entries]
 
 
@@ -108,7 +108,6 @@ def _build_dataset(
     return DatasetRecord(
         id=dataset_id,
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=uuid.uuid4(),
         created_by=None,
         updated_by=None,
@@ -164,9 +163,9 @@ def _build_columns(*, dataset: DatasetRecord) -> list[DatasetColumnRecord]:
 def _build_semantic_entry(
     *,
     model_id: uuid.UUID,
-    organization_id: uuid.UUID,
+    workspace_id: uuid.UUID,
     dataset: DatasetRecord,
-) -> SemanticModelRecordResponse:
+) -> SemanticModelMetadata:
     model = SemanticModel(
         version="1.0",
         name="orders_model",
@@ -180,13 +179,13 @@ def _build_semantic_entry(
         },
     )
     now = datetime.now(timezone.utc)
-    return SemanticModelRecordResponse(
+    return SemanticModelMetadata(
         id=model_id,
-        organization_id=organization_id,
-        project_id=None,
+        workspace_id=workspace_id,
         name="orders_model",
         description="Orders governed model",
         content_yaml=model.yml_dump(),
+        content_json=None,
         created_at=now,
         updated_at=now,
         connector_id=dataset.connection_id,
@@ -249,7 +248,7 @@ async def test_agent_orchestrator_factory_builds_dataset_backed_semantic_tool() 
     model_id = uuid.uuid4()
     semantic_entry = _build_semantic_entry(
         model_id=model_id,
-        organization_id=workspace_id,
+        workspace_id=workspace_id,
         dataset=dataset,
     )
     federated_tool = _FederatedQueryTool()

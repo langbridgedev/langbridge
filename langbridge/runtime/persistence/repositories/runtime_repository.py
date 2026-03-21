@@ -23,11 +23,11 @@ class RuntimeInstanceRepository(AsyncBaseRepository[RuntimeInstanceRecord]):
         result = await self._session.scalars(stmt)
         return result.one_or_none()
 
-    async def get_active_for_tenant(self, tenant_id: uuid.UUID) -> list[RuntimeInstanceRecord]:
+    async def get_active_for_workspace(self, workspace_id: uuid.UUID) -> list[RuntimeInstanceRecord]:
         stmt = (
             select(RuntimeInstanceRecord)
             .where(
-                RuntimeInstanceRecord.tenant_id == tenant_id,
+                RuntimeInstanceRecord.workspace_id == workspace_id,
                 RuntimeInstanceRecord.status == RuntimeInstanceStatus.active,
             )
             .order_by(RuntimeInstanceRecord.last_seen_at.desc().nullslast())
@@ -35,10 +35,10 @@ class RuntimeInstanceRepository(AsyncBaseRepository[RuntimeInstanceRecord]):
         result = await self._session.scalars(stmt)
         return list(result.all())
 
-    async def list_for_tenant(self, tenant_id: uuid.UUID) -> list[RuntimeInstanceRecord]:
+    async def list_for_workspace(self, workspace_id: uuid.UUID) -> list[RuntimeInstanceRecord]:
         stmt = (
             select(RuntimeInstanceRecord)
-            .where(RuntimeInstanceRecord.tenant_id == tenant_id)
+            .where(RuntimeInstanceRecord.workspace_id == workspace_id)
             .order_by(RuntimeInstanceRecord.last_seen_at.desc().nullslast())
         )
         result = await self._session.scalars(stmt)
@@ -61,17 +61,17 @@ class RuntimeRegistrationTokenRepository(AsyncBaseRepository[RuntimeRegistration
     async def create_token(
         self,
         *,
-        tenant_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         token_hash: str,
         expires_at: datetime,
-        created_by_user_id: uuid.UUID | None,
+        created_by_actor_id: uuid.UUID | None,
     ) -> RuntimeRegistrationTokenRecord:
         now = datetime.now(timezone.utc)
         record = RuntimeRegistrationTokenRecord(
-            tenant_id=tenant_id,
+            workspace_id=workspace_id,
             token_hash=token_hash,
             expires_at=expires_at,
-            created_by_user_id=created_by_user_id,
+            created_by_actor_id=created_by_actor_id,
             created_at=now,
         )
         self.add(record)

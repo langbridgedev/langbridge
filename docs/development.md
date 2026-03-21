@@ -1,22 +1,47 @@
 # Development
 
-This page is a short index for runtime development.
+This section documents development of the runtime repository.
+
+Use `langbridge/` for runtime work. Use `../langbridge-cloud` when the change is
+about hosted control-plane APIs, web surfaces, or hosted orchestration.
 
 ## Development Docs
 
-- Local development: `docs/development/local-dev.md`
-- Worker development: `docs/development/worker-dev.md`
-- Self-hosted runtime deployment: `docs/deployment/self-hosted.md`
-- Hybrid runtime deployment: `docs/deployment/hybrid.md`
+- `docs/development/local-dev.md`
+- `docs/development/worker-dev.md`
+- `docs/deployment/self-hosted.md`
+- `docs/deployment/hybrid.md`
 
-## Quick Commands
+## Common Commands
 
-- Install runtime dependencies: `pip install -r requirements.txt`
-- Run the worker: `python -m langbridge.apps.runtime_worker.main`
-- Run unit tests: `pytest -q tests/unit`
-- Start the local runtime stack: `docker compose up --build db redis worker`
+Install dependencies:
 
-## Notes
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-- SQL, semantic, dataset, and agent execution all run through the runtime worker.
-- Federated execution is the primary structured execution path in the runtime.
+Run the runtime host:
+
+```bash
+langbridge serve --config examples/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
+```
+
+Run the queued worker:
+
+```bash
+python -m langbridge.apps.runtime_worker.main
+```
+
+Run tests:
+
+```bash
+pytest -q tests
+```
+
+Bring up local containers:
+
+```bash
+docker compose up --build
+```

@@ -28,8 +28,7 @@ class QueryBuilderContext(BaseModel):
 class QueryBuilderCopilotRequest(BaseModel):
     """Incoming payload for the semantic query builder copilot."""
 
-    organization_id: UUID
-    project_id: Optional[UUID] = None
+    workspace_id: UUID
     semantic_model_id: UUID
     instructions: str = Field(..., min_length=1, description="What the user asked the copilot to do.")
     builder_state: SemanticQuery = Field(
@@ -48,7 +47,6 @@ class QueryBuilderCopilotRequest(BaseModel):
         default=None,
         description="Additional hints from the dashboard experience.",
     )
-
 
 class QueryBuilderCopilotResponse(BaseModel):
     """Structured response returned to the UI/agent."""

@@ -68,6 +68,7 @@ _BUILTIN_CONNECTOR_MODULES = (
 
 _builtin_plugins_loaded = False
 _builtin_connectors_loaded = False
+_entrypoint_plugins_loaded = False
 logger = getLogger(__name__)
 
 
@@ -101,6 +102,16 @@ def ensure_builtin_connectors_loaded() -> None:
     _builtin_connectors_loaded = True
 
 
+def ensure_entrypoint_plugins_loaded() -> None:
+    global _entrypoint_plugins_loaded
+
+    if _entrypoint_plugins_loaded:
+        return
+
+    _plugin_registry.load_entrypoints()
+    _entrypoint_plugins_loaded = True
+
+
 @dataclass(frozen=True, slots=True)
 class ConnectorPlugin:
     connector_type: ConnectorRuntimeType
@@ -126,14 +137,27 @@ class ConnectorPluginRegistry:
 
     def list(self) -> list[ConnectorPlugin]:
         return list(self._plugins.values())
-    
+
     def load_entrypoints(self, group: str = "langbridge.connectors") -> None:
         for ep in entry_points(group=group):
             obj = ep.load()
 
+            if isinstance(obj, ConnectorPlugin):
+                self.register(obj)
+                continue
+
+            if callable(obj):
+                plugin = obj()
+                if not isinstance(plugin, ConnectorPlugin):
+                    raise TypeError(
+                        f"Entry point '{ep.name}' returned an invalid plugin: {plugin!r}"
+                    )
+                self.register(plugin)
+                continue
+
             if not isinstance(obj, type):
                 raise TypeError(
-                    f"Entry point '{ep.name}' did not load a class: {obj!r}"
+                    f"Entry point '{ep.name}' did not load a supported plugin object: {obj!r}"
                 )
 
             if not issubclass(obj, ConnectorPlugin):
@@ -141,7 +165,7 @@ class ConnectorPluginRegistry:
                     f"Entry point '{ep.name}' must load a ConnectorPlugin subclass"
                 )
 
-            self.register(obj) # type: ignore
+            self.register(obj())  # type: ignore[call-arg]
 
 
 _plugin_registry = ConnectorPluginRegistry()
@@ -153,11 +177,13 @@ def register_connector_plugin(plugin: ConnectorPlugin) -> ConnectorPlugin:
 
 def get_connector_plugin(connector_type: ConnectorRuntimeType) -> ConnectorPlugin | None:
     ensure_builtin_plugins_loaded()
+    ensure_entrypoint_plugins_loaded()
     return _plugin_registry.get(connector_type)
 
 
 def list_connector_plugins() -> list[ConnectorPlugin]:
     ensure_builtin_plugins_loaded()
+    ensure_entrypoint_plugins_loaded()
     return _plugin_registry.list()
 
 def get_connector_config_factory(type_s: ConnectorType) -> Type[BaseConnectorConfigFactory]:
@@ -348,6 +374,7 @@ __all__ = [
     "SqlConnectorFactory",
     "VectorDBConnectorFactory",
     "ensure_builtin_connectors_loaded",
+    "ensure_entrypoint_plugins_loaded",
     "ensure_builtin_plugins_loaded",
     "get_connector_plugin",
     "list_connector_plugins",

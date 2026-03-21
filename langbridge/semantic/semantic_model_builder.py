@@ -43,7 +43,7 @@ class ConnectorCatalogService(Protocol):
 
 
 class SemanticModelBuilder:
-    """Builds a semantic data model across organization/project connectors."""
+    """Builds a semantic data model across connectors."""
 
     def __init__(
         self,

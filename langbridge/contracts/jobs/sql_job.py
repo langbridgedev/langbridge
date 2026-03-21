@@ -14,8 +14,7 @@ class CreateSqlJobRequest(_Base):
     job_type: JobType = JobType.SQL
     sql_job_id: uuid.UUID
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID
     workbench_mode: SqlWorkbenchMode = SqlWorkbenchMode.dataset
     connection_id: uuid.UUID | None = None
     execution_mode: Literal["single", "federated"] = "single"

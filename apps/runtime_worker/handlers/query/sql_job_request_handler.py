@@ -94,9 +94,8 @@ class SqlJobRequestHandler(BaseMessageHandler):
         job.updated_at = datetime.now(timezone.utc)
         runtime = RuntimeHost(
             context=RuntimeContext.build(
-                tenant_id=request.workspace_id,
                 workspace_id=request.workspace_id,
-                user_id=request.user_id,
+                actor_id=request.actor_id,
                 request_id=request.correlation_id,
             ),
             providers=RuntimeProviders(),

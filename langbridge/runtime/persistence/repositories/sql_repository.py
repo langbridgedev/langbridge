@@ -37,12 +37,12 @@ class SqlJobRepository(AsyncBaseRepository[SqlJobRecord]):
         self,
         *,
         workspace_id: uuid.UUID,
-        user_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
         limit: int = 100,
     ) -> list[SqlJobRecord]:
         query = select(SqlJobRecord).where(SqlJobRecord.workspace_id == workspace_id)
-        if user_id is not None:
-            query = query.where(SqlJobRecord.user_id == user_id)
+        if actor_id is not None:
+            query = query.where(SqlJobRecord.actor_id == actor_id)
         result = await self._session.scalars(
             query.order_by(SqlJobRecord.created_at.desc()).limit(max(1, limit))
         )
@@ -106,19 +106,19 @@ class SqlSavedQueryRepository(AsyncBaseRepository[SqlSavedQueryRecord]):
         self,
         *,
         workspace_id: uuid.UUID,
-        user_id: uuid.UUID,
+        actor_id: uuid.UUID,
         include_shared: bool = True,
     ) -> list[SqlSavedQueryRecord]:
         clauses = [SqlSavedQueryRecord.workspace_id == workspace_id]
         if include_shared:
             clauses.append(
                 or_(
-                    SqlSavedQueryRecord.created_by == user_id,
+                    SqlSavedQueryRecord.created_by_actor_id == actor_id,
                     SqlSavedQueryRecord.is_shared.is_(True),
                 )
             )
         else:
-            clauses.append(SqlSavedQueryRecord.created_by == user_id)
+            clauses.append(SqlSavedQueryRecord.created_by_actor_id == actor_id)
 
         result = await self._session.scalars(
             select(SqlSavedQueryRecord)

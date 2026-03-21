@@ -5,8 +5,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
+from langbridge.runtime.hosting.auth import RuntimeAuthConfig, RuntimeAuthResolver
 from langbridge.runtime.local_config import (
     ConfiguredLocalRuntimeHost,
     build_configured_local_runtime,
@@ -42,6 +43,7 @@ def create_runtime_api_app(
     *,
     config_path: str | Path | None = None,
     runtime_host: ConfiguredLocalRuntimeHost | None = None,
+    auth_config: RuntimeAuthConfig | None = None,
 ) -> FastAPI:
     host = runtime_host
     if host is None:
@@ -56,14 +58,18 @@ def create_runtime_api_app(
         openapi_url="/api/runtime/openapi.json",
     )
     app.state.runtime_host = host
+    app.state.runtime_auth = RuntimeAuthResolver(
+        config=auth_config or RuntimeAuthConfig.from_env(),
+        default_context=host.context,
+    )
 
     @app.get("/api/runtime/v1/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.get("/api/runtime/v1/info", response_model=RuntimeInfoResponse)
-    async def info() -> RuntimeInfoResponse:
-        configured_host = _require_configured_host(app.state.runtime_host)
+    async def info(request: Request) -> RuntimeInfoResponse:
+        configured_host = await _resolve_request_host(request)
         connector_items = await configured_host.list_connectors()
         capabilities = [
             "datasets.list",
@@ -86,40 +92,38 @@ def create_runtime_api_app(
             runtime_mode="configured_local",
             config_path=str(configured_host._config_path),
             workspace_id=configured_host.context.workspace_id,
-            organization_id=configured_host.context.tenant_id,
-            user_id=configured_host.context.user_id,
+            actor_id=configured_host.context.actor_id,
+            roles=list(configured_host.context.roles),
             default_semantic_model=configured_host._default_semantic_model_name,
             default_agent=configured_host._default_agent.config.name if configured_host._default_agent else None,
             capabilities=capabilities,
         )
 
     @app.get("/api/runtime/v1/datasets", response_model=RuntimeDatasetListResponse)
-    async def list_datasets() -> RuntimeDatasetListResponse:
-        configured_host = _require_configured_host(app.state.runtime_host)
+    async def list_datasets(request: Request) -> RuntimeDatasetListResponse:
+        configured_host = await _resolve_request_host(request)
         items = await configured_host.list_datasets()
         return RuntimeDatasetListResponse(items=items, total=len(items))
 
     @app.post("/api/runtime/v1/datasets/{dataset_ref}/preview", response_model=RuntimeDatasetPreviewResponse)
     async def preview_dataset(
+        request: Request,
         dataset_ref: str,
-        request: RuntimeDatasetPreviewRequest,
+        body: RuntimeDatasetPreviewRequest,
     ) -> RuntimeDatasetPreviewResponse:
-        configured_host = _require_configured_host(app.state.runtime_host)
+        configured_host = await _resolve_request_host(request)
         dataset_id = await _resolve_dataset_id(configured_host, dataset_ref)
-        workspace_id = request.workspace_id or configured_host.context.workspace_id
-        user_id = request.user_id or configured_host.context.user_id
         try:
             payload = await configured_host.query_dataset(
                 request=CreateDatasetPreviewJobRequest(
                     dataset_id=dataset_id,
-                    workspace_id=workspace_id,
-                    project_id=request.project_id,
-                    user_id=user_id,
-                    requested_limit=request.limit,
-                    enforced_limit=request.limit or 100,
-                    filters=request.filters,
-                    sort=request.sort,
-                    user_context=request.user_context,
+                    workspace_id=configured_host.context.workspace_id,
+                    actor_id=configured_host.context.actor_id,
+                    requested_limit=body.limit,
+                    enforced_limit=body.limit or 100,
+                    filters=body.filters,
+                    sort=body.sort,
+                    user_context=body.user_context,
                     correlation_id=configured_host.context.request_id,
                 )
             )
@@ -144,19 +148,22 @@ def create_runtime_api_app(
         )
 
     @app.post("/api/runtime/v1/semantic/query", response_model=RuntimeSemanticQueryResponse)
-    async def query_semantic(request: RuntimeSemanticQueryRequest) -> RuntimeSemanticQueryResponse:
-        configured_host = _require_configured_host(app.state.runtime_host)
-        if not request.semantic_models:
+    async def query_semantic(
+        request: Request,
+        body: RuntimeSemanticQueryRequest,
+    ) -> RuntimeSemanticQueryResponse:
+        configured_host = await _resolve_request_host(request)
+        if not body.semantic_models:
             raise HTTPException(status_code=400, detail="semantic_models is required.")
         try:
             payload = await configured_host.query_semantic_models(
-                semantic_models=request.semantic_models,
-                measures=list(request.measures or []),
-                dimensions=list(request.dimensions or []),
-                filters=list(request.filters or []),
-                time_dimensions=list(request.time_dimensions or []),
-                limit=request.limit,
-                order=request.order,
+                semantic_models=body.semantic_models,
+                measures=list(body.measures or []),
+                dimensions=list(body.dimensions or []),
+                filters=list(body.filters or []),
+                time_dimensions=list(body.time_dimensions or []),
+                limit=body.limit,
+                order=body.order,
             )
         except Exception as exc:
             return RuntimeSemanticQueryResponse(
@@ -180,21 +187,27 @@ def create_runtime_api_app(
         )
 
     @app.post("/api/runtime/v1/sql/query", response_model=RuntimeSqlQueryResponse)
-    async def query_sql(request: RuntimeSqlQueryRequest) -> RuntimeSqlQueryResponse:
-        configured_host = _require_configured_host(app.state.runtime_host)
-        return await _execute_runtime_sql(configured_host, request)
+    async def query_sql(
+        request: Request,
+        body: RuntimeSqlQueryRequest,
+    ) -> RuntimeSqlQueryResponse:
+        configured_host = await _resolve_request_host(request)
+        return await _execute_runtime_sql(configured_host, body)
 
     @app.post("/api/runtime/v1/agents/ask", response_model=RuntimeAgentAskResponse)
-    async def ask_agent(request: RuntimeAgentAskRequest) -> RuntimeAgentAskResponse:
-        configured_host = _require_configured_host(app.state.runtime_host)
+    async def ask_agent(
+        request: Request,
+        body: RuntimeAgentAskRequest,
+    ) -> RuntimeAgentAskResponse:
+        configured_host = await _resolve_request_host(request)
         agent_name = _resolve_agent_name(
             configured_host,
-            agent_id=request.agent_id,
-            agent_name=request.agent_name,
+            agent_id=body.agent_id,
+            agent_name=body.agent_name,
         )
         try:
-            payload = await configured_host.ask_agent(
-                prompt=request.message,
+            result = await configured_host.ask_agent(
+                prompt=body.message,
                 agent_name=agent_name,
             )
         except Exception as exc:
@@ -202,22 +215,22 @@ def create_runtime_api_app(
                 status="failed",
                 error={"message": str(exc)},
             )
-        payload_thread_id = payload.get("thread_id")
-        payload_job_id = payload.get("job_id")
+        payload_thread_id = result.get("thread_id")
+        payload_job_id = result.get("job_id")
         return RuntimeAgentAskResponse(
-            thread_id=uuid.UUID(str(payload_thread_id)) if payload_thread_id is not None else request.thread_id,
+            thread_id=uuid.UUID(str(payload_thread_id)) if payload_thread_id is not None else body.thread_id,
             status="succeeded",
             job_id=uuid.UUID(str(payload_job_id)) if payload_job_id is not None else None,
-            summary=payload.get("summary"),
-            result=payload.get("result"),
-            visualization=payload.get("visualization"),
-            error=payload.get("error"),
-            events=list(payload.get("events", [])),
+            summary=result.get("summary"),
+            result=result.get("result"),
+            visualization=result.get("visualization"),
+            error=result.get("error"),
+            events=list(result.get("events", [])),
         )
 
     @app.get("/api/runtime/v1/connectors", response_model=RuntimeConnectorListResponse)
-    async def list_connectors() -> RuntimeConnectorListResponse:
-        configured_host = _require_configured_host(app.state.runtime_host)
+    async def list_connectors(request: Request) -> RuntimeConnectorListResponse:
+        configured_host = await _resolve_request_host(request)
         items = await configured_host.list_connectors()
         return RuntimeConnectorListResponse(items=items, total=len(items))
 
@@ -225,8 +238,8 @@ def create_runtime_api_app(
         "/api/runtime/v1/connectors/{connector_name}/sync/resources",
         response_model=RuntimeSyncResourceListResponse,
     )
-    async def list_sync_resources(connector_name: str) -> RuntimeSyncResourceListResponse:
-        configured_host = _require_configured_host(app.state.runtime_host)
+    async def list_sync_resources(request: Request, connector_name: str) -> RuntimeSyncResourceListResponse:
+        configured_host = await _resolve_request_host(request)
         try:
             items = await configured_host.list_sync_resources(connector_name=connector_name)
         except ValueError as exc:
@@ -237,8 +250,8 @@ def create_runtime_api_app(
         "/api/runtime/v1/connectors/{connector_name}/sync/states",
         response_model=RuntimeSyncStateListResponse,
     )
-    async def list_sync_states(connector_name: str) -> RuntimeSyncStateListResponse:
-        configured_host = _require_configured_host(app.state.runtime_host)
+    async def list_sync_states(request: Request, connector_name: str) -> RuntimeSyncStateListResponse:
+        configured_host = await _resolve_request_host(request)
         try:
             items = await configured_host.list_sync_states(connector_name=connector_name)
         except ValueError as exc:
@@ -249,20 +262,24 @@ def create_runtime_api_app(
         "/api/runtime/v1/connectors/{connector_name}/sync",
         response_model=RuntimeSyncResponse,
     )
-    async def sync_connector(connector_name: str, request: RuntimeSyncRequest) -> RuntimeSyncResponse:
-        configured_host = _require_configured_host(app.state.runtime_host)
+    async def sync_connector(
+        request: Request,
+        connector_name: str,
+        body: RuntimeSyncRequest,
+    ) -> RuntimeSyncResponse:
+        configured_host = await _resolve_request_host(request)
         try:
             payload = await configured_host.sync_connector_resources(
                 connector_name=connector_name,
-                resources=list(request.resource_names or []),
-                sync_mode=request.sync_mode,
-                force_full_refresh=bool(request.force_full_refresh),
+                resources=list(body.resource_names or []),
+                sync_mode=body.sync_mode,
+                force_full_refresh=bool(body.force_full_refresh),
             )
         except Exception as exc:
             return RuntimeSyncResponse(
                 status="failed",
                 connector_name=connector_name,
-                sync_mode=request.sync_mode,
+                sync_mode=body.sync_mode,
                 error=str(exc),
             )
         return RuntimeSyncResponse.model_validate(payload)
@@ -283,6 +300,15 @@ def _require_configured_host(runtime_host: RuntimeHost) -> ConfiguredLocalRuntim
     raise HTTPException(
         status_code=501,
         detail="This runtime host only supports configured local runtimes in the current release.",
+    )
+
+
+async def _resolve_request_host(request: Request) -> ConfiguredLocalRuntimeHost:
+    configured_host = _require_configured_host(request.app.state.runtime_host)
+    auth_resolver = request.app.state.runtime_auth
+    principal = await auth_resolver.authenticate(request)
+    return configured_host.with_context(
+        auth_resolver.build_context(request=request, principal=principal)
     )
 
 
@@ -361,14 +387,11 @@ async def _execute_runtime_sql(
             generated_sql=payload.get("generated_sql"),
         )
 
-    workspace_id = request.workspace_id or runtime_host.context.workspace_id
-    user_id = request.user_id or runtime_host.context.user_id
     sql_job_id = uuid.uuid4()
     create_request = CreateSqlJobRequest(
         sql_job_id=sql_job_id,
-        workspace_id=workspace_id,
-        project_id=request.project_id,
-        user_id=user_id,
+        workspace_id=runtime_host.context.workspace_id,
+        actor_id=runtime_host.context.actor_id,
         workbench_mode=(SqlWorkbenchMode.dataset if selected_datasets else SqlWorkbenchMode.direct_sql),
         connection_id=request.connection_id,
         execution_mode=("federated" if selected_datasets else "single"),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -27,10 +28,10 @@ from langbridge import LangbridgeClient
 
 
 class _FakeRuntimeHost:
-    def __init__(self, *, user_id: uuid.UUID) -> None:
+    def __init__(self, *, actor_id: uuid.UUID) -> None:
         self.context = SimpleNamespace(
             workspace_id=uuid.uuid4(),
-            user_id=user_id,
+            actor_id=actor_id,
             request_id="sdk-local-request",
         )
         self.execute_sql_calls: list[object] = []
@@ -318,13 +319,13 @@ def test_remote_sdk_list_datasets() -> None:
 
 def test_remote_sdk_sql_query_polls_job_and_fetches_results() -> None:
     workspace_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     sql_job_id = uuid.uuid4()
 
     job_response = SqlJobResponse(
         id=sql_job_id,
         workspace_id=workspace_id,
-        user_id=user_id,
+        actor_id=actor_id,
         workbench_mode=SqlWorkbenchMode.direct_sql,
         connection_id=uuid.uuid4(),
         selected_datasets=[],
@@ -378,8 +379,7 @@ def test_remote_sdk_sql_query_polls_job_and_fetches_results() -> None:
 
 
 def test_remote_sdk_agents_ask_creates_thread_and_polls_job() -> None:
-    organization_id = uuid.uuid4()
-    project_id = uuid.uuid4()
+    workspace_id = uuid.uuid4()
     thread_id = uuid.uuid4()
     agent_id = uuid.uuid4()
     job_id = uuid.uuid4()
@@ -396,14 +396,14 @@ def test_remote_sdk_agents_ask_creates_thread_and_polls_job() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.startswith("/api/runtime/v1/"):
             return httpx.Response(404, json={"detail": "not found"})
-        if request.method == "POST" and request.url.path == f"/api/v1/thread/{organization_id}/":
+        if request.method == "POST" and request.url.path == f"/api/v1/thread/{workspace_id}/":
             return httpx.Response(
                 201,
-                json=ThreadResponse(id=thread_id, project_id=project_id, title="sdk").model_dump(mode="json"),
+                json=ThreadResponse(id=thread_id, workspace_id=workspace_id, title="sdk").model_dump(mode="json"),
             )
-        if request.method == "POST" and request.url.path == f"/api/v1/thread/{organization_id}/{thread_id}/chat":
+        if request.method == "POST" and request.url.path == f"/api/v1/thread/{workspace_id}/{thread_id}/chat":
             return httpx.Response(200, json={"job_id": str(job_id), "job_status": "queued"})
-        if request.method == "GET" and request.url.path == f"/api/v1/jobs/{organization_id}/{job_id}":
+        if request.method == "GET" and request.url.path == f"/api/v1/jobs/{workspace_id}/{job_id}":
             return httpx.Response(200, json=state.model_dump(mode="json"))
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
@@ -411,8 +411,7 @@ def test_remote_sdk_agents_ask_creates_thread_and_polls_job() -> None:
     client = LangbridgeClient.for_remote_api(
         base_url="https://sdk.test",
         http_client=http_client,
-        default_organization_id=organization_id,
-        default_project_id=project_id,
+        default_workspace_id=workspace_id,
     )
 
     result = client.agents.ask(agent_id=agent_id, message="hello")
@@ -424,12 +423,12 @@ def test_remote_sdk_agents_ask_creates_thread_and_polls_job() -> None:
 
 
 def test_local_sdk_dataset_and_sql_queries_use_runtime_adapter() -> None:
-    user_id = uuid.uuid4()
-    runtime_host = _FakeRuntimeHost(user_id=user_id)
+    actor_id = uuid.uuid4()
+    runtime_host = _FakeRuntimeHost(actor_id=actor_id)
     client = LangbridgeClient.for_local_runtime(
         runtime_host=runtime_host,
         default_workspace_id=runtime_host.context.workspace_id,
-        default_user_id=user_id,
+        default_actor_id=actor_id,
     )
 
     dataset_result = client.datasets.query(dataset_id=uuid.uuid4(), limit=25)
@@ -444,12 +443,12 @@ def test_local_sdk_dataset_and_sql_queries_use_runtime_adapter() -> None:
 
 
 def test_local_sdk_semantic_queries_use_dedicated_semantic_client() -> None:
-    user_id = uuid.uuid4()
-    runtime_host = _FakeRuntimeHost(user_id=user_id)
+    actor_id = uuid.uuid4()
+    runtime_host = _FakeRuntimeHost(actor_id=actor_id)
     client = LangbridgeClient.for_local_runtime(
         runtime_host=runtime_host,
         default_workspace_id=runtime_host.context.workspace_id,
-        default_user_id=user_id,
+        default_actor_id=actor_id,
     )
 
     result = client.semantic.query(
@@ -477,12 +476,12 @@ def test_local_sdk_semantic_queries_use_dedicated_semantic_client() -> None:
 
 
 def test_dataset_client_rejects_semantic_style_arguments() -> None:
-    user_id = uuid.uuid4()
-    runtime_host = _FakeRuntimeHost(user_id=user_id)
+    actor_id = uuid.uuid4()
+    runtime_host = _FakeRuntimeHost(actor_id=actor_id)
     client = LangbridgeClient.for_local_runtime(
         runtime_host=runtime_host,
         default_workspace_id=runtime_host.context.workspace_id,
-        default_user_id=user_id,
+        default_actor_id=actor_id,
     )
 
     try:
@@ -494,12 +493,12 @@ def test_dataset_client_rejects_semantic_style_arguments() -> None:
 
 
 def test_local_sdk_dataset_backed_sql_uses_runtime_sql_service() -> None:
-    user_id = uuid.uuid4()
-    runtime_host = _FakeRuntimeHost(user_id=user_id)
+    actor_id = uuid.uuid4()
+    runtime_host = _FakeRuntimeHost(actor_id=actor_id)
     client = LangbridgeClient.for_local_runtime(
         runtime_host=runtime_host,
         default_workspace_id=runtime_host.context.workspace_id,
-        default_user_id=user_id,
+        default_actor_id=actor_id,
     )
 
     result = client.sql.query(
@@ -518,15 +517,12 @@ def test_local_sdk_dataset_backed_sql_uses_runtime_sql_service() -> None:
 
 
 def test_local_sdk_agents_ask_uses_runtime_host() -> None:
-    user_id = uuid.uuid4()
-    organization_id = uuid.uuid4()
-    project_id = uuid.uuid4()
-    runtime_host = _FakeRuntimeHost(user_id=user_id)
+    actor_id = uuid.uuid4()
+    runtime_host = _FakeRuntimeHost(actor_id=actor_id)
     client = LangbridgeClient.for_local_runtime(
         runtime_host=runtime_host,
-        default_organization_id=organization_id,
-        default_project_id=project_id,
-        default_user_id=user_id,
+        default_workspace_id=runtime_host.context.workspace_id,
+        default_actor_id=actor_id,
     )
 
     result = client.agents.ask(agent_id=uuid.uuid4(), message="hello local")
@@ -537,13 +533,143 @@ def test_local_sdk_agents_ask_uses_runtime_host() -> None:
     assert result.job_id is not None
 
 
+def test_remote_sdk_runtime_host_requests_use_runtime_payload_shapes() -> None:
+    workspace_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+    dataset_id = uuid.uuid4()
+    thread_id = uuid.uuid4()
+    job_id = uuid.uuid4()
+
+    def _payload(request: httpx.Request) -> dict[str, object]:
+        return json.loads(request.content.decode("utf-8")) if request.content else {}
+
+    def _runtime_payload(request: httpx.Request) -> dict[str, object]:
+        payload = _payload(request)
+        return payload
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/api/runtime/v1/info":
+            return httpx.Response(
+                200,
+                json={
+                    "runtime_mode": "configured_local",
+                    "workspace_id": str(workspace_id),
+                    "actor_id": str(actor_id),
+                    "roles": ["runtime:viewer"],
+                    "capabilities": [
+                        "datasets.preview",
+                        "semantic.query",
+                        "sql.query",
+                        "agents.ask",
+                    ],
+                },
+            )
+        if request.method == "POST" and request.url.path == f"/api/runtime/v1/datasets/{dataset_id}/preview":
+            payload = _runtime_payload(request)
+            assert payload == {"limit": 5, "filters": {}, "sort": [], "user_context": {}}
+            return httpx.Response(
+                200,
+                json={
+                    "dataset_id": str(dataset_id),
+                    "status": "succeeded",
+                    "columns": [{"name": "order_id", "data_type": "integer"}],
+                    "rows": [{"order_id": 1}],
+                    "row_count_preview": 1,
+                    "effective_limit": 5,
+                    "redaction_applied": False,
+                },
+            )
+        if request.method == "POST" and request.url.path == "/api/runtime/v1/semantic/query":
+            payload = _runtime_payload(request)
+            assert payload == {
+                "semantic_models": ["commerce_performance"],
+                "measures": ["shopify_orders.net_sales"],
+                "dimensions": ["shopify_orders.country"],
+                "filters": [],
+                "time_dimensions": [],
+                "limit": 5,
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "status": "succeeded",
+                    "semantic_model_ids": [],
+                    "data": [{"shopify_orders.country": "United Kingdom"}],
+                    "annotations": [],
+                },
+            )
+        if request.method == "POST" and request.url.path == "/api/runtime/v1/sql/query":
+            payload = _runtime_payload(request)
+            assert payload == {
+                "query": "select 7 as value",
+                "connection_name": "commerce_demo",
+                "query_dialect": "tsql",
+                "params": {},
+                "selected_datasets": [],
+                "explain": False,
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "sql_job_id": str(uuid.uuid4()),
+                    "status": "succeeded",
+                    "columns": [{"name": "value", "type": "integer"}],
+                    "rows": [{"value": 7}],
+                    "row_count_preview": 1,
+                    "redaction_applied": False,
+                    "query": "select 7 as value",
+                },
+            )
+        if request.method == "POST" and request.url.path == "/api/runtime/v1/agents/ask":
+            payload = _runtime_payload(request)
+            assert payload == {
+                "message": "hello runtime",
+                "agent_name": "commerce_analyst",
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "thread_id": str(thread_id),
+                    "status": "succeeded",
+                    "job_id": str(job_id),
+                    "summary": "done",
+                    "result": {"text": "hello"},
+                    "events": [],
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://sdk.test")
+    client = LangbridgeClient.remote(
+        base_url="https://sdk.test",
+        http_client=http_client,
+    )
+
+    dataset_result = client.datasets.query(dataset_id=dataset_id, limit=5)
+    semantic_result = client.semantic.query(
+        "commerce_performance",
+        measures=["shopify_orders.net_sales"],
+        dimensions=["shopify_orders.country"],
+        limit=5,
+    )
+    sql_result = client.sql.query(query="select 7 as value", connection_name="commerce_demo")
+    agent_result = client.agents.ask(message="hello runtime", agent_name="commerce_analyst")
+
+    assert dataset_result.status == "succeeded"
+    assert semantic_result.status == "succeeded"
+    assert sql_result.status == "succeeded"
+    assert agent_result.status == "succeeded"
+    assert agent_result.thread_id == thread_id
+    assert agent_result.job_id == job_id
+
+
 def test_local_sdk_sync_clients_use_runtime_host() -> None:
-    user_id = uuid.uuid4()
-    runtime_host = _FakeRuntimeHost(user_id=user_id)
+    actor_id = uuid.uuid4()
+    runtime_host = _FakeRuntimeHost(actor_id=actor_id)
     client = LangbridgeClient.for_local_runtime(
         runtime_host=runtime_host,
         default_workspace_id=runtime_host.context.workspace_id,
-        default_user_id=user_id,
+        default_actor_id=actor_id,
     )
 
     connectors = client.connectors.list()

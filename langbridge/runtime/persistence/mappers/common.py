@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import UUID
 
 
 def as_dict(value: Any) -> dict[str, Any]:
@@ -21,22 +22,4 @@ def as_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
-def resolve_org_id(value: Any) -> Any:
-    if getattr(value, "organization_id", None) is not None:
-        return value.organization_id
-    organizations = getattr(value, "organizations", None) or []
-    if organizations:
-        return getattr(organizations[0], "id", None)
-    return None
-
-
-def resolve_project_id(value: Any) -> Any:
-    if getattr(value, "project_id", None) is not None:
-        return value.project_id
-    projects = getattr(value, "projects", None) or []
-    if projects:
-        return getattr(projects[0], "id", None)
-    return None
-
-
-__all__ = ["as_dict", "resolve_org_id", "resolve_project_id"]
+__all__ = ["as_dict"]

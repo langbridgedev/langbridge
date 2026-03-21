@@ -102,7 +102,6 @@ class SqlFederatedDatasetReference(SqlSelectedDataset):
 
 class SqlExecuteRequest(_Base):
     workspace_id: UUID
-    project_id: UUID | None = None
     workbench_mode: SqlWorkbenchMode = SqlWorkbenchMode.dataset
     connection_id: UUID | None = None
     federated: bool | None = None
@@ -177,8 +176,7 @@ class SqlJobResultArtifactResponse(_Base):
 class SqlJobResponse(_Base):
     id: UUID
     workspace_id: UUID
-    project_id: UUID | None = None
-    user_id: UUID
+    actor_id: UUID
     workbench_mode: SqlWorkbenchMode = SqlWorkbenchMode.dataset
     connection_id: UUID | None = None
     selected_datasets: list[SqlSelectedDataset] = Field(default_factory=list)
@@ -223,7 +221,6 @@ class SqlHistoryResponse(_Base):
 
 class SqlSavedQueryCreateRequest(_Base):
     workspace_id: UUID
-    project_id: UUID | None = None
     workbench_mode: SqlWorkbenchMode = SqlWorkbenchMode.dataset
     connection_id: UUID | None = None
     selected_datasets: list[SqlSelectedDataset] = Field(default_factory=list)
@@ -252,7 +249,6 @@ class SqlSavedQueryCreateRequest(_Base):
 
 class SqlSavedQueryUpdateRequest(_Base):
     workspace_id: UUID
-    project_id: UUID | None = None
     workbench_mode: SqlWorkbenchMode | None = None
     connection_id: UUID | None = None
     selected_datasets: list[SqlSelectedDataset] | None = None
@@ -268,7 +264,6 @@ class SqlSavedQueryUpdateRequest(_Base):
 class SqlSavedQueryResponse(_Base):
     id: UUID
     workspace_id: UUID
-    project_id: UUID | None = None
     created_by: UUID
     updated_by: UUID
     workbench_mode: SqlWorkbenchMode = SqlWorkbenchMode.dataset

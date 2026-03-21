@@ -40,12 +40,16 @@ class CachedDatasetMetadataProvider(DatasetMetadataProvider):
 class CachedConnectorMetadataProvider(ConnectorMetadataProvider):
     def __init__(self, inner: ConnectorMetadataProvider) -> None:
         self._inner = inner
-        self._connectors: dict[uuid.UUID, Any | None] = {}
+        self._connectors: dict[tuple[uuid.UUID, uuid.UUID], Any | None] = {}
 
-    async def get_connector(self, connector_id) -> Any | None:
-        if connector_id not in self._connectors:
-            self._connectors[connector_id] = await self._inner.get_connector(connector_id)
-        return self._connectors[connector_id]
+    async def get_connector(self, *, workspace_id, connector_id) -> Any | None:
+        key = (workspace_id, connector_id)
+        if key not in self._connectors:
+            self._connectors[key] = await self._inner.get_connector(
+                workspace_id=workspace_id,
+                connector_id=connector_id,
+            )
+        return self._connectors[key]
 
 
 class CachedSemanticModelMetadataProvider(SemanticModelMetadataProvider):
@@ -53,11 +57,11 @@ class CachedSemanticModelMetadataProvider(SemanticModelMetadataProvider):
         self._inner = inner
         self._models: dict[tuple[uuid.UUID, uuid.UUID], Any | None] = {}
 
-    async def get_semantic_model(self, *, organization_id, semantic_model_id) -> Any | None:
-        key = (organization_id, semantic_model_id)
+    async def get_semantic_model(self, *, workspace_id, semantic_model_id) -> Any | None:
+        key = (workspace_id, semantic_model_id)
         if key not in self._models:
             self._models[key] = await self._inner.get_semantic_model(
-                organization_id=organization_id,
+                workspace_id=workspace_id,
                 semantic_model_id=semantic_model_id,
             )
         return self._models[key]

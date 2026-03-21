@@ -1,11 +1,17 @@
 # Documentation Index
 
-This documentation set describes the public Langbridge runtime.
+These docs describe the current Langbridge runtime product.
 
-Langbridge is a portable execution layer for connecting data to LLM, semantic,
-and analytical workloads. The docs in this repository focus on runtime behavior,
-runtime packages, connectors, datasets, federation, and deployment of the runtime
-itself.
+`langbridge/` owns the runtime: runtime hosting, runtime identity, connectors,
+datasets, semantic query, federated query, and runtime-safe orchestration.
+`langbridge-cloud/` is the separate cloud and control-plane product.
+
+## Start Here
+
+- `docs/architecture/runtime-boundary.md`
+- `docs/deployment/self-hosted.md`
+- `docs/development/local-dev.md`
+- `langbridge/runtime/README.md`
 
 ## Architecture
 
@@ -25,7 +31,7 @@ itself.
 - `docs/features/agents.md`
 - `docs/features/api-connectors.md`
 
-## Data Model
+## Runtime Data Model
 
 - `docs/semantic-model.md`
 - `docs/datasets.md`
@@ -41,6 +47,6 @@ itself.
 - `docs/development/local-dev.md`
 - `docs/development/worker-dev.md`
 
-## Runtime Interfaces
+## Interfaces
 
 - `docs/api.md`

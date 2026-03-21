@@ -1,10 +1,3 @@
-from langbridge.runtime.providers.control_plane import (
-    ControlPlaneApiClient,
-    ControlPlaneApiDatasetProvider,
-    ControlPlaneApiConnectorProvider,
-    ControlPlaneApiSemanticModelProvider,
-    ControlPlaneApiSyncStateProvider,
-)
 from langbridge.runtime.providers.caching import (
     CachedConnectorMetadataProvider,
     CachedDatasetMetadataProvider,
@@ -44,11 +37,6 @@ __all__ = [
     "CachedConnectorMetadataProvider",
     "CachedDatasetMetadataProvider",
     "CachedSemanticModelMetadataProvider",
-    "ControlPlaneApiClient",
-    "ControlPlaneApiDatasetProvider",
-    "ControlPlaneApiConnectorProvider",
-    "ControlPlaneApiSemanticModelProvider",
-    "ControlPlaneApiSyncStateProvider",
     "ConnectorMetadataProvider",
     "CredentialProvider",
     "DatasetMetadataProvider",

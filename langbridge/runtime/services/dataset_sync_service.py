@@ -125,8 +125,7 @@ class ConnectorSyncRuntime:
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID,
+        actor_id: uuid.UUID,
         connection_id: uuid.UUID,
         connector_record,
         connector_type: ConnectorRuntimeType,
@@ -171,8 +170,7 @@ class ConnectorSyncRuntime:
         materialized.append(
             await self._materialize_dataset(
                 workspace_id=workspace_id,
-                project_id=project_id,
-                user_id=user_id,
+                actor_id=actor_id,
                 connection_id=connection_id,
                 connector_record=connector_record,
                 connector_type=connector_type,
@@ -188,10 +186,9 @@ class ConnectorSyncRuntime:
         )
         for child_name, rows in child_rows.items():
             materialized.append(
-            await self._materialize_dataset(
+                await self._materialize_dataset(
                     workspace_id=workspace_id,
-                    project_id=project_id,
-                    user_id=user_id,
+                    actor_id=actor_id,
                     connection_id=connection_id,
                     connector_record=connector_record,
                     connector_type=connector_type,
@@ -257,8 +254,7 @@ class ConnectorSyncRuntime:
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
-        user_id: uuid.UUID,
+        actor_id: uuid.UUID,
         connection_id: uuid.UUID,
         connector_record,
         connector_type: ConnectorRuntimeType,
@@ -323,10 +319,9 @@ class ConnectorSyncRuntime:
             dataset = DatasetMetadata(
                 id=uuid.uuid4(),
                 workspace_id=workspace_id,
-                project_id=project_id,
                 connection_id=connection_id,
-                created_by=user_id,
-                updated_by=user_id,
+                created_by=actor_id,
+                updated_by=actor_id,
                 name=dataset_name,
                 sql_alias=self._dataset_sql_alias(dataset_name),
                 description=self._dataset_description(connector_record.name, resource_name, parent_resource_name),
@@ -356,9 +351,8 @@ class ConnectorSyncRuntime:
             self._dataset_repository.add(dataset)
             change_summary = f"Initial sync materialized {resource_name}."
         else:
-            dataset.project_id = project_id
             dataset.connection_id = connection_id
-            dataset.updated_by = user_id
+            dataset.updated_by = actor_id
             dataset.name = dataset_name
             dataset.description = self._dataset_description(
                 connector_record.name,
@@ -390,7 +384,7 @@ class ConnectorSyncRuntime:
         await self._create_dataset_revision(
             dataset=dataset,
             policy=policy,
-            created_by=user_id,
+            created_by=actor_id,
             change_summary=change_summary,
         )
         await self._replace_dataset_lineage(dataset=dataset)
@@ -604,7 +598,6 @@ class ConnectorSyncRuntime:
         return {
             "id": str(dataset.id),
             "workspace_id": str(dataset.workspace_id),
-            "project_id": str(dataset.project_id) if dataset.project_id else None,
             "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
             "name": dataset.name,
             "description": dataset.description,

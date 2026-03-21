@@ -35,7 +35,6 @@ class DatasetRepository(AsyncBaseRepository[DatasetRecord]):
         self,
         *,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None = None,
         search: str | None = None,
         tags: Iterable[str] | None = None,
         dataset_types: Iterable[str] | None = None,
@@ -43,10 +42,6 @@ class DatasetRepository(AsyncBaseRepository[DatasetRecord]):
         offset: int = 0,
     ) -> list[DatasetRecord]:
         query = self._select_with_relationships().where(DatasetRecord.workspace_id == workspace_id)
-        if project_id is not None:
-            query = query.where(
-                or_(DatasetRecord.project_id == project_id, DatasetRecord.project_id.is_(None))
-            )
         if search:
             pattern = f"%{search.strip().lower()}%"
             query = query.where(

@@ -34,10 +34,10 @@ class ConversationMemoryRepository(AsyncBaseRepository[ConversationMemoryItem]):
         self,
         *,
         thread_id: uuid.UUID,
-        user_id: Optional[uuid.UUID],
         category: str,
         content: str,
         metadata_json: Optional[dict[str, Any]] = None,
+        actor_id: Optional[uuid.UUID] = None,
     ) -> Optional[ConversationMemoryItem]:
         clean_content = str(content or "").strip()
         if not clean_content:
@@ -51,7 +51,7 @@ class ConversationMemoryRepository(AsyncBaseRepository[ConversationMemoryItem]):
         record = ConversationMemoryItem(
             id=uuid.uuid4(),
             thread_id=thread_id,
-            user_id=user_id,
+            actor_id=actor_id,
             category=category_enum,
             content=clean_content,
             metadata_json=metadata_json or {},

@@ -1,73 +1,114 @@
 # Semantic Model Guide
 
-The canonical semantic model is defined in:
-- `langbridge/packages/semantic/langbridge_semantic/model.py`
+The standard semantic model contract lives in:
 
-All runtime paths should normalize incoming payloads to this schema.
+- `langbridge/semantic/model.py`
+- `langbridge/semantic/loader.py`
 
-## Canonical Fields
+The runtime uses these modules as the canonical semantic schema and normalization
+path.
 
-- `version`: string
-- `name`: optional string
-- `connector`: optional string
-- `dialect`: optional string
-- `description`: optional string
-- `tags`: optional list of strings
-- `tables`: map of table key to `Table`
-- `relationships`: optional list of `Relationship`
-- `metrics`: optional map of metric key to `Metric`
+## Standard Semantic Model
 
-## Table
+Top-level fields:
 
-- `dataset_id`: optional dataset reference (preferred for new models)
-- `schema`: database schema name
-- `name`: physical table name
-- `description`: optional
-- `synonyms`: optional list
-- `dimensions`: optional list of `Dimension`
-- `measures`: optional list of `Measure`
-- `filters`: optional map of filter name to `TableFilter`
+- `version`
+- `name`
+- `connector`
+- `dialect`
+- `description`
+- `tags`
+- `datasets`
+- `relationships`
+- `metrics`
 
-Compatibility rules:
-- If `dataset_id` is present, execution resolves table bindings from the referenced dataset.
-- If `dataset_id` is absent, execution uses legacy physical table binding (`schema` + `name`).
+`datasets` is the canonical field name. `tables` is still accepted as a legacy
+alias and normalized by the loader.
+
+## Dataset Fields
+
+Each dataset entry can define:
+
+- `dataset_id`
+- `relation_name`
+- `schema_name`
+- `catalog_name`
+- `description`
+- `synonyms`
+- `dimensions`
+- `measures`
+- `filters`
+
+Useful compatibility aliases that are still normalized:
+
+- `datasetId` -> `dataset_id`
+- `relationName` or `name` -> `relation_name`
+- `schemaName` or `schema` -> `schema_name`
+- `catalogName` or `catalog` -> `catalog_name`
+
+For runtime-backed models, `dataset_id` is the preferred binding. `relation_name`
+is still used as the relation name exposed to compilation and execution.
 
 ## Dimension
 
-- `name`, `type`, `primary_key`
-- `description`, `alias`, `synonyms`
-- `vectorized`: boolean
-- `vector_reference`: string reference for managed vector stores
-- `vector_index`: metadata payload used by semantic search
+Fields:
+
+- `name`
+- `expression`
+- `type`
+- `primary_key`
+- `alias`
+- `description`
+- `synonyms`
+- `vectorized`
+- `vector_reference`
+- `vector_index`
 
 ## Measure
 
-- `name`, `type`
-- `aggregation`: optional
-- `description`, `synonyms`
+Fields:
+
+- `name`
+- `expression`
+- `type`
+- `description`
+- `aggregation`
+- `synonyms`
 
 ## Relationship
 
+Canonical relationship fields:
+
 - `name`
-- `from_`: table key
-- `to`: table key
-- `type`: one_to_many, many_to_one, one_to_one, many_to_many, inner, left, right, full
-- `join_on`: join condition string
+- `source_dataset`
+- `source_field`
+- `target_dataset`
+- `target_field`
+- `operator`
+- `type`
+
+Legacy forms such as `from_`, `to`, `join_on`, `joinOn`, `on`, and `condition`
+are still normalized into the canonical relationship shape.
 
 ## Metric
 
-- `expression`: SQL expression referencing table keys
-- `description`: optional
+Fields:
 
-## Legacy Payload Support
+- `expression`
+- `description`
 
-Loader:
-- `langbridge/packages/semantic/langbridge_semantic/loader.py`
+## Unified Semantic Models
 
-Supported input styles include legacy and unified payload shapes, both normalized into canonical model.
+Unified semantic models are a separate contract loaded through:
 
-## Change Rules
+- `load_unified_semantic_model(...)`
+- `parse_unified_semantic_model_payload(...)`
 
-- Do not create parallel semantic schemas.
-- Parse all semantic payloads through the loader.
-- Update this document when semantic contract fields or meaning change.
+Those models live in `langbridge.semantic.unified_model` and use `source_models`
+instead of embedded datasets.
+
+## Rules
+
+- use the loader to normalize incoming semantic payloads
+- prefer `datasets` over `tables` in new documentation and examples
+- treat runtime dataset bindings as the primary execution path

@@ -10,9 +10,9 @@ from .model import (
     Metric,
 )
 from .unified_query import (
-    TenantAwareQueryContext,
+    WorkspaceAwareQueryContext,
     UnifiedSourceModel,
-    apply_tenant_aware_context,
+    apply_workspace_aware_context,
     build_unified_semantic_model,
 )
 
@@ -26,8 +26,8 @@ __all__ = [
     "TableFilter",
     "Relationship",
     "Metric",
-    "TenantAwareQueryContext",
+    "WorkspaceAwareQueryContext",
     "UnifiedSourceModel",
-    "apply_tenant_aware_context",
+    "apply_workspace_aware_context",
     "build_unified_semantic_model",
 ]

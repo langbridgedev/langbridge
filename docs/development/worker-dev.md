@@ -1,16 +1,22 @@
 # Worker Development
 
-## Worker Role
+The queued worker is a thin runtime-owned assembly under `apps/runtime_worker`.
+It exists for queued, hosted, or edge-style execution, but it should not be used
+as the default explanation for how the runtime product works.
 
-The runtime worker executes:
+## What The Worker Does
 
-- SQL jobs
-- semantic query jobs
-- dataset preview, profile, and ingest jobs
-- connector sync jobs
-- agent and analytical runtime jobs
+The worker consumes queued messages and dispatches them into runtime-owned
+handlers and services.
 
-## Run Worker
+It is relevant when you need:
+
+- queued execution
+- broker-driven orchestration
+- customer-runtime or edge-style task handling
+- parity with hosted or hybrid execution flows
+
+## Run The Worker
 
 ```bash
 python -m langbridge.apps.runtime_worker.main
@@ -22,12 +28,13 @@ Reload mode:
 python -m langbridge.apps.runtime_worker.main --reload
 ```
 
-## Key Environment Variables
+## Important Environment Variables
 
 - `WORKER_CONCURRENCY`
 - `WORKER_BATCH_SIZE`
 - `WORKER_POLL_INTERVAL`
 - `WORKER_BROKER`
+- `WORKER_EXECUTION_MODE`
 - `FEDERATION_ARTIFACT_DIR`
 - `FEDERATION_BROADCAST_THRESHOLD_BYTES`
 - `FEDERATION_PARTITION_COUNT`
@@ -36,8 +43,18 @@ python -m langbridge.apps.runtime_worker.main --reload
 
 ## Main Code Paths
 
-- runtime loop: `langbridge/apps/runtime_worker/main.py`
-- dispatcher: `langbridge/apps/runtime_worker/handlers/dispatcher.py`
-- SQL job handler: `langbridge/apps/runtime_worker/handlers/query/sql_job_request_handler.py`
-- semantic handler: `langbridge/apps/runtime_worker/handlers/query/semantic_query_request_handler.py`
-- federated tool: `langbridge/packages/runtime/execution/federated_query_tool.py`
+- runtime loop: `apps/runtime_worker/main.py`
+- broker integrations: `apps/runtime_worker/broker/`
+- message contracts: `apps/runtime_worker/messaging/contracts/`
+- dispatch and handlers: `apps/runtime_worker/handlers/`
+- dependency assembly: `apps/runtime_worker/ioc/`
+- shared runtime execution primitives: `langbridge/runtime/*`
+
+## Relationship To The Runtime Host
+
+The worker and the runtime host should tell the same architectural story:
+
+- runtime services and ports are owned by `langbridge.runtime`
+- federation is owned by `langbridge.federation`
+- connectors are owned by `langbridge.connectors` and `langbridge.plugins`
+- control-plane orchestration stays outside this repo boundary

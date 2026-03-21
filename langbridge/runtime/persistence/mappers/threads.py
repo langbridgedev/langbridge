@@ -28,8 +28,7 @@ def from_thread_record(value: Any | None) -> RuntimeThread | None:
     state = getattr(value, "state", RuntimeThreadState.awaiting_user_input)
     return RuntimeThread(
         id=getattr(value, "id"),
-        organization_id=getattr(value, "organization_id"),
-        project_id=getattr(value, "project_id"),
+        workspace_id=getattr(value, "workspace_id"),
         title=getattr(value, "title", None),
         state=str(getattr(state, "value", state)),
         metadata=dict(
@@ -39,7 +38,10 @@ def from_thread_record(value: Any | None) -> RuntimeThread | None:
         ),
         created_at=getattr(value, "created_at", None),
         updated_at=getattr(value, "updated_at", None),
-        created_by=getattr(value, "created_by"),
+        created_by=(
+            getattr(value, "created_by_actor_id", None)
+            or getattr(value, "created_by")
+        ),
         last_message_id=getattr(value, "last_message_id", None),
     )
 
@@ -49,14 +51,13 @@ def to_thread_record(value: RuntimeThread | Thread) -> Thread:
         return value
     return Thread(
         id=value.id,
-        organization_id=value.organization_id,
-        project_id=value.project_id,
+        workspace_id=value.workspace_id,
         title=value.title,
         state=ThreadState(str(getattr(value.state, "value", value.state))),
         metadata_json=value.metadata_json,
         created_at=value.created_at,
         updated_at=value.updated_at,
-        created_by=value.created_by,
+        created_by_actor_id=value.created_by,
         last_message_id=value.last_message_id,
     )
 
@@ -115,7 +116,7 @@ def from_conversation_memory_record(
     return RuntimeConversationMemoryItem(
         id=getattr(value, "id"),
         thread_id=getattr(value, "thread_id"),
-        user_id=getattr(value, "user_id", None),
+        actor_id=getattr(value, "actor_id", None),
         category=str(getattr(category, "value", category)),
         content=str(getattr(value, "content", "") or ""),
         metadata=dict(
@@ -137,7 +138,7 @@ def to_conversation_memory_record(
     return ConversationMemoryItem(
         id=value.id,
         thread_id=value.thread_id,
-        user_id=value.user_id,
+        actor_id=value.actor_id,
         category=MemoryCategory(str(getattr(value.category, "value", value.category))),
         content=value.content,
         metadata_json=value.metadata_json,

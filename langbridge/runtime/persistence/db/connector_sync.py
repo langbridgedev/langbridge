@@ -15,7 +15,7 @@ class ConnectorSyncStateRecord(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("organizations.id"),
+        ForeignKey("workspaces.id"),
         nullable=False,
         index=True,
     )
@@ -30,6 +30,7 @@ class ConnectorSyncStateRecord(Base):
     last_cursor: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     state_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    dataset_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="never_synced")
     error_message: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     records_synced: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)

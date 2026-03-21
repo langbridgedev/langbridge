@@ -8,13 +8,10 @@ from typing import Any
 _CONTRACT_MODULES = (
     "base",
     "agents",
-    "auth",
     "connectors",
-    "dashboards",
     "datasets",
     "jobs",
     "llm_connections",
-    "organizations",
     "query",
     "runtime",
     "semantic",

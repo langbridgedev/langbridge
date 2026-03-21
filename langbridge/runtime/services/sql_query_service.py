@@ -155,7 +155,6 @@ class SqlQueryService:
         connector_response = await self._get_connector_response(
             connection_id=request.connection_id,
             workspace_id=request.workspace_id,
-            project_id=request.project_id,
         )
         if connector_response is None:
             raise BusinessValidationError("SQL connector not found.")
@@ -423,10 +422,12 @@ class SqlQueryService:
         *,
         connection_id: uuid.UUID,
         workspace_id: uuid.UUID,
-        project_id: uuid.UUID | None,
     ) -> ConnectorMetadata | None:
         if self._connector_provider is not None:
-            return await self._connector_provider.get_connector(connection_id)
+            return await self._connector_provider.get_connector(
+                workspace_id=workspace_id,
+                connector_id=connection_id,
+            )
         raise BusinessValidationError("Connector metadata provider is required for SQL execution.")
 
     def _resolve_connector_config(self, connector: ConnectorMetadata) -> dict[str, Any]:
@@ -434,7 +435,7 @@ class SqlQueryService:
         runtime_config = dict(resolved_payload.get("config") or {})
 
         if connector.connection_metadata is not None:
-            metadata = connector.connection_metadata.model_dump(exclude_none=True)
+            metadata = connector.connection_metadata.model_dump(exclude_none=True, by_alias=True)
             extra = metadata.pop("extra", {})
             for key, value in metadata.items():
                 runtime_config.setdefault(key, value)
@@ -496,7 +497,7 @@ class SqlQueryService:
             id=snapshot_artifact_id,
             sql_job_id=job.id,
             workspace_id=job.workspace_id,
-            created_by=job.user_id,
+            created_by=job.actor_id,
             format="json_preview",
             mime_type="application/json",
             row_count=len(rows),
@@ -704,8 +705,7 @@ class SqlQueryService:
         return SqlJob(
             id=request.sql_job_id,
             workspace_id=request.workspace_id,
-            project_id=request.project_id,
-            user_id=request.user_id,
+            actor_id=request.actor_id,
             connection_id=request.connection_id,
             workbench_mode=(
                 request.workbench_mode.value

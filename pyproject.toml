@@ -47,5 +47,6 @@ dependencies = [
 langbridge = "langbridge.cli.main:main"
 
 [tool.setuptools.packages.find]
-where = ["langbridge"]
+where = ["."]
+include = ["langbridge*"]
 exclude = ["venv*", "__pycache__*", "tests*"]

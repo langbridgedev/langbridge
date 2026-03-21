@@ -42,9 +42,9 @@ from langbridge.semantic.loader import (
 from langbridge.semantic.model import SemanticModel
 from langbridge.semantic.query import SemanticQuery, SemanticQueryEngine
 from langbridge.semantic.unified_query import (
-    TenantAwareQueryContext,
+    WorkspaceAwareQueryContext,
     UnifiedSourceModel,
-    apply_tenant_aware_context,
+    apply_workspace_aware_context,
     build_unified_semantic_model,
 )
 
@@ -306,8 +306,7 @@ class SemanticQueryExecutionService:
     async def execute_unified_query(
         self,
         *,
-        organization_id: uuid.UUID,
-        project_id: uuid.UUID | None,
+        workspace_id: uuid.UUID,
         semantic_query: SemanticQuery,
         semantic_model_ids: Iterable[uuid.UUID],
         source_models: Iterable[UnifiedSemanticSourceModelRequest] | None = None,
@@ -318,19 +317,19 @@ class SemanticQueryExecutionService:
             raise BusinessValidationError("Federated query tool is not configured on this worker.")
 
         semantic_model, table_connector_map = await self._build_unified_model_and_map(
-            organization_id=organization_id,
+            workspace_id=workspace_id,
             semantic_model_ids=semantic_model_ids,
             source_models=source_models,
             relationships=relationships,
             metrics=metrics,
         )
         execution_connector_id = self.build_unified_execution_connector_id(
-            organization_id=organization_id
+            workspace_id=workspace_id
         )
-        execution_model = apply_tenant_aware_context(
+        execution_model = apply_workspace_aware_context(
             semantic_model,
-            context=TenantAwareQueryContext(
-                organization_id=organization_id,
+            context=WorkspaceAwareQueryContext(
+                workspace_id=workspace_id,
                 execution_connector_id=execution_connector_id,
             ),
             table_connector_map=table_connector_map,
@@ -346,13 +345,13 @@ class SemanticQueryExecutionService:
             raise BusinessValidationError(f"Semantic query translation failed: {exc}") from exc
 
         workflow_payload = await self._build_federation_workflow_payload(
-            organization_id=organization_id,
+            workspace_id=workspace_id,
             semantic_model=execution_model,
             source_semantic_model=semantic_model,
             table_connector_map=table_connector_map,
         )
         tool_payload = {
-            "workspace_id": str(organization_id),
+            "workspace_id": str(workspace_id),
             "query": semantic_query.model_dump(by_alias=True, exclude_none=True),
             "dialect": "duckdb",
             "workflow": workflow_payload,
@@ -366,8 +365,7 @@ class SemanticQueryExecutionService:
 
         response = UnifiedSemanticQueryResponse(
             id=uuid.uuid4(),
-            organization_id=organization_id,
-            project_id=project_id,
+            workspace_id=workspace_id,
             connector_id=execution_connector_id,
             semantic_model_ids=list(self._normalize_model_ids(semantic_model_ids)),
             data=data_payload,
@@ -379,8 +377,7 @@ class SemanticQueryExecutionService:
     async def execute_standard_query(
         self,
         *,
-        organization_id: uuid.UUID,
-        project_id: uuid.UUID | None,
+        workspace_id: uuid.UUID,
         semantic_model_id: uuid.UUID,
         semantic_query: SemanticQuery,
     ) -> StandardQueryExecutionResult:
@@ -388,7 +385,7 @@ class SemanticQueryExecutionService:
             raise BusinessValidationError("Federated query tool is not configured on this worker.")
 
         semantic_model_record = await self._get_semantic_model_record(
-            organization_id=organization_id,
+            workspace_id=workspace_id,
             semantic_model_id=semantic_model_id,
         )
         if semantic_model_record is None:
@@ -402,7 +399,7 @@ class SemanticQueryExecutionService:
             else raw_payload.get("tables")
         )
         workflow, workflow_dialect = await self._dataset_execution_resolver.build_semantic_workflow(
-            organization_id=organization_id,
+            workspace_id=workspace_id,
             workflow_id=f"workflow_semantic_dataset_{semantic_model_id.hex[:12]}",
             dataset_name=f"semantic_dataset_{semantic_model_id.hex[:12]}",
             semantic_model=semantic_model,
@@ -420,7 +417,7 @@ class SemanticQueryExecutionService:
 
         execution = await self._federated_query_tool.execute_federated_query(
             {
-                "workspace_id": str(organization_id),
+                "workspace_id": str(workspace_id),
                 "query": semantic_query.model_dump(by_alias=True, exclude_none=True),
                 "dialect": workflow_dialect,
                 "workflow": workflow.model_dump(mode="json"),
@@ -433,8 +430,7 @@ class SemanticQueryExecutionService:
 
         response = SemanticQueryResponse(
             id=uuid.uuid4(),
-            organization_id=organization_id,
-            project_id=project_id,
+            workspace_id=workspace_id,
             semantic_model_id=semantic_model_id,
             data=[row for row in rows_payload if isinstance(row, dict)],
             annotations=plan.annotations,
@@ -445,7 +441,7 @@ class SemanticQueryExecutionService:
     async def _build_unified_model_and_map(
         self,
         *,
-        organization_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         semantic_model_ids: Iterable[uuid.UUID],
         source_models: Iterable[UnifiedSemanticSourceModelRequest] | None = None,
         relationships: Iterable[Any] | None = None,
@@ -461,7 +457,7 @@ class SemanticQueryExecutionService:
         seen_keys: set[str] = set()
         for semantic_model_id in normalized_model_ids:
             semantic_model_record = await self._get_semantic_model_record(
-                organization_id=organization_id,
+                workspace_id=workspace_id,
                 semantic_model_id=semantic_model_id,
             )
             if semantic_model_record is None:
@@ -525,7 +521,7 @@ class SemanticQueryExecutionService:
                         f"Unified semantic model dataset '{dataset_key}' contains an invalid dataset_id."
                     ) from exc
                 dataset = await self._get_dataset_record(
-                    organization_id=organization_id,
+                    workspace_id=workspace_id,
                     dataset_id=dataset_id,
                 )
                 if dataset is None:
@@ -572,7 +568,7 @@ class SemanticQueryExecutionService:
     async def _build_federation_workflow_payload(
         self,
         *,
-        organization_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         semantic_model: SemanticModel,
         source_semantic_model: SemanticModel,
         table_connector_map: Mapping[str, uuid.UUID],
@@ -583,9 +579,9 @@ class SemanticQueryExecutionService:
             VirtualTableBinding,
         )
 
-        workspace_id = str(organization_id)
+        workspace_id_value = str(workspace_id)
         semantic_model_id = str(uuid.uuid4())
-        workflow_dataset_id = f"unified_semantic_{organization_id.hex[:12]}_{semantic_model_id[:12]}"
+        workflow_dataset_id = f"unified_semantic_{workspace_id.hex[:12]}_{semantic_model_id[:12]}"
         tables: dict[str, dict[str, Any]] = {}
         for dataset_key, semantic_dataset in semantic_model.datasets.items():
             source_dataset = source_semantic_model.datasets.get(dataset_key, semantic_dataset)
@@ -601,7 +597,7 @@ class SemanticQueryExecutionService:
                     f"Unified semantic model dataset '{dataset_key}' has an invalid dataset_id."
                 ) from exc
             dataset = await self._get_dataset_record(
-                organization_id=organization_id,
+                workspace_id=workspace_id,
                 dataset_id=referenced_dataset_id,
             )
             if dataset is None:
@@ -629,11 +625,11 @@ class SemanticQueryExecutionService:
         ]
         workflow = FederationWorkflow(
             id=f"workflow_{workflow_dataset_id}",
-            workspace_id=workspace_id,
+            workspace_id=workspace_id_value,
             dataset=VirtualDataset(
                 id=workflow_dataset_id,
                 name="Unified Semantic Dataset",
-                workspace_id=workspace_id,
+                workspace_id=workspace_id_value,
                 tables={table_key: VirtualTableBinding.model_validate(binding) for table_key, binding in tables.items()},
                 relationships=[],
             ),
@@ -649,12 +645,12 @@ class SemanticQueryExecutionService:
     async def _get_semantic_model_record(
         self,
         *,
-        organization_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         semantic_model_id: uuid.UUID,
     ) -> Any | None:
         if self._semantic_model_provider is not None:
             return await self._semantic_model_provider.get_semantic_model(
-                organization_id=organization_id,
+                workspace_id=workspace_id,
                 semantic_model_id=semantic_model_id,
             )
         raise BusinessValidationError(
@@ -664,26 +660,26 @@ class SemanticQueryExecutionService:
     async def _get_dataset_record(
         self,
         *,
-        organization_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         dataset_id: uuid.UUID,
     ) -> Any | None:
         if self._dataset_provider is not None:
             return await self._dataset_provider.get_dataset(
-                workspace_id=organization_id,
+                workspace_id=workspace_id,
                 dataset_id=dataset_id,
             )
         if self._dataset_repository is None:
             raise BusinessValidationError("Dataset repository is required for semantic query execution.")
         return await self._dataset_repository.get_for_workspace(
             dataset_id=dataset_id,
-            workspace_id=organization_id,
+            workspace_id=workspace_id,
         )
 
     @staticmethod
-    def build_unified_execution_connector_id(*, organization_id: uuid.UUID) -> uuid.UUID:
+    def build_unified_execution_connector_id(*, workspace_id: uuid.UUID) -> uuid.UUID:
         return uuid.uuid5(
             uuid.NAMESPACE_DNS,
-            f"langbridge-unified-federation:{organization_id}",
+            f"langbridge-unified-federation:{workspace_id}",
         )
 
     @staticmethod

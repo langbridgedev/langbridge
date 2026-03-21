@@ -193,13 +193,13 @@ def _build_scan_sql(
 
     if isinstance(physical_sql, str) and physical_sql.strip():
         sql_text = physical_sql.strip().rstrip(";")
-        alias_identifier = exp.Identifier(this=alias, quoted=True).sql(dialect=dialect)
+        alias_identifier = exp.Identifier(this=alias, quoted=False).sql(dialect=dialect)
         if not projected_columns or "*" in projected_columns:
             select_clause = "*"
         else:
             projected = []
             for column in projected_columns:
-                column_identifier = exp.Identifier(this=column, quoted=True).sql(dialect=dialect)
+                column_identifier = exp.Identifier(this=column, quoted=False).sql(dialect=dialect)
                 projected.append(f"{alias_identifier}.{column_identifier}")
             select_clause = ", ".join(projected)
         query_sql = f"SELECT {select_clause} FROM ({sql_text}) AS {alias_identifier}"
@@ -211,7 +211,7 @@ def _build_scan_sql(
         return query_sql
 
     physical_catalog = metadata.get("physical_catalog", binding.catalog)
-    physical_schema = metadata.get("physical_schema", binding.schema)
+    physical_schema = metadata.get("physical_schema", binding.schema_name)
     physical_table = metadata.get("physical_table", binding.table)
     if bool(metadata.get("skip_catalog_in_pushdown")):
         physical_catalog = None
@@ -221,7 +221,7 @@ def _build_scan_sql(
         db=physical_schema or None,
         catalog=physical_catalog or None,
         alias=alias,
-        quoted=True,
+        quoted=False,
     )
 
     if not projected_columns or "*" in projected_columns:
@@ -229,7 +229,7 @@ def _build_scan_sql(
     else:
         columns = [
             exp.Column(
-                this=exp.Identifier(this=column, quoted=True),
+                this=exp.Identifier(this=column, quoted=False),
                 table=exp.Identifier(this=alias, quoted=False),
             )
             for column in projected_columns
@@ -293,7 +293,7 @@ def _rewrite_filter_for_scan(
 ) -> exp.Expression:
     metadata = binding.metadata if isinstance(getattr(binding, "metadata", None), dict) else {}
     physical_catalog = metadata.get("physical_catalog", binding.catalog)
-    physical_schema = metadata.get("physical_schema", binding.schema)
+    physical_schema = metadata.get("physical_schema", binding.schema_name)
     physical_table = metadata.get("physical_table", binding.table)
 
     valid_tables = {
@@ -304,7 +304,7 @@ def _rewrite_filter_for_scan(
     }
     valid_schemas = {
         str(schema).strip().lower()
-        for schema in (binding.schema, physical_schema)
+        for schema in (binding.schema_name, physical_schema)
         if str(schema).strip()
     }
     valid_catalogs = {
@@ -350,7 +350,7 @@ def _binding_requires_scan_level_rewrite(binding) -> bool:
     physical_table = metadata.get("physical_table")
     if physical_catalog is not None and physical_catalog != binding.catalog:
         return True
-    if physical_schema is not None and physical_schema != binding.schema:
+    if physical_schema is not None and physical_schema != binding.schema_name:
         return True
     if physical_table is not None and physical_table != binding.table:
         return True

@@ -19,7 +19,7 @@ class Role(str, Enum):
 
 class ThreadResponse(_Base):
     id: UUID | None = None
-    project_id: UUID | None = None
+    workspace_id: UUID | None = None
     title: str | None = None
     status: str = "active"
     metadata_json: dict[str, Any] | None = None
@@ -32,7 +32,7 @@ class ThreadListResponse(_Base):
 
 
 class ThreadCreateRequest(_Base):
-    project_id: UUID | None = None
+    workspace_id: UUID | None = None
     title: str | None = None
     metadata_json: dict[str, Any] | None = None
 

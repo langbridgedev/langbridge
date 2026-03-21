@@ -1,24 +1,17 @@
 # Runtime Host Example
 
-This example shows how to self-host the Langbridge runtime as an HTTP API instead of
-running the worker app.
+This example shows the main self-hosted Langbridge runtime surface: the runtime
+host serving a configured local runtime over HTTP.
 
-The container starts the runtime with the CLI entrypoint:
-
-```bash
-langbridge serve --config /examples/runtime_host/langbridge_config.yml --host 0.0.0.0 --port 8000
-```
-
-It uses a mounted runtime config rather than baking configuration into the image. The
-config in this folder points at the seeded SQLite demo warehouse from the SDK example.
+It does not depend on `langbridge-cloud`.
 
 ## What This Example Gives You
 
-- a Dockerized runtime host process
-- mounted runtime configuration at `/examples/runtime_host/langbridge_config.yml`
+- a Dockerized runtime host
+- mounted runtime config at `/examples/runtime_host/langbridge_config.yml`
 - mounted demo SQLite warehouse from `examples/sdk/semantic_query/example.db`
-- persistent local runtime state under `/examples/runtime_host/.langbridge`
-- HTTP APIs for dataset preview, semantic query, SQL query, and agent calls
+- persistent runtime state under `/examples/runtime_host/.langbridge`
+- runtime-owned HTTP endpoints for datasets, semantic query, SQL, agents, and runtime info
 
 ## Prerequisites
 
@@ -28,8 +21,7 @@ From the repository root, seed the demo database once:
 python examples/sdk/semantic_query/setup.py
 ```
 
-If you want to exercise the agent endpoint, export an LLM key before starting the
-container:
+If you want to call the default agent, export an LLM key before starting:
 
 ```bash
 export OPENAI_API_KEY=...
@@ -43,31 +35,23 @@ From this directory:
 docker compose up --build
 ```
 
-The runtime host will listen on `http://localhost:8000`.
-
-## Mounted Files
-
-The compose file mounts:
-
-- `../` to `/examples`
-- a named Docker volume to `/examples/runtime_host/.langbridge`
-
-That means:
-
-- connector and dataset paths still resolve correctly because they stay relative to the
-  mounted config file
-- runtime metadata and DuckDB execution state persist across container restarts
-- you can swap in your own config later without rebuilding the image
+The host will listen on `http://localhost:8000`.
 
 ## Try The API
 
-Check the host:
+Health:
 
 ```bash
 curl http://localhost:8000/api/runtime/v1/health
 ```
 
-List configured datasets:
+Runtime info:
+
+```bash
+curl http://localhost:8000/api/runtime/v1/info
+```
+
+List datasets:
 
 ```bash
 curl http://localhost:8000/api/runtime/v1/datasets
@@ -95,7 +79,7 @@ curl -X POST http://localhost:8000/api/runtime/v1/semantic/query \
   }'
 ```
 
-Run a direct SQL query:
+Run direct SQL:
 
 ```bash
 curl -X POST http://localhost:8000/api/runtime/v1/sql/query \
@@ -116,36 +100,36 @@ curl -X POST http://localhost:8000/api/runtime/v1/agents/ask \
   }'
 ```
 
+## Runtime Identity And Auth
+
+By default this example runs without host auth. If you enable host auth, send a
+bearer token and let the host map that request into runtime identity:
+
+- `workspace_id`
+- `actor_id`
+- `roles`
+- `request_id`
+
+See `docs/deployment/self-hosted.md` for the exact auth environment variables.
+
 ## Run The Same Host Without Docker
 
-If you install Langbridge locally, the host command is the same shape:
-
 ```bash
-pip install langbridge
+pip install -e .
 python examples/sdk/semantic_query/setup.py
 langbridge serve --config examples/runtime_host/langbridge_config.yml --host 0.0.0.0 --port 8000
 ```
 
-You can also use the module entrypoint:
+Or:
 
 ```bash
 python -m langbridge serve --config examples/runtime_host/langbridge_config.yml --host 0.0.0.0 --port 8000
 ```
 
-Once the host is up, the CLI can call the same APIs:
+Once the host is up, the CLI can call the same runtime-owned endpoints:
 
 ```bash
 langbridge info --url http://localhost:8000
 langbridge datasets list --url http://localhost:8000
 langbridge semantic query --url http://localhost:8000 --model commerce_performance --measure shopify_orders.net_sales --dimension shopify_orders.country --limit 5
 ```
-
-## Notes
-
-- This example intentionally hosts the portable runtime only. It does not depend on the
-  cloud control plane.
-- The example bind-mounts the repository `examples/` tree and overlays a named volume on
-  `/examples/runtime_host/.langbridge` so the host can maintain local metadata and
-  execution artifacts without polluting the checked-in files.
-- If you replace the mounted config, keep any relative connector and storage paths valid
-  from the config file location.

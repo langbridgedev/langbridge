@@ -9,9 +9,9 @@ from langbridge.semantic.model import (
 )
 from langbridge.semantic.query import SemanticQuery, SemanticQueryEngine
 from langbridge.semantic.unified_query import (
-    TenantAwareQueryContext,
+    WorkspaceAwareQueryContext,
     UnifiedSourceModel,
-    apply_tenant_aware_context,
+    apply_workspace_aware_context,
     build_unified_semantic_model,
 )
 
@@ -91,8 +91,8 @@ def test_build_unified_semantic_model_resolves_graph_relationships_and_metric_re
     assert table_connector_map["Marketing__campaigns"] == connector_b
 
 
-def test_apply_tenant_aware_context_sets_catalog_from_org_and_connector_tokens() -> None:
-    organization_id = uuid.uuid4()
+def test_apply_workspace_aware_context_sets_catalog_from_workspace_and_connector_tokens() -> None:
+    workspace_id = uuid.uuid4()
     execution_connector_id = uuid.uuid4()
     orders_connector_id = uuid.uuid4()
 
@@ -112,20 +112,20 @@ def test_apply_tenant_aware_context_sets_catalog_from_org_and_connector_tokens()
         },
     )
 
-    tenant_model = apply_tenant_aware_context(
+    workspace_model = apply_workspace_aware_context(
         base_model,
-        context=TenantAwareQueryContext(
-            organization_id=organization_id,
+        context=WorkspaceAwareQueryContext(
+            workspace_id=workspace_id,
             execution_connector_id=execution_connector_id,
         ),
         table_connector_map={"orders": orders_connector_id},
     )
 
-    expected_catalog = f"org_{organization_id.hex[:12]}__src_{orders_connector_id.hex[:12]}"
-    assert tenant_model.tables["orders"].catalog == expected_catalog
-    assert tenant_model.tables["orders"].schema == "public"
-    assert tenant_model.tables["legacy_sales"].catalog == "legacy"
-    assert tenant_model.tables["legacy_sales"].schema == "sales"
+    expected_catalog = f"ws_{workspace_id.hex[:12]}__src_{orders_connector_id.hex[:12]}"
+    assert workspace_model.tables["orders"].catalog == expected_catalog
+    assert workspace_model.tables["orders"].schema == "public"
+    assert workspace_model.tables["legacy_sales"].catalog == "legacy"
+    assert workspace_model.tables["legacy_sales"].schema == "sales"
 
 
 def test_catalog_qualified_translation_uses_catalog_schema_table_when_available() -> None:
@@ -143,7 +143,7 @@ def test_catalog_qualified_translation_uses_catalog_schema_table_when_available(
     query = SemanticQuery(dimensions=["orders.id"], limit=10)
 
     plan = SemanticQueryEngine().compile(query, model, dialect="postgres")
-    assert '"tenant_catalog"."analytics"."orders"' in plan.sql
+    assert "tenant_catalog.analytics.orders" in plan.sql
 
 
 def test_joined_dimensions_are_qualified_to_avoid_ambiguous_column_names() -> None:
@@ -180,9 +180,6 @@ def test_joined_dimensions_are_qualified_to_avoid_ambiguous_column_names() -> No
 
     sql = SemanticQueryEngine().compile(query, model, dialect="postgres").sql
 
-    assert 't0."id" AS "orders__id"' in sql
-    assert 't1."id" AS "customers__id"' in sql
+    assert "t0.id AS orders__id" in sql
+    assert "t1.id AS customers__id" in sql
     assert "ON t0.customer_id = t1.id" in sql
-
-
-

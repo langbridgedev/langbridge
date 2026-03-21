@@ -114,8 +114,10 @@ class DuckDbFileRemoteSource(RemoteSource):
         if file_format not in {"csv", "parquet"}:
             raise ValueError(f"Unsupported file format '{file_format}' for binding '{binding.table_key}'.")
         scan_sql = self._build_scan_sql(storage_uri=storage_uri, file_format=file_format, metadata=metadata)
-        if binding.schema:
-            connection.execute(f"CREATE SCHEMA IF NOT EXISTS {self._quote_identifier(binding.schema)}")
+        if binding.schema_name:
+            connection.execute(
+                f"CREATE SCHEMA IF NOT EXISTS {self._quote_identifier(binding.schema_name)}"
+            )
         connection.execute(
             f"CREATE OR REPLACE VIEW {self._qualified_relation_name(binding)} AS SELECT * FROM {scan_sql}"
         )
@@ -153,6 +155,6 @@ class DuckDbFileRemoteSource(RemoteSource):
     @classmethod
     def _qualified_relation_name(cls, binding: VirtualTableBinding) -> str:
         relation = cls._quote_identifier(binding.table)
-        if binding.schema:
-            return f"{cls._quote_identifier(binding.schema)}.{relation}"
+        if binding.schema_name:
+            return f"{cls._quote_identifier(binding.schema_name)}.{relation}"
         return relation

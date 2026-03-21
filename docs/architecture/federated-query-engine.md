@@ -1,48 +1,47 @@
 # Federated Query Engine
 
-The Federated Query Engine is Langbridge's primary structured data engine.
+The federated query engine is Langbridge's structured execution engine for
+cross-source workloads.
 
-It consumes normalized dataset execution descriptors as the main structured input
-abstraction, whether the underlying source is:
+It runs inside the runtime, not beside it. Runtime services resolve datasets and
+connectors, then hand structured execution off to federation when a workload
+needs local planning, pushdown analysis, or cross-source execution.
 
-- a database table
-- a file-backed dataset
-- a parquet-backed sync
-- a virtual dataset
+## Main Code Paths
 
-## Engine Components
+- service facade: `langbridge/federation/service.py`
+- planner: `langbridge/federation/planner/planner.py`
+- SQL parsing: `langbridge/federation/planner/parser.py`
+- semantic query compilation: `langbridge/federation/planner/smq_compiler.py`
+- optimizer: `langbridge/federation/planner/optimizer.py`
+- physical planner: `langbridge/federation/planner/physical_planner.py`
+- scheduler: `langbridge/federation/executor/scheduler.py`
+- stage executor: `langbridge/federation/executor/stage_executor.py`
+- artifact store: `langbridge/federation/executor/artifact_store.py`
+- runtime bridge: `langbridge/runtime/execution/federated_query_tool.py`
 
-- service facade: `langbridge/packages/federation/service.py`
-- planner: `langbridge/packages/federation/planner/planner.py`
-- SQL parsing and semantic compilation:
-  - `langbridge/packages/federation/planner/parser.py`
-  - `langbridge/packages/federation/planner/smq_compiler.py`
-- optimizer: `langbridge/packages/federation/planner/optimizer.py`
-- physical planner: `langbridge/packages/federation/planner/physical_planner.py`
-- scheduler and executor:
-  - `langbridge/packages/federation/executor/scheduler.py`
-  - `langbridge/packages/federation/executor/stage_executor.py`
-  - `langbridge/packages/federation/executor/artifact_store.py`
+## Inputs
+
+Federation works from runtime-resolved datasets and connector metadata. Those
+datasets may represent:
+
+- database tables
+- SQL-backed virtual datasets
+- file-backed datasets
+- sync-materialized datasets
+- federated combinations of other datasets
 
 ## Query Lifecycle
 
-1. A SQL or semantic query enters the runtime.
-2. Runtime services resolve dataset descriptors and source bindings.
-3. The planner builds a logical plan and optimized physical stage DAG.
-4. The scheduler executes remote and local stages with retry and artifact reuse.
-5. Result rows, artifacts, stage metrics, and stats are returned.
+1. A SQL or semantic request enters the runtime.
+2. Runtime services resolve workspace-scoped datasets, policies, and connectors.
+3. Federation builds a logical plan.
+4. The optimizer decides which work can be pushed down and which work runs locally.
+5. The executor runs remote scans plus local compute stages and returns rows and metadata.
 
-## Federated Execution DAG
+## Why It Matters
 
-```mermaid
-flowchart TD
-    Q[SQL / Semantic Query] --> L[Logical Plan]
-    L --> O[Optimizer]
-    O --> P[Physical Plan DAG]
-    P --> S1[Stage: remote_scan source A]
-    P --> S2[Stage: remote_scan source B]
-    S1 --> LC[Stage: local_compute join or aggregate]
-    S2 --> LC
-    LC --> ART[Artifact Store]
-    ART --> RH[Result Handle]
-```
+- SQL and semantic query share one structured execution substrate.
+- Connectors stay inside the runtime boundary.
+- Cross-source joins and transformations stay inside the runtime.
+- The same engine works in embedded, self-hosted, and hybrid runtime shapes.

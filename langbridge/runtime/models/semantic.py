@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from langbridge.runtime.models.base import RuntimeModel, RuntimeRequestModel
 
@@ -13,22 +13,18 @@ class SemanticQueryMetaResponse(RuntimeModel):
     name: str
     description: str | None = None
     connector_id: uuid.UUID | None = None
-    organization_id: uuid.UUID
-    project_id: uuid.UUID | None = None
+    workspace_id: uuid.UUID
     semantic_model: dict[str, Any] = Field(default_factory=dict)
 
 
 class SemanticQueryRequest(RuntimeRequestModel):
-    organization_id: uuid.UUID
-    project_id: uuid.UUID | None = None
+    workspace_id: uuid.UUID
     semantic_model_id: uuid.UUID
     query: dict[str, Any] = Field(default_factory=dict)
 
-
 class SemanticQueryResponse(RuntimeModel):
     id: uuid.UUID
-    organization_id: uuid.UUID
-    project_id: uuid.UUID | None = None
+    workspace_id: uuid.UUID
     semantic_model_id: uuid.UUID
     data: list[dict[str, Any]] = Field(default_factory=list)
     annotations: list[dict[str, Any]] = Field(default_factory=list)
@@ -59,8 +55,7 @@ class UnifiedSemanticMetricRequest(RuntimeRequestModel):
 
 class UnifiedSemanticQueryResponse(RuntimeModel):
     id: uuid.UUID
-    organization_id: uuid.UUID
-    project_id: uuid.UUID | None = None
+    workspace_id: uuid.UUID
     connector_id: uuid.UUID
     semantic_model_ids: list[uuid.UUID] = Field(default_factory=list)
     data: list[dict[str, Any]] = Field(default_factory=list)

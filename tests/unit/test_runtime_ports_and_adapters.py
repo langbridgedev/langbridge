@@ -24,12 +24,12 @@ def anyio_backend():
     return "asyncio"
 
 
-def test_from_connector_record_maps_legacy_connector_shape() -> None:
-    org_id = uuid.uuid4()
-    project_id = uuid.uuid4()
+def test_from_connector_record_maps_runtime_connector_shape() -> None:
+    workspace_id = uuid.uuid4()
     connector_id = uuid.uuid4()
-    legacy_connector = SimpleNamespace(
+    connector_record = SimpleNamespace(
         id=connector_id,
+        workspace_id=workspace_id,
         name="warehouse",
         description="Primary warehouse",
         connector_type="POSTGRES",
@@ -50,16 +50,13 @@ def test_from_connector_record_maps_legacy_connector_shape() -> None:
             "allowed_tables": ["orders"],
         },
         is_managed=False,
-        organizations=[SimpleNamespace(id=org_id)],
-        projects=[SimpleNamespace(id=project_id)],
     )
 
-    connector = from_connector_record(legacy_connector)
+    connector = from_connector_record(connector_record)
 
     assert connector is not None
     assert connector.id == connector_id
-    assert connector.organization_id == org_id
-    assert connector.project_id == project_id
+    assert connector.workspace_id == workspace_id
     assert connector.config == {"config": {"host": "db.internal", "database": "analytics"}}
     assert connector.connection_metadata is not None
     assert connector.connection_metadata.host == "db.internal"
@@ -97,7 +94,6 @@ def test_from_dataset_record_maps_legacy_dataset_shape() -> None:
     legacy_dataset = SimpleNamespace(
         id=dataset_id,
         workspace_id=workspace_id,
-        project_id=None,
         connection_id=uuid.uuid4(),
         created_by=uuid.uuid4(),
         updated_by=None,
@@ -146,7 +142,7 @@ def test_from_dataset_record_maps_legacy_dataset_shape() -> None:
             max_rows_preview=100,
             max_export_rows=1000,
             redaction_rules_json={"email": "mask"},
-            row_filters_json=["tenant_id = current_tenant()"],
+            row_filters_json=["region = current_region()"],
             allow_dml=False,
         ),
         created_at=created_at,
@@ -167,14 +163,13 @@ def test_from_dataset_record_maps_legacy_dataset_shape() -> None:
 
 def test_from_sql_job_record_maps_legacy_sql_job_shape() -> None:
     workspace_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     connection_id = uuid.uuid4()
     created_at = datetime.now(timezone.utc)
     legacy_job = SimpleNamespace(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=user_id,
+        actor_id=actor_id,
         connection_id=connection_id,
         workbench_mode="dataset",
         selected_datasets_json=[{"dataset_id": str(uuid.uuid4()), "alias": "orders"}],
@@ -212,7 +207,7 @@ def test_from_sql_job_record_maps_legacy_sql_job_shape() -> None:
 
     assert job is not None
     assert job.workspace_id == workspace_id
-    assert job.user_id == user_id
+    assert job.actor_id == actor_id
     assert job.connection_id == connection_id
     assert job.query_text == "SELECT 1"
     assert job.query_params_json == {"limit": 1}
@@ -230,7 +225,6 @@ async def test_memory_providers_support_ephemeral_runtime_access_patterns() -> N
         SimpleNamespace(
             id=dataset_id,
             workspace_id=workspace_id,
-            project_id=None,
             connection_id=None,
             created_by=None,
             updated_by=None,

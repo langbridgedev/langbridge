@@ -113,11 +113,20 @@ def from_dataset_record(value: Any | None) -> DatasetMetadata | None:
     return DatasetMetadata(
         id=getattr(value, "id"),
         workspace_id=getattr(value, "workspace_id"),
-        project_id=getattr(value, "project_id", None),
         connection_id=getattr(value, "connection_id", None),
-        owner_id=getattr(value, "owner_id", None) or getattr(value, "created_by", None),
-        created_by=getattr(value, "created_by", None),
-        updated_by=getattr(value, "updated_by", None),
+        owner_id=(
+            getattr(value, "owner_id", None)
+            or getattr(value, "created_by_actor_id", None)
+            or getattr(value, "created_by", None)
+        ),
+        created_by=(
+            getattr(value, "created_by_actor_id", None)
+            or getattr(value, "created_by", None)
+        ),
+        updated_by=(
+            getattr(value, "updated_by_actor_id", None)
+            or getattr(value, "updated_by", None)
+        ),
         name=str(getattr(value, "name")),
         sql_alias=str(getattr(value, "sql_alias")),
         description=getattr(value, "description", None),
@@ -169,10 +178,9 @@ def to_dataset_record(value: DatasetMetadata | DatasetRecord) -> DatasetRecord:
     return DatasetRecord(
         id=value.id,
         workspace_id=value.workspace_id,
-        project_id=value.project_id,
         connection_id=value.connection_id,
-        created_by=value.created_by,
-        updated_by=value.updated_by,
+        created_by_actor_id=value.created_by,
+        updated_by_actor_id=value.updated_by,
         name=value.name,
         sql_alias=value.sql_alias,
         description=value.description,
@@ -230,7 +238,7 @@ def to_dataset_revision_record(
         status=value.status,
         snapshot_json=value.snapshot_json,
         note=value.note,
-        created_by=value.created_by,
+        created_by_actor_id=value.created_by,
         created_at=value.created_at,
     )
 

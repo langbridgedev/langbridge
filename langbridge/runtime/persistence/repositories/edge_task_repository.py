@@ -26,14 +26,14 @@ class EdgeTaskRepository(AsyncBaseRepository[EdgeTaskRecord]):
     async def list_runnable_for_runtime(
         self,
         *,
-        tenant_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         runtime_id: uuid.UUID,
         limit: int = 50,
     ) -> list[EdgeTaskRecord]:
         stmt = (
             select(EdgeTaskRecord)
             .where(
-                EdgeTaskRecord.tenant_id == tenant_id,
+                EdgeTaskRecord.workspace_id == workspace_id,
                 EdgeTaskRecord.target_runtime_id == runtime_id,
                 EdgeTaskRecord.status == EdgeTaskStatus.queued,
             )
@@ -51,14 +51,14 @@ class EdgeResultReceiptRepository(AsyncBaseRepository[EdgeResultReceiptRecord]):
     async def get_by_request_id(
         self,
         *,
-        tenant_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         runtime_id: uuid.UUID,
         request_id: str,
     ) -> EdgeResultReceiptRecord | None:
         stmt = (
             select(EdgeResultReceiptRecord)
             .where(
-                EdgeResultReceiptRecord.tenant_id == tenant_id,
+                EdgeResultReceiptRecord.workspace_id == workspace_id,
                 EdgeResultReceiptRecord.runtime_id == runtime_id,
                 EdgeResultReceiptRecord.request_id == request_id,
             )
@@ -70,14 +70,14 @@ class EdgeResultReceiptRepository(AsyncBaseRepository[EdgeResultReceiptRecord]):
     async def create_receipt(
         self,
         *,
-        tenant_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         runtime_id: uuid.UUID,
         request_id: str,
         task_id: uuid.UUID | None,
         payload_hash: str | None = None,
     ) -> EdgeResultReceiptRecord:
         record = EdgeResultReceiptRecord(
-            tenant_id=tenant_id,
+            workspace_id=workspace_id,
             runtime_id=runtime_id,
             request_id=request_id,
             task_id=task_id,

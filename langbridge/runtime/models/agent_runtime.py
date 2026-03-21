@@ -44,8 +44,7 @@ class RuntimeConversationMemoryCategory(str, enum.Enum):
 
 class RuntimeThread(RuntimeModel):
     id: uuid.UUID
-    organization_id: uuid.UUID
-    project_id: uuid.UUID
+    workspace_id: uuid.UUID
     title: str | None = None
     state: RuntimeThreadState | str = RuntimeThreadState.awaiting_user_input
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -82,7 +81,7 @@ class RuntimeThreadMessage(RuntimeModel):
 class RuntimeConversationMemoryItem(RuntimeModel):
     id: uuid.UUID
     thread_id: uuid.UUID
-    user_id: uuid.UUID | None = None
+    actor_id: uuid.UUID | None = Field(default=None)
     category: RuntimeConversationMemoryCategory | str = RuntimeConversationMemoryCategory.fact
     content: str
     metadata: dict[str, Any] = Field(default_factory=dict)

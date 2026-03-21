@@ -176,8 +176,7 @@ def _handle_info(args: argparse.Namespace) -> int:
                 "runtime_mode": "configured_local",
                 "config_path": str(Path(args.config).resolve()),
                 "workspace_id": client.default_workspace_id,
-                "organization_id": client.default_organization_id,
-                "user_id": client.default_user_id,
+                "actor_id": client.default_actor_id,
             }
         finally:
             client.close()
@@ -306,14 +305,12 @@ def _build_client_from_args(args: argparse.Namespace) -> LangbridgeClient:
 
     info_payload = _fetch_remote_runtime_info(base_url=args.url, token=args.token)
     workspace_id = _uuid_or_none(info_payload.get("workspace_id"))
-    organization_id = _uuid_or_none(info_payload.get("organization_id")) or workspace_id
-    user_id = _uuid_or_none(info_payload.get("user_id"))
+    actor_id = _uuid_or_none(info_payload.get("actor_id"))
     return LangbridgeClient.for_runtime_host(
         base_url=args.url,
         token=args.token,
         default_workspace_id=workspace_id,
-        default_organization_id=organization_id,
-        default_user_id=user_id,
+        default_actor_id=actor_id,
     )
 
 

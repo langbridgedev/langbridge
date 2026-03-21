@@ -75,8 +75,11 @@ class RepositoryConnectorMetadataProvider(ConnectorMetadataProvider):
     def __init__(self, *, connector_repository: ConnectorRepository) -> None:
         self._connector_repository = connector_repository
 
-    async def get_connector(self, connector_id) -> Any | None:
-        connector = await self._connector_repository.get_by_id(connector_id)
+    async def get_connector(self, *, workspace_id, connector_id) -> Any | None:
+        connector = await self._connector_repository.get_by_id_for_workspace(
+            connector_id=connector_id,
+            workspace_id=workspace_id,
+        )
         return from_connector_record(connector)
 
 
@@ -84,10 +87,10 @@ class RepositorySemanticModelMetadataProvider(SemanticModelMetadataProvider):
     def __init__(self, *, semantic_model_repository: SemanticModelRepository) -> None:
         self._semantic_model_repository = semantic_model_repository
 
-    async def get_semantic_model(self, *, organization_id, semantic_model_id) -> Any | None:
-        semantic_model = await self._semantic_model_repository.get_for_scope(
+    async def get_semantic_model(self, *, workspace_id, semantic_model_id) -> Any | None:
+        semantic_model = await self._semantic_model_repository.get_for_workspace(
             model_id=semantic_model_id,
-            organization_id=organization_id,
+            workspace_id=workspace_id,
         )
         return from_semantic_model_record(semantic_model)
 

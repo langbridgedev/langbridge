@@ -87,7 +87,7 @@ class RuntimeJobStatus(str, enum.Enum):
 
 class RuntimeJob(RuntimeModel):
     id: uuid.UUID
-    organization_id: str
+    workspace_id: str
     job_type: str
     payload: dict[str, Any] = Field(default_factory=dict)
     headers: dict[str, Any] = Field(default_factory=dict)

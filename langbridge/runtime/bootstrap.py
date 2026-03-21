@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 from langbridge.runtime.context import RuntimeContext
 from langbridge.runtime.execution import FederatedQueryTool
@@ -65,11 +64,6 @@ from langbridge.runtime.providers import (
     CachedConnectorMetadataProvider,
     CachedDatasetMetadataProvider,
     CachedSemanticModelMetadataProvider,
-    ControlPlaneApiClient,
-    ControlPlaneApiConnectorProvider,
-    ControlPlaneApiDatasetProvider,
-    ControlPlaneApiSemanticModelProvider,
-    ControlPlaneApiSyncStateProvider,
     RepositoryConnectorMetadataProvider,
     RepositoryDatasetMetadataProvider,
     RepositorySemanticModelMetadataProvider,
@@ -91,12 +85,6 @@ from langbridge.runtime.services.semantic_query_execution_service import (
     SemanticQueryExecutionService,
 )
 from langbridge.runtime.services.sql_query_service import SqlQueryService
-
-
-@dataclass(slots=True)
-class RuntimeBootstrapConfig:
-    control_plane_base_url: str | None = None
-    service_token: str | None = None
 
 
 def build_local_runtime(
@@ -296,78 +284,7 @@ def build_local_runtime(
     )
 
 
-def build_hosted_runtime(
-    *,
-    context: RuntimeContext,
-    control_plane_base_url: str,
-    service_token: str,
-    secret_provider_registry: SecretProviderRegistry | None = None,
-    logger: logging.Logger | None = None,
-) -> RuntimeHost:
-    client = ControlPlaneApiClient(
-        base_url=control_plane_base_url,
-        service_token=service_token,
-    )
-    credential_provider = SecretRegistryCredentialProvider(registry=secret_provider_registry)
-    dataset_provider = CachedDatasetMetadataProvider(
-        ControlPlaneApiDatasetProvider(client=client)
-    )
-    connector_provider = CachedConnectorMetadataProvider(
-        ControlPlaneApiConnectorProvider(client=client)
-    )
-    semantic_provider = CachedSemanticModelMetadataProvider(
-        ControlPlaneApiSemanticModelProvider(client=client)
-    )
-    sync_state_provider = ControlPlaneApiSyncStateProvider(client=client)
-    federated_query_tool = FederatedQueryTool(
-        connector_provider=connector_provider,
-        credential_provider=credential_provider,
-        secret_provider_registry=secret_provider_registry,
-    )
-    semantic_query_service = SemanticQueryExecutionService(
-        dataset_repository=None,
-        dataset_provider=dataset_provider,
-        semantic_model_provider=semantic_provider,
-        federated_query_tool=federated_query_tool,
-        logger=logger or logging.getLogger("langbridge.runtime.semantic"),
-    )
-    dataset_query_service = DatasetQueryService(
-        dataset_repository=None,
-        dataset_column_repository=None,
-        dataset_policy_repository=None,
-        federated_query_tool=federated_query_tool,
-        dataset_provider=dataset_provider,
-    )
-    sql_query_service = SqlQueryService(
-        sql_job_result_artifact_store=None,
-        connector_provider=connector_provider,
-        dataset_repository=None,
-        dataset_provider=dataset_provider,
-        credential_provider=credential_provider,
-        secret_provider_registry=secret_provider_registry,
-        federated_query_tool=federated_query_tool,
-    )
-    return RuntimeHost(
-        context=context,
-        providers=RuntimeProviders(
-            dataset_metadata=dataset_provider,
-            connector_metadata=connector_provider,
-            semantic_models=semantic_provider,
-            sync_state=sync_state_provider,
-            credentials=credential_provider,
-        ),
-        services=RuntimeServices(
-            federated_query_tool=federated_query_tool,
-            dataset_query=dataset_query_service,
-            semantic_query=semantic_query_service,
-            sql_query=sql_query_service,
-        ),
-    )
-
-
 __all__ = [
-    "RuntimeBootstrapConfig",
-    "build_hosted_runtime",
     "build_local_runtime",
     "build_configured_local_runtime",
 ]

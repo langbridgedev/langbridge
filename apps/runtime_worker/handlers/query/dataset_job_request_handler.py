@@ -98,9 +98,8 @@ class DatasetJobRequestHandler(BaseMessageHandler):
 
         runtime = RuntimeHost(
             context=RuntimeContext.build(
-                tenant_id=request.workspace_id,
                 workspace_id=request.workspace_id,
-                user_id=request.user_id,
+                actor_id=request.actor_id,
                 request_id=str(job_record.id),
             ),
             providers=RuntimeProviders(),

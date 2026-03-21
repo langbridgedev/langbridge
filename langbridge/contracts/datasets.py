@@ -158,7 +158,6 @@ def _validate_sql_alias(value: str | None) -> str | None:
 
 class DatasetCreateRequest(_Base):
     workspace_id: UUID
-    project_id: UUID | None = None
     name: str = Field(..., min_length=1, max_length=255)
     sql_alias: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=1024)
@@ -215,7 +214,7 @@ class DatasetSelectionColumnRequest(_Base):
 
 
 class DatasetSelectionRequest(_Base):
-    schema: str = Field(..., min_length=1, max_length=255)
+    schema_name: str = Field(..., alias="schema", min_length=1, max_length=255)
     table: str = Field(..., min_length=1, max_length=255)
     columns: list[DatasetSelectionColumnRequest] = Field(default_factory=list)
 
@@ -229,9 +228,8 @@ class DatasetSelectionRequest(_Base):
 
 class DatasetEnsureRequest(_Base):
     workspace_id: UUID
-    project_id: UUID | None = None
     connection_id: UUID
-    schema: str = Field(..., min_length=1, max_length=255)
+    schema_name: str = Field(..., alias="schema", min_length=1, max_length=255)
     table: str = Field(..., min_length=1, max_length=255)
     columns: list[DatasetSelectionColumnRequest] = Field(default_factory=list)
     name: str | None = Field(default=None, max_length=255)
@@ -248,7 +246,6 @@ class DatasetEnsureResponse(_Base):
 
 class DatasetBulkCreateRequest(_Base):
     workspace_id: UUID
-    project_id: UUID | None = None
     connection_id: UUID
     selections: list[DatasetSelectionRequest] = Field(default_factory=list)
     naming_template: str = "{schema}.{table}"
@@ -279,7 +276,6 @@ class DatasetBulkCreateResult(_Base):
 
 class DatasetUpdateRequest(_Base):
     workspace_id: UUID
-    project_id: UUID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=255)
     sql_alias: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=1024)
@@ -313,7 +309,6 @@ class DatasetUpdateRequest(_Base):
 class DatasetResponse(_Base):
     id: UUID
     workspace_id: UUID
-    project_id: UUID | None = None
     connection_id: UUID | None = None
     owner_id: UUID | None = None
     name: str
@@ -356,7 +351,6 @@ class DatasetPreviewSortItem(_Base):
 
 class DatasetPreviewRequest(_Base):
     workspace_id: UUID
-    project_id: UUID | None = None
     limit: int | None = Field(default=None, ge=1)
     filters: dict[str, Any] = Field(default_factory=dict)
     sort: list[DatasetPreviewSortItem] = Field(default_factory=list)
@@ -384,7 +378,6 @@ class DatasetPreviewResponse(_Base):
 
 class DatasetProfileRequest(_Base):
     workspace_id: UUID
-    project_id: UUID | None = None
     user_context: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -483,7 +476,6 @@ class DatasetVersionDiffResponse(_Base):
 class DatasetRestoreRequest(_Base):
     workspace_id: UUID
     revision_id: UUID
-    project_id: UUID | None = None
     change_summary: str | None = Field(default=None, max_length=1024)
 
 

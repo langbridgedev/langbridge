@@ -63,7 +63,7 @@ class MemoryManager:
             MemoryItem(
                 id=str(item.id),
                 thread_id=str(item.thread_id),
-                user_id=str(item.user_id) if item.user_id else None,
+                actor_id=str(item.actor_id) if item.actor_id else None,
                 category=item.category,
                 content=item.content,
                 metadata=item.metadata_json or {},
@@ -79,7 +79,7 @@ class MemoryManager:
         self,
         *,
         thread_id: uuid.UUID,
-        user_id: Optional[uuid.UUID],
+        actor_id: Optional[uuid.UUID],
         user_query: str,
         response: dict[str, Any],
     ) -> None:
@@ -94,7 +94,7 @@ class MemoryManager:
             metadata["captured_at"] = timestamp.isoformat()
             record = self._repository.create_item(
                 thread_id=thread_id,
-                user_id=user_id,
+                actor_id=actor_id,
                 category=str(entry.get("category") or "fact"),
                 content=str(entry.get("content") or "").strip(),
                 metadata_json=metadata,

@@ -42,15 +42,13 @@ class _FakeSemanticQueryService:
         self.meta = SemanticQueryMetaResponse(
             id=uuid.uuid4(),
             name="commerce_performance",
-            organization_id=uuid.uuid4(),
-            project_id=uuid.uuid4(),
+            workspace_id=uuid.uuid4(),
             connector_id=uuid.uuid4(),
             semantic_model={"measures": [{"name": "orders.count"}]},
         )
         self.preview_response = SemanticQueryResponse(
             id=uuid.uuid4(),
-            organization_id=self.meta.organization_id,
-            project_id=self.meta.project_id,
+            workspace_id=self.meta.workspace_id,
             semantic_model_id=self.meta.id,
             data=[{"orders__count": 42}],
             annotations=[],
@@ -61,10 +59,10 @@ class _FakeSemanticQueryService:
         self,
         *,
         semantic_model_id: uuid.UUID,
-        organization_id: uuid.UUID,
+        workspace_id: uuid.UUID,
     ) -> SemanticQueryMetaResponse:
         assert semantic_model_id == self.meta.id
-        assert organization_id == self.meta.organization_id
+        assert workspace_id == self.meta.workspace_id
         return self.meta
 
     async def query_request(
@@ -86,8 +84,7 @@ async def test_semantic_query_builder_tool_uses_runtime_semantic_models() -> Non
     )
 
     request = QueryBuilderCopilotRequest(
-        organization_id=semantic_service.meta.organization_id,
-        project_id=semantic_service.meta.project_id,
+        workspace_id=semantic_service.meta.workspace_id,
         semantic_model_id=semantic_service.meta.id,
         instructions="Show total orders",
         builder_state=SemanticQuery(),
@@ -103,4 +100,5 @@ async def test_semantic_query_builder_tool_uses_runtime_semantic_models() -> Non
     preview_request = semantic_service.requests[0]
     assert isinstance(preview_request, SemanticQueryRequest)
     assert preview_request.semantic_model_id == semantic_service.meta.id
+    assert preview_request.workspace_id == semantic_service.meta.workspace_id
     assert preview_request.query["measures"] == ["orders.count"]

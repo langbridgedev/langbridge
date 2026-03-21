@@ -4,13 +4,12 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from langbridge.contracts.semantic import (
-    SemanticModelRecordResponse,
-)
+from langbridge.runtime.models import SemanticModelMetadata
 from langbridge.runtime.persistence.db.semantic import (
     SemanticModelEntry,
     SemanticVectorStoreEntry,
 )
+from langbridge.runtime.persistence.mappers import from_semantic_model_record
 from langbridge.runtime.ports import (
     ISemanticModelStore
 )
@@ -21,19 +20,17 @@ class SemanticModelRepository(AsyncBaseRepository[SemanticModelEntry]):
     def __init__(self, session: AsyncSession):
         super().__init__(session, SemanticModelEntry)
 
-    async def list_for_scope(self, organization_id: UUID, project_id: Optional[UUID] = None) -> List[SemanticModelEntry]:
-        query = select(SemanticModelEntry).filter(SemanticModelEntry.organization_id == organization_id)
-        if project_id:
-            query = query.filter(SemanticModelEntry.project_id == project_id)
+    async def list_for_workspace(self, workspace_id: UUID) -> List[SemanticModelEntry]:
+        query = select(SemanticModelEntry).filter(SemanticModelEntry.workspace_id == workspace_id)
         result = await self._session.scalars(query.order_by(SemanticModelEntry.created_at.desc()))
         return list(result.all())
 
-    async def get_for_scope(self, model_id: UUID, organization_id: UUID) -> Optional[SemanticModelEntry]:
+    async def get_for_workspace(self, model_id: UUID, workspace_id: UUID) -> Optional[SemanticModelEntry]:
         return (
             await (
                 self._session.scalars(select(SemanticModelEntry).filter(
                     SemanticModelEntry.id == model_id,
-                    SemanticModelEntry.organization_id == organization_id,
+                    SemanticModelEntry.workspace_id == workspace_id,
                 ))
             )
         ).one_or_none()
@@ -47,19 +44,17 @@ class SemanticVectorStoreRepository(AsyncBaseRepository[SemanticVectorStoreEntry
     def __init__(self, session: AsyncSession):
         super().__init__(session, SemanticVectorStoreEntry)
 
-    async def list_for_scope(self, organization_id: UUID, project_id: Optional[UUID] = None) -> List[SemanticVectorStoreEntry]:
-        query = select(SemanticVectorStoreEntry).filter(SemanticVectorStoreEntry.organization_id == organization_id)
-        if project_id:
-            query = query.filter(SemanticVectorStoreEntry.project_id == project_id)
+    async def list_for_workspace(self, workspace_id: UUID) -> List[SemanticVectorStoreEntry]:
+        query = select(SemanticVectorStoreEntry).filter(SemanticVectorStoreEntry.workspace_id == workspace_id)
         result = await self._session.scalars(query.order_by(SemanticVectorStoreEntry.created_at.desc()))
         return list(result.all())
 
-    async def get_for_scope(self, store_id: UUID, organization_id: UUID) -> Optional[SemanticVectorStoreEntry]:
+    async def get_for_workspace(self, store_id: UUID, workspace_id: UUID) -> Optional[SemanticVectorStoreEntry]:
         return (
             await (
                 self._session.scalars(select(SemanticVectorStoreEntry).filter(
                     SemanticVectorStoreEntry.id == store_id,
-                    SemanticVectorStoreEntry.organization_id == organization_id,
+                    SemanticVectorStoreEntry.workspace_id == workspace_id,
                 ))
             )
         ).one_or_none()
@@ -69,12 +64,16 @@ class SemanticModelStore(ISemanticModelStore):
     def __init__(self, repository: SemanticModelRepository):
         self._repository = repository
 
-    async def get_by_id(self, model_id: UUID) -> SemanticModelRecordResponse | None:
+    async def get_by_id(self, model_id: UUID) -> SemanticModelMetadata | None:
         entry = await self._repository.get_by_id(model_id)
         if entry is None:
             return None
-        return SemanticModelRecordResponse.model_validate(entry)
+        return from_semantic_model_record(entry)
 
-    async def get_by_ids(self, model_ids: list[UUID]) -> list[SemanticModelRecordResponse]:
+    async def get_by_ids(self, model_ids: list[UUID]) -> list[SemanticModelMetadata]:
         entries = await self._repository.get_by_ids(model_ids)
-        return [SemanticModelRecordResponse.model_validate(entry) for entry in entries]
+        return [
+            runtime_model
+            for entry in entries
+            if (runtime_model := from_semantic_model_record(entry)) is not None
+        ]

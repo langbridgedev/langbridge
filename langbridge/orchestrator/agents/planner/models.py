@@ -54,7 +54,7 @@ class PlanningConstraints(BaseModel):
 class PlannerRequest(BaseModel):
     """Top-level input to the planning agent."""
 
-    user_id: Optional[str] = None
+    actor_id: Optional[str] = None
     question: str
     context: Optional[Dict[str, Any]] = None
     constraints: PlanningConstraints = Field(default_factory=PlanningConstraints)

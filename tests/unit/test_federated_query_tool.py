@@ -135,3 +135,44 @@ async def test_build_sources_rejects_non_sql_connector_metadata() -> None:
 
     with pytest.raises(ValueError, match="does not support SQL federation"):
         await tool._build_sources(workflow)
+
+
+@pytest.mark.anyio
+async def test_build_sources_requires_connector_in_same_workspace() -> None:
+    workspace_id = str(uuid.uuid4())
+    connector_id = uuid.uuid4()
+    workflow = FederationWorkflow(
+        id="workflow_workspace_scoped_connector_test",
+        workspace_id=workspace_id,
+        dataset=VirtualDataset(
+            id="dataset_workspace_scoped_connector_test",
+            name="Orders",
+            workspace_id=workspace_id,
+            tables={
+                "orders": VirtualTableBinding(
+                    table_key="orders",
+                    source_id="warehouse_source",
+                    connector_id=connector_id,
+                    table="orders",
+                    metadata={},
+                )
+            },
+            relationships=[],
+        ),
+    )
+    tool = FederatedQueryTool(
+        connector_provider=MemoryConnectorProvider(
+            {
+                connector_id: ConnectorMetadata(
+                    id=connector_id,
+                    name="warehouse",
+                    connector_type="POSTGRES",
+                    workspace_id=uuid.uuid4(),
+                    config={"config": {"database": "analytics"}},
+                )
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="not found"):
+        await tool._build_sources(workflow)

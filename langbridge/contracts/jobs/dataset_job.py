@@ -17,8 +17,7 @@ class CreateDatasetPreviewJobRequest(_Base):
     job_type: JobType = JobType.DATASET_PREVIEW
     dataset_id: uuid.UUID
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID
     requested_limit: int | None = Field(default=None, ge=1)
     enforced_limit: int = Field(..., ge=1)
     filters: dict[str, Any] = Field(default_factory=dict)
@@ -38,8 +37,7 @@ class CreateDatasetProfileJobRequest(_Base):
     job_type: JobType = JobType.DATASET_PROFILE
     dataset_id: uuid.UUID
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID
     user_context: dict[str, Any] = Field(default_factory=dict)
     correlation_id: str | None = None
     operation: Literal["profile"] = "profile"
@@ -49,8 +47,7 @@ class CreateDatasetCsvIngestJobRequest(_Base):
     job_type: JobType = JobType.DATASET_CSV_INGEST
     dataset_id: uuid.UUID
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID
     storage_uri: str | None = None
     correlation_id: str | None = None
     operation: Literal["csv_ingest"] = "csv_ingest"
@@ -59,8 +56,7 @@ class CreateDatasetCsvIngestJobRequest(_Base):
 class CreateDatasetBulkCreateJobRequest(_Base):
     job_type: JobType = JobType.DATASET_BULK_CREATE
     workspace_id: uuid.UUID
-    project_id: uuid.UUID | None = None
-    user_id: uuid.UUID
+    actor_id: uuid.UUID
     connection_id: uuid.UUID
     selections: list[DatasetSelectionRequest] = Field(default_factory=list)
     naming_template: str = "{schema}.{table}"

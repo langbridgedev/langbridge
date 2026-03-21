@@ -121,9 +121,8 @@ class ConnectorSyncJobRequestHandler(BaseMessageHandler):
 
         runtime = RuntimeHost(
             context=RuntimeContext.build(
-                tenant_id=request.workspace_id,
                 workspace_id=request.workspace_id,
-                user_id=request.user_id,
+                actor_id=request.actor_id,
                 request_id=str(job_record.id),
             ),
             providers=RuntimeProviders(),
@@ -161,8 +160,7 @@ class ConnectorSyncJobRequestHandler(BaseMessageHandler):
 
                 summary = await runtime.sync_dataset(
                     workspace_id=request.workspace_id,
-                    project_id=request.project_id,
-                    user_id=request.user_id,
+                    actor_id=request.actor_id,
                     connection_id=request.connection_id,
                     connector_record=connector_record,
                     connector_type=connector_type,

@@ -301,8 +301,7 @@ async def test_connector_sync_runtime_materializes_parent_child_datasets_and_per
     runtime, _, dataset_repository, dataset_revision_repository, lineage_edge_repository = _build_runtime()
 
     workspace_id = uuid.uuid4()
-    project_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     connection_id = uuid.uuid4()
     connector_record = _FakeConnectorRecord(name="Shopify storefront")
 
@@ -340,8 +339,7 @@ async def test_connector_sync_runtime_materializes_parent_child_datasets_and_per
 
     summary = await runtime.sync_resource(
         workspace_id=workspace_id,
-        project_id=project_id,
-        user_id=user_id,
+        actor_id=actor_id,
         connection_id=connection_id,
         connector_record=connector_record,
         connector_type=ConnectorRuntimeType.SHOPIFY,
@@ -423,8 +421,7 @@ async def test_connector_sync_runtime_incremental_second_sync_only_upserts_new_r
     )
     await runtime.sync_resource(
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=uuid.uuid4(),
+        actor_id=uuid.uuid4(),
         connection_id=connection_id,
         connector_record=_FakeConnectorRecord(name="Shopify"),
         connector_type=ConnectorRuntimeType.SHOPIFY,
@@ -447,8 +444,7 @@ async def test_connector_sync_runtime_incremental_second_sync_only_upserts_new_r
     )
     await runtime.sync_resource(
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=uuid.uuid4(),
+        actor_id=uuid.uuid4(),
         connection_id=connection_id,
         connector_record=_FakeConnectorRecord(name="Shopify"),
         connector_type=ConnectorRuntimeType.SHOPIFY,
@@ -501,8 +497,7 @@ async def test_connector_sync_runtime_falls_back_to_full_refresh_for_non_increme
     )
     await runtime.sync_resource(
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=uuid.uuid4(),
+        actor_id=uuid.uuid4(),
         connection_id=connection_id,
         connector_record=_FakeConnectorRecord(name="Analytics"),
         connector_type=ConnectorRuntimeType.GOOGLE_ANALYTICS,
@@ -525,8 +520,7 @@ async def test_connector_sync_runtime_falls_back_to_full_refresh_for_non_increme
     )
     await runtime.sync_resource(
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=uuid.uuid4(),
+        actor_id=uuid.uuid4(),
         connection_id=connection_id,
         connector_record=_FakeConnectorRecord(name="Analytics"),
         connector_type=ConnectorRuntimeType.GOOGLE_ANALYTICS,
@@ -581,8 +575,7 @@ async def test_connector_sync_runtime_failure_does_not_advance_checkpoint_state(
     )
     await runtime.sync_resource(
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=uuid.uuid4(),
+        actor_id=uuid.uuid4(),
         connection_id=connection_id,
         connector_record=_FakeConnectorRecord(name="Shopify"),
         connector_type=ConnectorRuntimeType.SHOPIFY,
@@ -596,8 +589,7 @@ async def test_connector_sync_runtime_failure_does_not_advance_checkpoint_state(
     with pytest.raises(RuntimeError):
         await runtime.sync_resource(
             workspace_id=workspace_id,
-            project_id=None,
-            user_id=uuid.uuid4(),
+            actor_id=uuid.uuid4(),
             connection_id=connection_id,
             connector_record=_FakeConnectorRecord(name="Shopify"),
             connector_type=ConnectorRuntimeType.SHOPIFY,
@@ -625,7 +617,7 @@ async def test_shopify_connector_sync_runtime_full_then_incremental_with_mocked_
 
     workspace_id = uuid.uuid4()
     connection_id = uuid.uuid4()
-    user_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
     state = await runtime.get_or_create_state(
         workspace_id=workspace_id,
         connection_id=connection_id,
@@ -686,8 +678,7 @@ async def test_shopify_connector_sync_runtime_full_then_incremental_with_mocked_
 
     await runtime.sync_resource(
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=user_id,
+        actor_id=actor_id,
         connection_id=connection_id,
         connector_record=_FakeConnectorRecord(name="Shopify"),
         connector_type=ConnectorRuntimeType.SHOPIFY,
@@ -698,8 +689,7 @@ async def test_shopify_connector_sync_runtime_full_then_incremental_with_mocked_
     )
     await runtime.sync_resource(
         workspace_id=workspace_id,
-        project_id=None,
-        user_id=user_id,
+        actor_id=actor_id,
         connection_id=connection_id,
         connector_record=_FakeConnectorRecord(name="Shopify"),
         connector_type=ConnectorRuntimeType.SHOPIFY,

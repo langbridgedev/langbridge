@@ -20,7 +20,10 @@ def from_sql_job_result_artifact_record(
         id=getattr(value, "id"),
         sql_job_id=getattr(value, "sql_job_id"),
         workspace_id=getattr(value, "workspace_id"),
-        created_by=getattr(value, "created_by"),
+        created_by=(
+            getattr(value, "created_by_actor_id", None)
+            or getattr(value, "created_by")
+        ),
         format=str(getattr(value, "format")),
         mime_type=str(getattr(value, "mime_type")),
         row_count=int(getattr(value, "row_count", 0) or 0),
@@ -41,7 +44,7 @@ def to_sql_job_result_artifact_record(
         id=value.id,
         sql_job_id=value.sql_job_id,
         workspace_id=value.workspace_id,
-        created_by=value.created_by,
+        created_by_actor_id=value.created_by,
         format=value.format,
         mime_type=value.mime_type,
         row_count=value.row_count,
@@ -61,8 +64,7 @@ def from_sql_job_record(value: Any | None) -> SqlJob | None:
     return SqlJob(
         id=getattr(value, "id"),
         workspace_id=getattr(value, "workspace_id"),
-        project_id=getattr(value, "project_id", None),
-        user_id=getattr(value, "user_id"),
+        actor_id=getattr(value, "actor_id"),
         connection_id=getattr(value, "connection_id", None),
         workbench_mode=str(getattr(value, "workbench_mode")),
         selected_datasets_json=list(getattr(value, "selected_datasets_json", None) or []),
@@ -111,8 +113,7 @@ def to_sql_job_record(value: SqlJob | SqlJobRecord) -> SqlJobRecord:
     return SqlJobRecord(
         id=value.id,
         workspace_id=value.workspace_id,
-        project_id=value.project_id,
-        user_id=value.user_id,
+        actor_id=value.actor_id,
         connection_id=value.connection_id,
         workbench_mode=value.workbench_mode,
         selected_datasets_json=list(value.selected_datasets_json or []),
