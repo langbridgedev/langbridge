@@ -230,7 +230,7 @@ class TsqlSemanticTranslator:
         for dimension in dimensions:
             expr = self._column_expression(alias_map, dimension.dataset, dimension.column, dimension.expression, data_type=dimension.data_type)
             alias = self._alias_for_member(f"{dimension.dataset}.{dimension.column}")
-            select_clauses.append(exp.alias_(expr, alias, quoted=False))
+            select_clauses.append(exp.alias_(expr, alias, quoted=True))
             group_by_expressions.append(expr)
             self._register_column_order_aliases(
                 order_aliases=order_aliases,
@@ -255,7 +255,7 @@ class TsqlSemanticTranslator:
                 time_dimension.dimension.column,
                 time_dimension.granularity,
             )
-            select_clauses.append(exp.alias_(expr, alias, quoted=False))
+            select_clauses.append(exp.alias_(expr, alias, quoted=True))
             group_by_expressions.append(expr)
             self._register_column_order_aliases(
                 order_aliases=order_aliases,
@@ -269,7 +269,7 @@ class TsqlSemanticTranslator:
         for measure in measures:
             expr = self._measure_expression(alias_map, measure)
             alias = self._alias_for_member(f"{measure.dataset}.{measure.column}")
-            select_clauses.append(exp.alias_(expr, alias, quoted=False))
+            select_clauses.append(exp.alias_(expr, alias, quoted=True))
             self._register_column_order_aliases(
                 order_aliases=order_aliases,
                 alias=alias,
@@ -281,7 +281,7 @@ class TsqlSemanticTranslator:
         for metric in metrics:
             expr = self._replace_table_refs(metric.expression, alias_map)
             alias = self._alias_for_member(metric.key)
-            select_clauses.append(exp.alias_(expr, alias, quoted=False))
+            select_clauses.append(exp.alias_(expr, alias, quoted=True))
             order_aliases[alias] = alias
             order_aliases[metric.key] = alias
 
@@ -363,7 +363,7 @@ class TsqlSemanticTranslator:
             if alias:
                 clauses.append(
                     exp.Ordered(
-                        this=exp.Identifier(this=alias, quoted=False),
+                        this=exp.Identifier(this=alias, quoted=True),
                         desc=item.direction == "DESC",
                     )
                 )
@@ -679,14 +679,14 @@ class TsqlSemanticTranslator:
                 else:
                     source_column = str(expr.name or column).strip() or column
                     base_expr = exp.Column(
-                        this=exp.Identifier(this=source_column, quoted=False),
+                        this=exp.Identifier(this=source_column, quoted=True),
                         table=exp.Identifier(this=alias, quoted=False),
                     )
             else:
                 base_expr = self._replace_table_refs(expr, alias_map)
         else:
             base_expr = exp.Column(
-                this=exp.Identifier(this=column, quoted=False),
+                this=exp.Identifier(this=column, quoted=True),
                 table=exp.Identifier(this=alias, quoted=False),
             )
         return self._coerce_column_type(base_expr, data_type=data_type)

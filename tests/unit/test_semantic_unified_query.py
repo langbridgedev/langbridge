@@ -180,6 +180,6 @@ def test_joined_dimensions_are_qualified_to_avoid_ambiguous_column_names() -> No
 
     sql = SemanticQueryEngine().compile(query, model, dialect="postgres").sql
 
-    assert "t0.id AS orders__id" in sql
-    assert "t1.id AS customers__id" in sql
+    assert 't0."id" AS "orders__id"' in sql
+    assert 't1."id" AS "customers__id"' in sql
     assert "ON t0.customer_id = t1.id" in sql

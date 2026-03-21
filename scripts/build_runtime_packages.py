@@ -10,18 +10,6 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_DIRS = [
-    Path("."),
-    Path("langbridge/packages/common"),
-    Path("langbridge/packages/connectors"),
-    Path("langbridge/packages/contracts"),
-    Path("langbridge/packages/federation"),
-    Path("langbridge/packages/messaging"),
-    Path("langbridge/packages/orchestrator"),
-    Path("langbridge/packages/runtime"),
-    Path("langbridge/packages/sdk"),
-    Path("langbridge/packages/semantic"),
-]
 INTERNAL_DISTRIBUTIONS = {
     "langbridge",
     "langbridge-common",
@@ -46,6 +34,13 @@ IGNORE_PATTERNS = shutil.ignore_patterns(
     "*.egg-info",
     "*.pyc",
 )
+PUBLISHABLE_PACKAGE_DIRS = [
+    Path("."),
+    Path("packages/sdk"),
+]
+PUBLISHABLE_PACKAGE_GLOBS = [
+    "langbridge-connectors/*/pyproject.toml",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -85,16 +80,40 @@ def patch_pyproject(pyproject_path: Path, version: str) -> None:
     pyproject_path.write_text(text, encoding="utf-8")
 
 
+def iter_package_dirs() -> list[Path]:
+    package_dirs: list[Path] = []
+    seen: set[Path] = set()
+
+    for package_dir in PUBLISHABLE_PACKAGE_DIRS:
+        pyproject_path = REPO_ROOT / package_dir / "pyproject.toml"
+        if pyproject_path.exists() and package_dir not in seen:
+            package_dirs.append(package_dir)
+            seen.add(package_dir)
+
+    for pattern in PUBLISHABLE_PACKAGE_GLOBS:
+        for pyproject_path in sorted(REPO_ROOT.glob(pattern)):
+            package_dir = pyproject_path.parent.relative_to(REPO_ROOT)
+            if package_dir not in seen:
+                package_dirs.append(package_dir)
+                seen.add(package_dir)
+
+    if not package_dirs:
+        raise RuntimeError("No publishable package directories were found.")
+
+    return package_dirs
+
+
 def build_packages(version: str, output_dir: Path) -> None:
+    package_dirs = iter_package_dirs()
     output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="langbridge-package-build-") as temp_dir:
         temp_root = Path(temp_dir) / "langbridge"
         shutil.copytree(REPO_ROOT, temp_root, ignore=IGNORE_PATTERNS)
 
-        for package_dir in PACKAGE_DIRS:
+        for package_dir in package_dirs:
             patch_pyproject(temp_root / package_dir / "pyproject.toml", version)
 
-        for package_dir in PACKAGE_DIRS:
+        for package_dir in package_dirs:
             subprocess.run(
                 [
                     sys.executable,

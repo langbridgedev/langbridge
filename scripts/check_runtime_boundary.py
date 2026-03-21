@@ -6,18 +6,24 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PACKAGES_ROOT = REPO_ROOT / "langbridge" / "packages"
+PACKAGES_ROOTS = [
+    REPO_ROOT / "packages",
+    REPO_ROOT / "langbridge-connectors",
+]
 PYTHON_BOUNDARY_ROOTS = [
     REPO_ROOT / "langbridge",
+    REPO_ROOT / "apps",
+    REPO_ROOT / "packages",
+    REPO_ROOT / "langbridge-connectors",
     REPO_ROOT / "tests",
     REPO_ROOT / "scripts",
 ]
 FORBIDDEN_PATHS = [
-    REPO_ROOT / "langbridge" / "apps" / "api",
-    REPO_ROOT / "langbridge" / "apps" / "worker",
+    REPO_ROOT / "apps" / "api",
+    REPO_ROOT / "apps" / "worker",
     REPO_ROOT / "alembic",
     REPO_ROOT / "monitoring",
-    REPO_ROOT / "langbridge" / "requirements-migrate.txt",
+    REPO_ROOT / "requirements-migrate.txt",
 ]
 FORBIDDEN_IMPORT_PREFIXES = (
     "langbridge.apps.api",
@@ -56,16 +62,17 @@ def main() -> int:
         if path.exists():
             missing_path_violations.append(path)
 
-    for path in _iter_python_files(PACKAGES_ROOT):
-        tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if _is_forbidden(alias.name):
-                        violations.append((path, node.lineno, alias.name))
-            elif isinstance(node, ast.ImportFrom):
-                if _is_forbidden(node.module):
-                    violations.append((path, node.lineno, node.module or ""))
+    for root in PACKAGES_ROOTS:
+        for path in _iter_python_files(root):
+            tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if _is_forbidden(alias.name):
+                            violations.append((path, node.lineno, alias.name))
+                elif isinstance(node, ast.ImportFrom):
+                    if _is_forbidden(node.module):
+                        violations.append((path, node.lineno, node.module or ""))
 
     for root in PYTHON_BOUNDARY_ROOTS:
         for path in _iter_python_files(root):

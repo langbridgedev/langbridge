@@ -39,6 +39,31 @@ def _actor_id_field() -> Any:
     return Field()
 
 
+class RuntimeJobRequestModel(RuntimeRequestModel):
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_job_payload(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+
+        if (
+            "actor_id" not in normalized
+            and "actorId" not in normalized
+            and "userId" in normalized
+        ):
+            normalized["actorId"] = normalized["userId"]
+
+        if "workspace_id" not in normalized and "workspaceId" not in normalized:
+            for legacy_key in ("organisationId", "organizationId", "projectId"):
+                if legacy_key in normalized:
+                    normalized["workspaceId"] = normalized[legacy_key]
+                    break
+
+        return normalized
+
+
 class SqlSelectedDataset(RuntimeRequestModel):
     alias: str | None = Field(default=None, min_length=1, max_length=128)
     sql_alias: str | None = Field(default=None, min_length=1, max_length=128)
@@ -73,7 +98,7 @@ class SqlSelectedDataset(RuntimeRequestModel):
         return self
 
 
-class CreateSqlJobRequest(RuntimeRequestModel):
+class CreateSqlJobRequest(RuntimeJobRequestModel):
     job_type: JobType = JobType.SQL
     sql_job_id: uuid.UUID
     workspace_id: uuid.UUID
@@ -133,7 +158,7 @@ class CreateSqlJobRequest(RuntimeRequestModel):
         return self
 
 
-class CreateSemanticQueryJobRequest(RuntimeRequestModel):
+class CreateSemanticQueryJobRequest(RuntimeJobRequestModel):
     job_type: JobType = JobType.SEMANTIC_QUERY
     workspace_id: uuid.UUID
     actor_id: uuid.UUID = _actor_id_field()
@@ -189,7 +214,7 @@ class DatasetSelectionRequest(RuntimeRequestModel):
         return self
 
 
-class CreateDatasetPreviewJobRequest(RuntimeRequestModel):
+class CreateDatasetPreviewJobRequest(RuntimeJobRequestModel):
     job_type: JobType = JobType.DATASET_PREVIEW
     dataset_id: uuid.UUID
     workspace_id: uuid.UUID
@@ -209,7 +234,7 @@ class CreateDatasetPreviewJobRequest(RuntimeRequestModel):
         return self
 
 
-class CreateDatasetProfileJobRequest(RuntimeRequestModel):
+class CreateDatasetProfileJobRequest(RuntimeJobRequestModel):
     job_type: JobType = JobType.DATASET_PROFILE
     dataset_id: uuid.UUID
     workspace_id: uuid.UUID
@@ -219,7 +244,7 @@ class CreateDatasetProfileJobRequest(RuntimeRequestModel):
     operation: Literal["profile"] = "profile"
 
 
-class CreateDatasetCsvIngestJobRequest(RuntimeRequestModel):
+class CreateDatasetCsvIngestJobRequest(RuntimeJobRequestModel):
     job_type: JobType = JobType.DATASET_CSV_INGEST
     dataset_id: uuid.UUID
     workspace_id: uuid.UUID
@@ -229,7 +254,7 @@ class CreateDatasetCsvIngestJobRequest(RuntimeRequestModel):
     operation: Literal["csv_ingest"] = "csv_ingest"
 
 
-class CreateDatasetBulkCreateJobRequest(RuntimeRequestModel):
+class CreateDatasetBulkCreateJobRequest(RuntimeJobRequestModel):
     job_type: JobType = JobType.DATASET_BULK_CREATE
     workspace_id: uuid.UUID
     actor_id: uuid.UUID = _actor_id_field()
@@ -251,7 +276,7 @@ class CreateDatasetBulkCreateJobRequest(RuntimeRequestModel):
         return self
 
 
-class CreateConnectorSyncJobRequest(RuntimeRequestModel):
+class CreateConnectorSyncJobRequest(RuntimeJobRequestModel):
     job_type: JobType = JobType.CONNECTOR_SYNC
     workspace_id: uuid.UUID
     actor_id: uuid.UUID = _actor_id_field()
@@ -275,7 +300,7 @@ class CreateConnectorSyncJobRequest(RuntimeRequestModel):
         return self
 
 
-class CreateAgentJobRequest(RuntimeRequestModel):
+class CreateAgentJobRequest(RuntimeJobRequestModel):
     job_type: JobType
     agent_definition_id: uuid.UUID
     workspace_id: uuid.UUID
