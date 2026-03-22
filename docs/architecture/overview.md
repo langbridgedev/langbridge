@@ -1,12 +1,8 @@
 # Architecture Overview
 
-Langbridge is the runtime half of the Langbridge product split.
+Langbridge is a runtime monolith with one primary public surface: the runtime host.
 
-- `langbridge/` owns runtime execution and self-hosted runtime product surfaces
-- `langbridge-cloud/` owns the hosted control plane and cloud product surfaces
-
-Inside this repo, the runtime is a single Python package with internal modules,
-not the old multi-package layout.
+Inside this repo, the runtime is a single Python package with internal module boundaries, plus a React app that builds into the packaged runtime UI bundle.
 
 ## Main Runtime Modules
 
@@ -16,7 +12,9 @@ not the old multi-package layout.
 - `langbridge.semantic`: semantic model contracts and loaders
 - `langbridge.federation`: federated planning and execution
 - `langbridge.orchestrator`: agent and tool orchestration
-- `langbridge.client`: SDK for local, self-hosted, and remote access
+- `langbridge.client`: SDK for local and runtime-host access
+- `langbridge.mcp`: MCP server assembly
+- `langbridge.ui`: packaged runtime UI
 
 ## Primary Runtime Flow
 
@@ -25,32 +23,29 @@ flowchart TD
     APP[Application or SDK Client] --> HOST[Runtime Host or Embedded Runtime]
     HOST --> CTX[Workspace Runtime Context]
     CTX --> DATA[Dataset and Connector Resolution]
-    DATA --> EXEC[Federated, SQL, Semantic, or Agent Execution]
+    DATA --> EXEC[Federated, SQL, Semantic, Sync, or Agent Execution]
     EXEC --> RES[Rows, Artifacts, Summaries, Sync State]
     RES --> APP
 ```
 
 ## Execution Identity
 
-Runtime execution is workspace-scoped. The core identity carried through the
-runtime is:
+Runtime execution is workspace-scoped. The core identity carried through the runtime is:
 
 - `workspace_id`
 - `actor_id`
 - `roles`
 - `request_id`
 
-External product identity concepts are not runtime-core execution identity in
-this repository.
-
 ## Self-Hosted Product Surface
 
-The self-hosted runtime host wraps a configured local runtime and serves
-runtime-owned HTTP endpoints. It currently supports thin auth modes:
+The self-hosted runtime host wraps a configured local runtime and serves runtime-owned HTTP endpoints. It supports thin auth modes:
 
 - `none`
 - `static_token`
 - `jwt`
 
-The worker remains available as a thin queued or edge execution assembly where
-needed.
+Feature-gated surfaces can be mounted on the same host:
+
+- `ui`
+- `mcp`

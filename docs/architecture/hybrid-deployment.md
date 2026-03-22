@@ -1,37 +1,35 @@
 # Hybrid Deployment
 
-Hybrid deployment means Langbridge runtime execution stays in customer-managed
-infrastructure while still integrating with an external control layer.
+Hybrid deployment means Langbridge runtime execution stays in customer-managed infrastructure while still integrating with external systems.
 
 ## Core Idea
 
 - the runtime stays close to the data
 - connectors and secrets stay on the runtime side
-- external coordination happens through explicit runtime-owned contracts
+- external coordination happens through explicit runtime-owned APIs and adapters
 
 ## Boundary
 
 The runtime repo owns:
 
-- runtime host and worker execution
+- runtime host execution
 - workspace-scoped runtime identity
-- runtime-owned ports for datasets, connectors, semantic models, and sync state
+- runtime-owned ports for datasets, connectors, semantic models, sync state, MCP, and UI serving
 
-An external control layer may provide:
+External systems may provide:
 
 - registration
 - coordination
 - metadata population
-- hosted operator UX
+- automation or operator workflows
 
-But that control layer should not redefine runtime-core identity or pull
-connector access into the cloud side.
+Those systems should not redefine runtime-core identity or pull connector access out of the runtime boundary.
 
 ## Topology
 
 ```mermaid
 flowchart LR
-    EXT[External Control Layer] --> RT[Customer-Managed Langbridge Runtime]
+    EXT[External System] --> RT[Customer-Managed Langbridge Runtime]
     RT --> FQE[Federated Query Engine]
     FQE --> DS[(Customer Data Sources)]
 ```

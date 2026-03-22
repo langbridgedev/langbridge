@@ -1,15 +1,13 @@
 # Documentation Index
 
-These docs describe the current Langbridge runtime product.
+These docs describe the current Langbridge runtime repository.
 
-`langbridge/` owns the runtime: runtime hosting, runtime identity, connectors,
-datasets, semantic query, federated query, and runtime-safe orchestration.
-`langbridge-cloud/` is the separate cloud and control-plane product.
+Langbridge is a self-hostable analytics runtime with a Python SDK, runtime host HTTP API, connector and dataset execution, semantic and federated query, runtime-safe agents, a feature-gated UI, and an optional MCP endpoint.
 
 ## Start Here
 
-- `docs/architecture/runtime-boundary.md`
 - `docs/deployment/self-hosted.md`
+- `docs/api.md`
 - `docs/development/local-dev.md`
 - `langbridge/runtime/README.md`
 

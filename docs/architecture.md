@@ -1,6 +1,6 @@
 # Architecture
 
-Langbridge is a runtime monolith with explicit internal module boundaries.
+Langbridge is a runtime monolith with clear internal boundaries and one primary product surface: the runtime host.
 
 At a high level, the runtime is made of:
 
@@ -8,12 +8,8 @@ At a high level, the runtime is made of:
 - workspace-scoped datasets and dataset policies
 - semantic models and semantic query services
 - federated planning and execution
-- runtime hosting, bootstrap, persistence, and auth
+- runtime hosting, persistence, auth, MCP, and UI serving
 - runtime-safe agent and tool orchestration
-
-The main self-hosted product surface is the runtime host. The worker assembly
-still exists, but it is one execution shape inside the runtime, not the runtime
-architecture itself.
 
 ## Read Next
 

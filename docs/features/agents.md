@@ -21,4 +21,4 @@ Agents are consumers of the same runtime primitives as the rest of the system:
 - semantic layer
 - SQL execution
 - federated execution engine
-- dataset contracts
+- runtime-managed datasets

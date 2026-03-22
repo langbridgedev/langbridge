@@ -1,60 +1,29 @@
 # Worker Development
 
-The queued worker is a thin runtime-owned assembly under `apps/runtime_worker`.
-It exists for queued, hosted, or edge-style execution, but it should not be used
-as the default explanation for how the runtime product works.
+This document is retained for path stability, but the repository no longer documents a worker-first development flow.
 
-## What The Worker Does
+## Current Direction
 
-The worker consumes queued messages and dispatches them into runtime-owned
-handlers and services.
-
-It is relevant when you need:
-
-- queued execution
-- broker-driven orchestration
-- customer-runtime or edge-style task handling
-- parity with hosted or hybrid execution flows
-
-## Run The Worker
+The supported development surface in this repository is the runtime host:
 
 ```bash
-python -m apps.runtime_worker.main
+langbridge serve --config examples/runtime_host/langbridge_config.yml
 ```
 
-Reload mode:
+Optional runtime-owned features are enabled on the same host:
 
-```bash
-python -m apps.runtime_worker.main --reload
-```
+- `--features ui`
+- `--features mcp`
+- `--features ui,mcp`
 
-## Important Environment Variables
+## If You Are Looking For Execution Internals
 
-- `WORKER_CONCURRENCY`
-- `WORKER_BATCH_SIZE`
-- `WORKER_POLL_INTERVAL`
-- `WORKER_BROKER`
-- `WORKER_EXECUTION_MODE`
-- `FEDERATION_ARTIFACT_DIR`
-- `FEDERATION_BROADCAST_THRESHOLD_BYTES`
-- `FEDERATION_PARTITION_COUNT`
-- `FEDERATION_STAGE_MAX_RETRIES`
-- `FEDERATION_STAGE_PARALLELISM`
+The main runtime execution code lives in:
 
-## Main Code Paths
+- `langbridge/runtime/hosting/`
+- `langbridge/runtime/services/`
+- `langbridge/runtime/execution/`
+- `langbridge/federation/`
+- `langbridge/orchestrator/`
 
-- runtime loop: `apps/runtime_worker/main.py`
-- broker integrations: `apps/runtime_worker/broker/`
-- message contracts: `apps/runtime_worker/messaging/contracts/`
-- dispatch and handlers: `apps/runtime_worker/handlers/`
-- dependency assembly: `apps/runtime_worker/ioc/`
-- shared runtime execution primitives: `langbridge/runtime/*`
-
-## Relationship To The Runtime Host
-
-The worker and the runtime host should tell the same architectural story:
-
-- runtime services and ports are owned by `langbridge.runtime`
-- federation is owned by `langbridge.federation`
-- connectors are owned by `langbridge.connectors` and `langbridge.plugins`
-- control-plane orchestration stays outside this repo boundary
+For local development, use `docs/development/local-dev.md`.

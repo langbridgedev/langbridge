@@ -17,7 +17,7 @@ cross-source structured workloads.
 - `langbridge.runtime.execution.FederatedQueryTool`
 - runtime services that call federation for SQL, semantic, and dataset workloads
 
-Federation is runtime-owned. It is not a separate gateway or cloud-only service.
+Federation is runtime-owned. It is part of the runtime itself, not a separate service boundary.
 
 ## Why It Matters
 

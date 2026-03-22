@@ -19,8 +19,7 @@ of runtime datasets.
 
 ## Runtime Relationship
 
-Semantic models are workspace-scoped runtime metadata. They are not a separate
-control-plane-only concept in this repo.
+Semantic models are workspace-scoped runtime metadata.
 
 The runtime resolves semantic models to datasets, then uses the same execution
 substrate as SQL and dataset query paths.

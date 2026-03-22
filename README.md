@@ -1,98 +1,39 @@
 # Langbridge
 
-Langbridge is the runtime product in the Langbridge platform.
+Langbridge is an open source, self-hostable analytics runtime for structured data workloads.
 
-This repository owns the portable execution layer: local and self-hosted runtime
-hosting, workspace-scoped runtime identity, connectors, datasets, semantic query,
-federated query, and agent-oriented execution primitives.
+It gives you a single runtime for connectors, datasets, semantic models, federated query, SQL execution, SaaS sync, and agent-style analytical workflows. You can run it in process through Python, expose it over HTTP, serve a lightweight UI, and optionally mount an MCP endpoint from the same runtime host.
 
-## What Lives Here
+## What You Get
 
-Langbridge is a Python monolith package with internal modules under the
-`langbridge.*` namespace. The main runtime surfaces are:
+- A runtime host with a documented HTTP API under `/api/runtime/v1/*`
+- A Python SDK for local and remote access
+- Built-in connectors for SQL, SaaS/API, NoSQL, and vector systems
+- Semantic query and federated query execution
+- Dataset preview and connector sync flows
+- Optional runtime UI served by the host
+- Optional MCP surface mounted at `/mcp`
 
-- `langbridge.runtime`: runtime context, hosting, bootstrap, services, providers, persistence
-- `langbridge.client`: Python SDK for local runtime, runtime host, or remote API access
+## Repository Layout
+
+The main runtime modules live under `langbridge.*`:
+
+- `langbridge.runtime`: runtime context, host construction, auth, services, persistence
+- `langbridge.client`: Python SDK
 - `langbridge.connectors`: built-in connector implementations
-- `langbridge.plugins`: connector and plugin registration surface
-- `langbridge.semantic`: semantic model contracts, loaders, and semantic query support
-- `langbridge.federation`: federated planning and execution engine
+- `langbridge.plugins`: connector registry and extension surface
+- `langbridge.semantic`: semantic model loading and semantic query support
+- `langbridge.federation`: federated planning and execution
 - `langbridge.orchestrator`: runtime-safe agent and tool orchestration
-- `langbridge.contracts`: runtime and API-facing contracts
-- `langbridge.hosting`: public hosting namespace for the runtime host
+- `langbridge.mcp`: MCP server assembly
+- `langbridge.ui`: packaged UI bundle served by the runtime host
 
-Supporting runtime assembly and packaging code lives in:
+Supporting project areas:
 
-- `apps/runtime_worker`: thin queued/edge worker assembly
-- `packages/sdk`: packaging for the separate `langbridge-sdk` distribution
+- `apps/runtime_ui`: React source for the runtime UI
+- `packages/sdk`: packaging for the standalone SDK distribution
+- `examples/`: runnable host and SDK examples
 - `docs/`: architecture, deployment, and development docs
-- `examples/`: runnable self-hosted and SDK examples
-
-## Runtime Model
-
-Langbridge runtime execution is workspace-scoped.
-
-The core execution identity is:
-
-- `workspace_id`
-- `actor_id`
-- `roles`
-- `request_id`
-
-Self-hosted runtime auth is intentionally thin. The runtime host supports:
-
-- `none`
-- `static_token`
-- `jwt`
-
-Runtime-core execution does not center on org, project, or tenant claims. Those
-may exist in product or control-plane systems, but the runtime executes against a
-workspace-scoped context.
-
-## Connectors And Plugins
-
-Langbridge uses a plugin-style connector model:
-
-- built-in connectors live under `langbridge.connectors.*`
-- the registry and connector interfaces live under `langbridge.plugins`
-- external packages can register connectors through entry points
-
-Today the runtime includes connector families for SQL, SaaS/API, NoSQL, and
-vector workloads. SaaS/API connectors sync external resources into
-runtime-managed datasets instead of treating third-party APIs as the primary
-query-time execution substrate.
-
-## Self-Hosted Runtime
-
-The main self-hosted surface today is the runtime host:
-
-```bash
-langbridge serve --config /path/to/langbridge_config.yml --host 0.0.0.0 --port 8000
-```
-
-That host serves runtime-owned endpoints under `/api/runtime/v1/` for:
-
-- runtime info and health
-- datasets list and preview
-- semantic query
-- SQL query
-- agent ask
-- connector discovery and connector sync
-
-The host currently serves configured local runtimes. It is a core product
-surface, not a temporary demo wrapper.
-
-Enable the runtime-owned MCP surface on the same host:
-
-```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --features mcp
-```
-
-When enabled, the runtime mounts a streamable HTTP MCP endpoint at `/mcp`.
-
-The queued worker still exists under `apps/runtime_worker`, but it should be
-understood as a thin runtime-owned assembly for queued, hosted, or edge-style
-execution, not the definition of the runtime product itself.
 
 ## Quick Start
 
@@ -101,6 +42,7 @@ Create an environment and install the runtime:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+pip install -r requirements/dev.txt
 pip install -e .
 ```
 
@@ -110,19 +52,46 @@ Seed the local demo data:
 python examples/sdk/semantic_query/setup.py
 ```
 
-Run the self-hosted runtime host:
+Start the runtime host:
 
 ```bash
 langbridge serve --config examples/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
 ```
 
-Enable the lightweight runtime UI:
+Open the runtime API docs at `http://127.0.0.1:8000/api/runtime/docs`.
+
+Enable the runtime UI:
 
 ```bash
 langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui
 ```
 
-The source for that UI lives in `apps/runtime_ui`. Build it with:
+Enable the MCP endpoint:
+
+```bash
+langbridge serve --config examples/runtime_host/langbridge_config.yml --features mcp
+```
+
+Enable both:
+
+```bash
+langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui,mcp
+```
+
+## Runtime UI
+
+The runtime UI is source-controlled in `apps/runtime_ui` and built into `langbridge/ui/static`, which the Python host serves when `ui` is enabled.
+
+For local UI development:
+
+```bash
+langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui
+cd apps/runtime_ui
+npm install
+npm run dev
+```
+
+To build the production UI bundle:
 
 ```bash
 cd apps/runtime_ui
@@ -130,28 +99,35 @@ npm install
 npm run build
 ```
 
-Enable both the UI and MCP server together:
+## Docker
 
-```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui,mcp
-```
-
-Or use Docker:
+Build and run the runtime host container:
 
 ```bash
 docker compose --profile host up --build runtime-host
 ```
 
-If you need the queued worker stack instead:
+The runtime image is defined in `docker/Dockerfile`.
 
-```bash
-docker compose up --build db redis worker
-```
+## Identity And Auth
+
+Langbridge runtime execution is workspace-scoped. The core identity carried through the runtime is:
+
+- `workspace_id`
+- `actor_id`
+- `roles`
+- `request_id`
+
+The runtime host supports thin auth modes:
+
+- `none`
+- `static_token`
+- `jwt`
 
 ## Examples
 
 - `examples/runtime_host/`: self-hosted runtime host over a local config
-- `examples/runtime_host_sync/`: self-hosted SaaS connector sync example
+- `examples/runtime_host_sync/`: connector sync example
 - `examples/sdk/semantic_query/`: local SDK + semantic query walkthrough
 - `examples/sdk/federated_query/`: local SDK + federated query walkthrough
 
@@ -160,7 +136,6 @@ docker compose up --build db redis worker
 Start with:
 
 - `docs/README.md`
-- `docs/architecture/runtime-boundary.md`
 - `docs/deployment/self-hosted.md`
+- `docs/api.md`
 - `docs/development/local-dev.md`
-

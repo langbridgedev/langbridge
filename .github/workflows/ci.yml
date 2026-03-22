@@ -37,24 +37,27 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: |
-            requirements.txt
+            pyproject.toml
+            requirements/dev.txt
+            requirements/runtime.txt
 
       - name: Install backend dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements/dev.txt
+          pip install -e .
           pip install pytest
 
       - name: Check Runtime Boundary
         run: python scripts/check_runtime_boundary.py
 
-      - name: Compile runtime worker assembly
-        run: python -m compileall apps/runtime_worker
+      - name: Compile runtime modules
+        run: python -m compileall langbridge scripts
 
       - name: Run backend tests
         run: |
           mkdir -p .cache/ci
-          pytest -q tests/unit
+          pytest -q tests
 
   runtime-package-builds:
     name: Runtime Package Builds

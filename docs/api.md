@@ -2,15 +2,13 @@
 
 Langbridge exposes runtime functionality through a small set of public surfaces.
 
-These docs describe runtime interfaces owned by this repository. Hosted
-control-plane APIs belong to `langbridge-cloud`.
-
 ## Main Interfaces
 
 - Python package: `langbridge.*`
 - Python SDK: `langbridge.client.LangbridgeClient`
 - runtime host HTTP API: `/api/runtime/v1/*`
-- runtime contracts: `langbridge.contracts.*`
+- optional runtime UI: `/` and `/ui`
+- optional MCP endpoint: `/mcp`
 - semantic model contract: `docs/semantic-model.md`
 - dataset contract: `docs/datasets.md`
 
@@ -30,10 +28,12 @@ Important namespaces:
 - `langbridge.plugins`
 - `langbridge.semantic`
 - `langbridge.federation`
+- `langbridge.mcp`
+- `langbridge.ui`
 
 ## Runtime Host HTTP API
 
-The self-hosted runtime host serves runtime-owned endpoints for:
+The self-hosted runtime host serves:
 
 - `GET /api/runtime/v1/health`
 - `GET /api/runtime/v1/info`
@@ -47,6 +47,14 @@ The self-hosted runtime host serves runtime-owned endpoints for:
 - `GET /api/runtime/v1/connectors/{connector_name}/sync/states`
 - `POST /api/runtime/v1/connectors/{connector_name}/sync`
 
+When the `ui` feature is enabled, the host also serves:
+
+- `GET /`
+- `GET /ui`
+- `GET /api/runtime/ui/v1/summary`
+
+When the `mcp` feature is enabled, the host also mounts the streamable MCP endpoint at `/mcp`.
+
 The current host serves configured local runtimes.
 
 ## SDK Access Patterns
@@ -54,10 +62,8 @@ The current host serves configured local runtimes.
 `LangbridgeClient` supports three main runtime-facing modes:
 
 - `LangbridgeClient.local(...)` for in-process configured runtimes
-- `LangbridgeClient.for_runtime_host(...)` for the self-hosted runtime host
-- `LangbridgeClient.remote(...)` for automatic detection of runtime host versus remote API
-
-The runtime host path is the main self-hosted SDK story in this repo.
+- `LangbridgeClient.for_runtime_host(...)` for the runtime host
+- `LangbridgeClient.remote(...)` for automatic detection of the runtime host surface
 
 ## Identity Model
 
@@ -67,6 +73,3 @@ Runtime interfaces are workspace-scoped. Runtime-core identity uses:
 - `actor_id`
 - `roles`
 - `request_id`
-
-If a cloud or product surface carries richer identity, it should be translated at
-the boundary into this runtime context.

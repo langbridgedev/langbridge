@@ -1,9 +1,6 @@
 # Development
 
-This section documents development of the runtime repository.
-
-Use `langbridge/` for runtime work. Use `../langbridge-cloud` when the change is
-about hosted control-plane APIs, web surfaces, or hosted orchestration.
+This section documents development of the Langbridge runtime repository.
 
 ## Development Docs
 
@@ -29,6 +26,12 @@ Run the runtime host:
 langbridge serve --config examples/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
 ```
 
+Run the runtime host with the UI and MCP surfaces:
+
+```bash
+langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui,mcp
+```
+
 Build the runtime-owned UI bundle:
 
 ```bash
@@ -37,20 +40,14 @@ npm install
 npm run build
 ```
 
-Run the queued worker:
-
-```bash
-python -m apps.runtime_worker.main
-```
-
 Run tests:
 
 ```bash
 pytest -q tests
 ```
 
-Bring up local containers:
+Bring up the local runtime host container:
 
 ```bash
-docker compose up --build
+docker compose --profile host up --build runtime-host
 ```

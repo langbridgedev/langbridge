@@ -1,11 +1,6 @@
 # Self-Hosted Deployment
 
-Self-hosted deployment means running the Langbridge runtime in your own
-environment.
-
-The primary self-hosted surface in this repo is the runtime host. The queued
-worker is still available when you need broker-driven execution, but self-hosted
-Langbridge should no longer be documented as worker-first.
+Self-hosted deployment means running the Langbridge runtime in your own environment.
 
 ## Runtime Host
 
@@ -36,6 +31,31 @@ The current host serves configured local runtimes and exposes:
 - `POST /api/runtime/v1/connectors/{connector_name}/sync`
 - interactive docs at `/api/runtime/docs`
 
+## Optional Runtime Features
+
+Enable the runtime UI:
+
+```bash
+langbridge serve --config /path/to/langbridge_config.yml --features ui
+```
+
+Enable the MCP endpoint:
+
+```bash
+langbridge serve --config /path/to/langbridge_config.yml --features mcp
+```
+
+Enable both:
+
+```bash
+langbridge serve --config /path/to/langbridge_config.yml --features ui,mcp
+```
+
+When enabled:
+
+- the runtime UI is served at `/` and `/ui`
+- the MCP endpoint is mounted at `/mcp`
+
 ## Runtime Identity
 
 Runtime requests execute with a workspace-scoped context:
@@ -46,8 +66,6 @@ Runtime requests execute with a workspace-scoped context:
 - `request_id`
 
 `request_id` is sourced from `X-Request-Id` or `X-Correlation-Id` when present.
-
-External product claims are not part of runtime-core execution identity.
 
 ## Thin Runtime Auth
 
@@ -62,8 +80,6 @@ The runtime host supports three auth modes:
 ```bash
 export LANGBRIDGE_RUNTIME_AUTH_MODE=none
 ```
-
-The host uses the default runtime context generated from the configured runtime.
 
 ### Static Token
 
@@ -105,9 +121,6 @@ Supported JWT mapping settings:
 - `LANGBRIDGE_RUNTIME_AUTH_JWT_ROLES_CLAIM`
 - `LANGBRIDGE_RUNTIME_AUTH_JWT_SUBJECT_CLAIM`
 
-The runtime expects workspace-scoped claims. If `actor_id` is absent but `sub`
-exists, the runtime derives an actor identity from `sub`.
-
 ## Local And Docker Start Paths
 
 From this repo:
@@ -120,7 +133,6 @@ langbridge serve --config examples/runtime_host/langbridge_config.yml --host 127
 Or with Docker:
 
 ```bash
-python examples/sdk/semantic_query/setup.py
 docker compose --profile host up --build runtime-host
 ```
 
@@ -128,14 +140,3 @@ For runnable walkthroughs, use:
 
 - `examples/runtime_host/`
 - `examples/runtime_host_sync/`
-
-## Queued Worker Stack
-
-Use the worker when you specifically need queued or broker-driven execution:
-
-```bash
-docker compose up --build db redis worker
-```
-
-That shape is still supported, but it is no longer the clearest default for the
-self-hosted runtime story.

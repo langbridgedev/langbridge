@@ -1,34 +1,15 @@
 # Runtime Boundary
 
-This repository exists to build and ship the Langbridge runtime product.
-
-## Langbridge Versus Langbridge Cloud
-
-`langbridge/` owns:
-
-- embedded runtime execution
-- self-hosted runtime hosting
-- workspace-scoped runtime identity
-- runtime-owned auth, connectors, datasets, semantic query, federation, and orchestration
-- runtime-owned ports, providers, services, contracts, and persistence
-- thin runtime assemblies such as the queued worker
-
-`langbridge-cloud/` owns:
-
-- hosted control-plane APIs
-- cloud web application surfaces
-- hosted worker orchestration and cloud-only operations
-- product-account and control-plane administration
-- cloud migrations and control-plane persistence
+This repository exists to build and ship the Langbridge runtime.
 
 ## What Belongs In This Repo
 
-Code belongs here when it must exist for the runtime to execute workloads in:
+Code belongs here when it is required for the runtime to execute workloads in:
 
 - embedded Python use
 - local development
 - self-hosted deployment
-- hybrid customer-managed deployment
+- customer-managed runtime deployments
 
 That includes:
 
@@ -39,18 +20,19 @@ That includes:
 - `langbridge.semantic`
 - `langbridge.federation`
 - `langbridge.orchestrator`
-- `langbridge.contracts`
-- `apps/runtime_worker`
+- `langbridge.mcp`
+- `langbridge.ui`
+- `apps/runtime_ui`
+- `packages/sdk`
 
 ## What Should Stay Out
 
 Do not treat this repo as the home for:
 
-- control-plane product APIs
-- cloud UI flows
-- external product identity models as runtime-core identity
-- cloud-only orchestration glue
-- cloud-only operational tooling
+- unrelated product-web concerns
+- external account or tenant administration models as runtime-core identity
+- external orchestration logic embedded directly into runtime services
+- tooling that requires the runtime to depend on a separate control plane to function
 
 ## Current Shape
 
@@ -58,20 +40,18 @@ Do not treat this repo as the home for:
 langbridge/
   client/
   connectors/
-  contracts/
   federation/
+  mcp/
   orchestrator/
   plugins/
   runtime/
   semantic/
+  ui/
 apps/
-  runtime_worker/
+  runtime_ui/
 packages/
   sdk/
 ```
-
-`packages/sdk` is packaging for a separate SDK distribution. It is not the old
-architecture model for the repo.
 
 ## Runtime-Owned Identity And Auth
 
@@ -88,13 +68,9 @@ Self-hosted runtime auth is intentionally thin:
 - static bearer token
 - JWT bearer token
 
-If a richer cloud product identity exists, it should be translated into this
-runtime context at the boundary rather than pushed into runtime-core execution.
-
 ## Runtime-Owned Ports
 
-Ports and adapters that define runtime behavior should stay runtime-owned even
-when a cloud product provides one implementation.
+Ports and adapters that define runtime behavior should stay runtime-owned.
 
 Examples:
 
@@ -103,6 +79,4 @@ Examples:
 - sync state providers
 - credential providers
 - runtime host and execution services
-
-The runtime may integrate with a control plane through adapters, but the port
-definitions and execution behavior stay here.
+- MCP and UI surfaces mounted by the runtime host

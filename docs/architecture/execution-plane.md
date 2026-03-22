@@ -2,9 +2,7 @@
 
 The execution plane is where Langbridge runtime requests actually run.
 
-Today that primarily means the configured runtime host plus the runtime services
-it composes. The queued worker is another execution shape that reuses the same
-runtime-owned execution primitives.
+Today that means the configured runtime host plus the runtime services it composes.
 
 ## Responsibilities
 
@@ -28,16 +26,17 @@ runtime-owned execution primitives.
 - agent execution service: `langbridge/runtime/services/agent_execution_service.py`
 - federated execution bridge: `langbridge/runtime/execution/federated_query_tool.py`
 - federated engine: `langbridge/federation/*`
-- queued worker assembly: `apps/runtime_worker/main.py`
+- MCP assembly: `langbridge/mcp/server.py`
+- packaged UI serving: `langbridge/ui/server.py`
 
 ## Execution Modes
 
 - Embedded runtime: `LangbridgeClient.local(...)` or direct runtime composition
 - Self-hosted runtime host: `langbridge serve --config ...`
-- Queued worker: `python -m apps.runtime_worker.main`
-- Hybrid runtime: runtime executes in customer infrastructure while integrating with a separate control layer
+- Host with UI: `langbridge serve --config ... --features ui`
+- Host with MCP: `langbridge serve --config ... --features mcp`
 
-The current HTTP host only serves configured local runtimes in this release.
+The current HTTP host serves configured local runtimes in this release.
 
 ## Request Lifecycle
 

@@ -39,4 +39,4 @@ Self-hosted auth modes are:
 
 - runtime-core execution is workspace-scoped, not driven by external product identity
 - the self-hosted runtime host currently serves configured local runtimes
-- hosted control-plane APIs live outside this runtime package
+- the runtime package is self-contained and does not require a separate control layer

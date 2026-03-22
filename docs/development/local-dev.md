@@ -10,7 +10,7 @@ pip install -r requirements/dev.txt
 pip install -e .
 ```
 
-## Main Local Runtime Loop
+## Main Runtime Loop
 
 Seed the demo database:
 
@@ -48,18 +48,22 @@ Build the production assets back into `langbridge/ui/static` with:
 npm run build
 ```
 
+## MCP Development
+
+Run the runtime host with the MCP endpoint enabled:
+
+```bash
+langbridge serve --config examples/runtime_host/langbridge_config.yml --features mcp
+```
+
+The MCP server will be mounted at `http://127.0.0.1:8000/mcp`.
+
 ## Containerized Local Runtime
 
 Self-hosted runtime host:
 
 ```bash
 docker compose --profile host up --build runtime-host
-```
-
-Queued worker stack:
-
-```bash
-docker compose up --build db redis worker
 ```
 
 ## Examples
@@ -82,11 +86,3 @@ Or keep iteration tight with:
 ```bash
 pytest -q tests/unit
 ```
-
-## Cloud Split
-
-If you need hosted API, hosted worker, or web changes, switch to:
-
-- `../langbridge-cloud/apps/api`
-- `../langbridge-cloud/apps/worker`
-- `../langbridge-cloud/apps/web`

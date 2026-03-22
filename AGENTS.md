@@ -1,26 +1,26 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-Langbridge is the runtime-focused repository in a two-repo split. Hosted cloud surfaces now live in `../langbridge-cloud/apps` (`api`, `worker`, `web`). Runtime-owned code lives in `langbridge/packages` plus thin runtime assembly apps under `langbridge/apps` such as `runtime_worker`. Core tests are grouped in `tests/` (connectors, orchestrator, unit), while module-specific fixtures may live in `langbridge/tests`. Docs and semantic/runtime references stay in `docs/`.
+Langbridge is a runtime-first repository. Runtime-owned Python code lives under `langbridge/`, UI source lives under `apps/runtime_ui`, examples live under `examples/`, and tests live under `tests/`. Documentation belongs in `docs/`. Treat the runtime host, SDK, connectors, semantic layer, federation engine, MCP surface, and packaged UI as part of one coherent runtime product.
 
 ## Build, Test, and Development Commands
-- `python -m venv .venv && ./.venv/Scripts/activate && pip install -r requirements/dev.txt && pip install -e .` installs backend deps (use `source .venv/bin/activate` on macOS/Linux).
-- Control-plane API development now lives in `../langbridge-cloud/apps/api`; start it from that repo for API work.
-- `python -m apps.runtime_worker.main` runs the portable runtime worker assembly; use `../langbridge-cloud/apps/worker` for hosted orchestration worker work.
-- `cd ../langbridge-cloud/apps/web && npm install && npm run dev` runs the Next.js dev server; `npm run build && npm run start` serves the production bundle.
-- `docker compose up --build` launches the runtime worker plus supporting local infrastructure, and can pull the cloud API/migration images for integrated verification when needed.
-- `pytest -q tests` executes backend suites; limit scope with subpaths such as `pytest tests/orchestrator`.
-- Schema migrations now live in `../langbridge-cloud/apps/api/alembic`; run them from the cloud repo.
-- `cd ../langbridge-cloud/apps/web && npm run lint` must be clean before opening a PR when the moved UI is part of the change.
+- `python -m venv .venv && ./.venv/Scripts/activate && pip install -r requirements/dev.txt && pip install -e .` installs backend dependencies on Windows PowerShell.
+- `source .venv/bin/activate && pip install -r requirements/dev.txt && pip install -e .` is the equivalent on macOS/Linux.
+- `langbridge serve --config examples/runtime_host/langbridge_config.yml` starts the runtime host.
+- `langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui,mcp` starts the host with the runtime UI and MCP endpoint enabled.
+- `cd apps/runtime_ui && npm install && npm run dev` starts the React UI dev server.
+- `cd apps/runtime_ui && npm run build` builds the UI bundle into `langbridge/ui/static`.
+- `docker compose --profile host up --build runtime-host` starts the containerized runtime host.
+- `pytest -q tests` runs the test suite; narrow scope with paths such as `pytest -q tests/unit`.
 
 ## Coding Style & Naming Conventions
-Use 4-space indentation, type hints, and FastAPI dependency-injection patterns. Keep backend modules cohesive by domain (`semantic/translators/*.py`, `connectors/shopify/*.py`). Functions are snake_case, generated route IDs remain kebab-case via `custom_generate_unique_id`. On the frontend, components are PascalCase, hooks/utilities are camelCase, and Tailwind/PostCSS formatting is enforced by the shared ESLint config.
+Use 4-space indentation, type hints, and cohesive domain-oriented modules. Python functions use snake_case. Keep runtime modules grouped by responsibility under `langbridge.runtime`, `langbridge.semantic`, `langbridge.federation`, `langbridge.connectors`, and `langbridge.orchestrator`. In the React app, components use PascalCase and utilities/hooks use camelCase.
 
 ## Testing Guidelines
-Create pytest modules as `test_<feature>.py`, reuse fixtures from `tests/conftest.py`, and cover positive plus failure flows for orchestrators/connectors. Pair any API contract change with expectation tests and regenerate client types. UI changes should keep `npm run lint` clean and add Playwright or React Testing Library coverage when stateful behavior is introduced.
+Create pytest modules as `test_<feature>.py`, reuse fixtures from `tests/conftest.py`, and cover both success and failure paths. When changing runtime host behavior, update API and CLI tests together. When changing the UI, rebuild `langbridge/ui/static` from `apps/runtime_ui` and keep the host-facing smoke tests passing.
 
 ## Commit & Pull Request Guidelines
-Write present-tense commit subjects similar to `change semantic translator to support dialect target`. Pull requests should explain motivation, link the tracking issue, attach UI screenshots or GIFs for visible changes, and flag migrations, semantic-model edits, or config impacts so reviewers can verify `docs/semantic-model.md` and `docs/api.md`.
+Use short present-tense commit subjects such as `add runtime ui feature flag`. Pull requests should explain the runtime behavior change, call out any config or API impacts, and include screenshots for visible UI changes.
 
 ## Security & Configuration Tips
-Settings flow from `.env` via `langbridge/config.py`; never commit secrets, `.env*`, `.db`, or log files (already Git-ignored). Document new configuration knobs in `docs/development.md`, choose safe defaults, and coordinate with ops when changing agent hosts or OAuth credentials. Enable Shopify/GitHub/Google integrations only after syncing backend env vars with `../langbridge-cloud/apps/web/.env.local` so redirect URIs stay aligned.
+Never commit secrets, `.env*`, `.db`, or logs. Document new runtime configuration in `docs/development.md` or `docs/deployment/self-hosted.md`. Keep auth defaults conservative and keep connector credentials on the runtime side.
