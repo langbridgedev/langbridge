@@ -31,6 +31,8 @@ from langbridge.runtime.persistence.mappers.llm_connections import (
 )
 from langbridge.runtime.persistence.mappers.semantic_models import (
     from_semantic_model_record,
+    from_semantic_vector_index_record,
+    to_semantic_vector_index_record,
 )
 from langbridge.runtime.persistence.mappers.sql_jobs import (
     from_sql_job_record,
@@ -59,6 +61,7 @@ __all__ = [
     "from_lineage_edge_record",
     "from_llm_connection_record",
     "from_semantic_model_record",
+    "from_semantic_vector_index_record",
     "from_sql_job_record",
     "from_sql_job_result_artifact_record",
     "from_thread_message_record",
@@ -75,6 +78,7 @@ __all__ = [
     "to_dataset_revision_record",
     "to_lineage_edge_record",
     "to_llm_connection_record",
+    "to_semantic_vector_index_record",
     "to_secret_reference",
     "to_sql_job_record",
     "to_sql_job_result_artifact_record",

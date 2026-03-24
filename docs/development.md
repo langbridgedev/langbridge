@@ -5,7 +5,7 @@ This section documents development of the Langbridge runtime repository.
 ## Development Docs
 
 - `docs/development/local-dev.md`
-- `docs/development/worker-dev.md`
+- `docs/development/worker-dev.md` for preview distributed execution notes
 - `docs/deployment/self-hosted.md`
 - `docs/deployment/hybrid.md`
 
@@ -51,3 +51,5 @@ Bring up the local runtime host container:
 ```bash
 docker compose --profile host up --build runtime-host
 ```
+
+The main development path in this repo is the single-node runtime host. Coordinator/worker scale-out remains a preview direction rather than the default local workflow.

@@ -6,7 +6,6 @@ from uuid import UUID
 
 from langbridge.connectors.base import (
     ConnectorRuntimeType,
-    ConnectorRuntimeTypeSqlDialectMap,
     ColumnMetadata,
     ForeignKeyMetadata,
     SqlConnector,
@@ -257,17 +256,18 @@ class SemanticModelBuilder:
             raise ExecutionValidationError("Connector type is required.")
 
         connector_type = ConnectorRuntimeType(connector.connector_type.upper())
-        dialect = ConnectorRuntimeTypeSqlDialectMap.get(connector_type)
-        if dialect is None:
+        try:
+            self._sql_connector_factory.get_sql_connector_class_reference(connector_type)
+        except ValueError as exc:
             raise ExecutionValidationError(
                 f"Connector type {connector_type.value} does not support SQL metadata extraction."
-            )
+            ) from exc
 
         connector_payload = self._resolve_connector_config(connector)
         config_factory = get_connector_config_factory(connector_type)
         config_instance = config_factory.create(connector_payload.get("config", {}))
         sql_connector = self._sql_connector_factory.create_sql_connector(
-            dialect,
+            connector_type,
             config_instance,
             logger=self._logger,
         )

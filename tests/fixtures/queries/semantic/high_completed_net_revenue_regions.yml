@@ -1,0 +1,11 @@
+dimensions:
+  - customers.region
+measures:
+  - completed_net_revenue
+filters:
+  - member: completed_net_revenue
+    operator: gt
+    values:
+      - "150"
+order:
+  - completed_net_revenue: desc

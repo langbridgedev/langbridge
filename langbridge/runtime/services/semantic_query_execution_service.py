@@ -21,7 +21,6 @@ from langbridge.runtime.models import (
     UnifiedSemanticQueryResponse,
 )
 from langbridge.connectors.base import (
-    ConnectorRuntimeTypeSqlDialectMap,
     SqlConnector,
     SqlConnectorFactory,
     get_connector_config_factory,
@@ -115,27 +114,20 @@ class SemanticQueryExecutionService:
         )
 
     @staticmethod
-    async def create_sql_connector(
-        *,
-        connector_type: ConnectorRuntimeType,
-        connector_config: dict[str, Any],
-        sql_connector_factory: SqlConnectorFactory,
-        logger: logging.Logger,
-    ) -> SqlConnector:
-        dialect = ConnectorRuntimeTypeSqlDialectMap.get(connector_type)
-        if dialect is None:
-            raise ExecutionValidationError(
-                f"Connector type {connector_type.value} does not support SQL operations."
-            )
-        config_factory = get_connector_config_factory(connector_type)
-        config_instance = config_factory.create(connector_config.get("config", {}))
-        sql_connector = sql_connector_factory.create_sql_connector(
-            dialect,
-            config_instance,
-            logger=logger,
-        )
-        await sql_connector.test_connection()
-        return sql_connector
+    def _serialize_workflow_payload(workflow: Any) -> dict[str, Any]:
+        if isinstance(workflow, Mapping):
+            payload = dict(workflow)
+        else:
+            payload = workflow.model_dump(mode="json", by_alias=True)
+        tables = payload.get("dataset", {}).get("tables")
+        if isinstance(tables, Mapping):
+            for table_payload in tables.values():
+                if not isinstance(table_payload, dict):
+                    continue
+                schema_value = table_payload.get("schema")
+                if schema_value is not None and "schema_name" not in table_payload:
+                    table_payload["schema_name"] = schema_value
+        return payload
 
     @staticmethod
     def build_widget_query_payload(
@@ -314,7 +306,7 @@ class SemanticQueryExecutionService:
         metrics: Mapping[str, Any] | None = None,
     ) -> UnifiedQueryExecutionResult:
         if self._federated_query_tool is None:
-            raise ExecutionValidationError("Federated query tool is not configured on this worker.")
+            raise ExecutionValidationError("Federated query tool is not configured on this runtime node.")
 
         semantic_model, table_connector_map = await self._build_unified_model_and_map(
             workspace_id=workspace_id,
@@ -354,7 +346,7 @@ class SemanticQueryExecutionService:
             "workspace_id": str(workspace_id),
             "query": semantic_query.model_dump(by_alias=True, exclude_none=True),
             "dialect": "duckdb",
-            "workflow": workflow_payload,
+            "workflow": self._serialize_workflow_payload(workflow_payload),
             "semantic_model": execution_model.model_dump(by_alias=True, exclude_none=True),
         }
 
@@ -382,7 +374,7 @@ class SemanticQueryExecutionService:
         semantic_query: SemanticQuery,
     ) -> StandardQueryExecutionResult:
         if self._federated_query_tool is None:
-            raise ExecutionValidationError("Federated query tool is not configured on this worker.")
+            raise ExecutionValidationError("Federated query tool is not configured on this runtime node.")
 
         semantic_model_record = await self._get_semantic_model_record(
             workspace_id=workspace_id,
@@ -420,7 +412,7 @@ class SemanticQueryExecutionService:
                 "workspace_id": str(workspace_id),
                 "query": semantic_query.model_dump(by_alias=True, exclude_none=True),
                 "dialect": workflow_dialect,
-                "workflow": workflow.model_dump(mode="json"),
+                "workflow": self._serialize_workflow_payload(workflow),
                 "semantic_model": semantic_model.model_dump(by_alias=True, exclude_none=True),
             }
         )
@@ -604,12 +596,17 @@ class SemanticQueryExecutionService:
                 raise ExecutionValidationError(
                     f"Dataset '{referenced_dataset_id}' referenced by unified semantic dataset '{dataset_key}' was not found."
                 )
+            logical_schema = semantic_dataset.schema_name
+            logical_catalog = semantic_dataset.catalog_name
+            if logical_catalog and not logical_schema:
+                logical_schema = logical_catalog
+                logical_catalog = None
             binding, _ = build_binding_for_dataset(
                 dataset,
                 table_key=dataset_key,
-                logical_schema=semantic_dataset.schema_name,
+                logical_schema=logical_schema,
                 logical_table=semantic_dataset.relation_name,
-                logical_catalog=semantic_dataset.catalog_name,
+                logical_catalog=logical_catalog,
             )
             tables[dataset_key] = binding
 
@@ -638,7 +635,7 @@ class SemanticQueryExecutionService:
             max_stage_retries=settings.FEDERATION_STAGE_MAX_RETRIES,
             stage_parallelism=settings.FEDERATION_STAGE_PARALLELISM,
         )
-        payload = workflow.model_dump(mode="json")
+        payload = self._serialize_workflow_payload(workflow)
         payload["dataset"]["relationships"] = relationships
         return payload
 

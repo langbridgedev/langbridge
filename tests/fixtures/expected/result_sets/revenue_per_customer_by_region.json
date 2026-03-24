@@ -1,0 +1,10 @@
+[
+  {
+    "customers__region": "Europe",
+    "revenue_per_customer": 115.0
+  },
+  {
+    "customers__region": "North America",
+    "revenue_per_customer": 320.0
+  }
+]

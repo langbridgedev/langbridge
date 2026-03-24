@@ -24,72 +24,6 @@ services:
       - runtime_host_state:/config/.langbridge
     restart: unless-stopped
 
-  worker:
-    build:
-      context: .
-      dockerfile: docker/runtime-worker.Dockerfile
-    container_name: langbridge-runtime
-    environment:
-      ENVIRONMENT: self_hosted
-      OTEL_SDK_DISABLED: "true"
-      POSTGRES_SERVER: db
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: langbridge
-      POSTGRES_PASSWORD: langbridge
-      POSTGRES_DB: langbridge
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      WORKER_POLL_INTERVAL: 2.0
-      WORKER_CONCURRENCY: 10
-      WORKER_BATCH_SIZE: 10
-      WORKER_METRICS_PORT: 9101
-      FEDERATION_ARTIFACT_DIR: /tmp/langbridge-federation
-      FEDERATION_BROADCAST_THRESHOLD_BYTES: 67108864
-      FEDERATION_PARTITION_COUNT: 8
-      FEDERATION_STAGE_MAX_RETRIES: 2
-      FEDERATION_STAGE_PARALLELISM: 4
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "9101:9101"
-    restart: unless-stopped
-
-  db:
-    image: postgres:16-alpine
-    container_name: langbridge-db
-    environment:
-      POSTGRES_USER: langbridge
-      POSTGRES_PASSWORD: langbridge
-      POSTGRES_DB: langbridge
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U langbridge -d langbridge"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    container_name: langbridge-redis
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redis_data:/data
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
   qdrant:
     image: qdrant/qdrant:v1.9.4
     container_name: langbridge-qdrant
@@ -104,6 +38,4 @@ services:
 
 volumes:
   runtime_host_state:
-  pg_data:
-  redis_data:
   qdrant_data:

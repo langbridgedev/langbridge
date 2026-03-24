@@ -39,6 +39,7 @@ class RuntimeSettings:
         500000,
     )
     SQL_FEDERATION_ENABLED: bool = _read_bool("SQL_FEDERATION_ENABLED", True)
+    SQL_FEDERATION_MAX_ELIGIBLE_DATASETS: int = _read_int("SQL_FEDERATION_MAX_ELIGIBLE_DATASETS", 200)
     DATASET_FILE_LOCAL_DIR: str = os.getenv("DATASET_FILE_LOCAL_DIR", ".cache/datasets")
     FEDERATION_ARTIFACT_DIR: str = os.getenv("FEDERATION_ARTIFACT_DIR", ".cache/federation")
     FEDERATION_BROADCAST_THRESHOLD_BYTES: int = _read_int(
@@ -51,4 +52,3 @@ class RuntimeSettings:
 
 
 runtime_settings = RuntimeSettings()
-

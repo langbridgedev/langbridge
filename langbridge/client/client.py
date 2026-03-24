@@ -380,7 +380,7 @@ class _SdkAdapter(Protocol):
         query: str,
         connection_id: uuid.UUID | None,
         connection_name: str | None,
-        selected_datasets: list[SqlSelectedDataset] | None,
+        selected_datasets: list[uuid.UUID] | None,
         query_dialect: SqlDialect | str,
         params: dict[str, Any] | None,
         requested_limit: int | None,
@@ -466,14 +466,22 @@ def _coalesce_uuid(value: uuid.UUID | None, fallback: uuid.UUID | None, field_na
 
 
 def _normalize_selected_datasets(
-    selected_datasets: list[SqlSelectedDataset | dict[str, Any]] | None,
-) -> list[SqlSelectedDataset]:
-    normalized: list[SqlSelectedDataset] = []
+    selected_datasets: list[uuid.UUID | str | SqlSelectedDataset | dict[str, Any]] | None,
+) -> list[uuid.UUID]:
+    normalized: list[uuid.UUID] = []
     for item in selected_datasets or []:
-        if isinstance(item, SqlSelectedDataset):
-            normalized.append(item)
+        dataset_id: uuid.UUID
+        if isinstance(item, uuid.UUID):
+            dataset_id = item
+        elif isinstance(item, SqlSelectedDataset):
+            dataset_id = item.dataset_id
+        elif isinstance(item, dict):
+            raw_dataset_id = item.get("dataset_id") or item.get("datasetId")
+            dataset_id = uuid.UUID(str(raw_dataset_id))
         else:
-            normalized.append(SqlSelectedDataset.model_validate(item))
+            dataset_id = uuid.UUID(str(item))
+        if dataset_id not in normalized:
+            normalized.append(dataset_id)
     return normalized
 
 
@@ -657,7 +665,7 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         query: str,
         connection_id: uuid.UUID | None,
         connection_name: str | None,
-        selected_datasets: list[SqlSelectedDataset] | None,
+        selected_datasets: list[uuid.UUID] | None,
         query_dialect: SqlDialect | str,
         params: dict[str, Any] | None,
         requested_limit: int | None,
@@ -671,7 +679,7 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
             "query": query,
             **({"connection_id": str(connection_id)} if connection_id else {}),
             **({"connection_name": connection_name} if connection_name else {}),
-            "selected_datasets": [item.model_dump(mode="json") for item in normalized_datasets],
+            "selected_datasets": [str(item) for item in normalized_datasets],
             "query_dialect": _coerce_sql_dialect(query_dialect).value,
             "params": params or {},
             **({"requested_limit": requested_limit} if requested_limit is not None else {}),
@@ -894,7 +902,7 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         query: str,
         connection_id: uuid.UUID | None,
         connection_name: str | None,
-        selected_datasets: list[SqlSelectedDataset] | None,
+        selected_datasets: list[uuid.UUID] | None,
         query_dialect: SqlDialect | str,
         params: dict[str, Any] | None,
         requested_limit: int | None,
@@ -904,13 +912,13 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         poll_interval_s: float,
     ) -> SqlQueryResult:
         normalized_datasets = _normalize_selected_datasets(selected_datasets)
-        workbench_mode = (
-            SqlWorkbenchMode.dataset if normalized_datasets else SqlWorkbenchMode.direct_sql
-        )
+        is_direct = connection_id is not None or bool(connection_name)
+        workbench_mode = SqlWorkbenchMode.direct_sql if is_direct else SqlWorkbenchMode.dataset
         execute_request = RuntimeSqlQueryRequest(
             workspace_id=workspace_id,
             workbench_mode=workbench_mode,
             connection_id=connection_id,
+            connection_name=connection_name,
             query=query,
             query_dialect=_coerce_sql_dialect(query_dialect).value,
             params=params or {},
@@ -918,7 +926,6 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
             requested_timeout_seconds=requested_timeout_seconds,
             explain=explain,
             selected_datasets=normalized_datasets,
-            federated_datasets=normalized_datasets,
         )
         initial = self._request(
             "POST",
@@ -1224,7 +1231,7 @@ class LocalRuntimeAdapter(_SdkAdapter):
         query: str,
         connection_id: uuid.UUID | None,
         connection_name: str | None,
-        selected_datasets: list[SqlSelectedDataset] | None,
+        selected_datasets: list[uuid.UUID] | None,
         query_dialect: SqlDialect | str,
         params: dict[str, Any] | None,
         requested_limit: int | None,
@@ -1233,8 +1240,10 @@ class LocalRuntimeAdapter(_SdkAdapter):
         timeout_s: float,
         poll_interval_s: float,
     ) -> SqlQueryResult:
+        normalized_datasets = _normalize_selected_datasets(selected_datasets)
+        is_direct = connection_id is not None or bool(connection_name)
         execute_sql_text = getattr(self._runtime_host, "execute_sql_text", None)
-        if execute_sql_text is not None and not selected_datasets:
+        if is_direct and connection_name and execute_sql_text is not None:
             try:
                 payload = _run_awaitable(
                     execute_sql_text(
@@ -1264,15 +1273,12 @@ class LocalRuntimeAdapter(_SdkAdapter):
                 generated_sql=payload.get("generated_sql"),
             )
 
-        normalized_datasets = _normalize_selected_datasets(selected_datasets)
         resolved_actor_id = _coalesce_uuid(
             actor_id,
             getattr(getattr(self._runtime_host, "context", None), "actor_id", None),
             "actor_id",
         )
-        workbench_mode = (
-            SqlWorkbenchMode.dataset if normalized_datasets else SqlWorkbenchMode.direct_sql
-        )
+        workbench_mode = SqlWorkbenchMode.direct_sql if is_direct else SqlWorkbenchMode.dataset
         sql_job_id = uuid.uuid4()
         request = CreateSqlJobRequest(
             sql_job_id=sql_job_id,
@@ -1280,7 +1286,7 @@ class LocalRuntimeAdapter(_SdkAdapter):
             actor_id=resolved_actor_id,
             workbench_mode=workbench_mode,
             connection_id=connection_id,
-            execution_mode=("federated" if normalized_datasets else "single"),
+            execution_mode=("single" if is_direct else "federated"),
             query=query,
             query_dialect=_coerce_sql_dialect(query_dialect).value,
             params=params or {},
@@ -1289,9 +1295,8 @@ class LocalRuntimeAdapter(_SdkAdapter):
             enforced_limit=requested_limit or 100,
             enforced_timeout_seconds=requested_timeout_seconds or 30,
             allow_dml=False,
-            allow_federation=bool(normalized_datasets),
+            allow_federation=not is_direct,
             selected_datasets=normalized_datasets,
-            federated_datasets=normalized_datasets,
             explain=explain,
             correlation_id=getattr(getattr(self._runtime_host, "context", None), "request_id", None),
         )
@@ -1601,7 +1606,7 @@ class _SqlClient:
         actor_id: uuid.UUID | None = None,
         connection_id: uuid.UUID | None = None,
         connection_name: str | None = None,
-        selected_datasets: list[SqlSelectedDataset | dict[str, Any]] | None = None,
+        selected_datasets: list[uuid.UUID | str] | None = None,
         query_dialect: SqlDialect | str = SqlDialect.tsql,
         params: dict[str, Any] | None = None,
         requested_limit: int | None = None,

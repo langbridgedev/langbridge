@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from langbridge.connectors.base.connector import SqlDialetcs
+from langbridge.connectors.base.config import ConnectorRuntimeType
 from langbridge.connectors.base.connector import SqlConnector
 from langbridge.connectors.base.metadata import (
     ColumnMetadata,
@@ -32,7 +32,8 @@ class MariaDBConnector(SqlConnector):
     MariaDB connector implementation.
     """
 
-    DIALECT = SqlDialetcs.MARIADB
+    RUNTIME_TYPE = ConnectorRuntimeType.MARIADB
+    SQLGLOT_DIALECT = "mysql"
 
     def __init__(
         self,

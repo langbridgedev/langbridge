@@ -217,3 +217,60 @@ semantic_models:
           target_dataset: crm_contacts
           target_field: contact_external_id
           type: many_to_one
+
+llm_connections:
+  - name: local_openai
+    provider: openai
+    model: gpt-5.4
+    default: true
+    api_key_secret:
+      provider_type: env
+      identifier: OPENAI_API_KEY
+
+agents:
+  - name: revenue_federation_analyst
+    description: Default federated analytics agent for the SDK federated query example.
+    llm_connection: local_openai
+    default: true
+    definition:
+      prompt:
+        system_prompt: You are a Langbridge analytics agent.
+        user_instructions: |
+          Focus on revenue, account segment, lifecycle stage, region, and campaign attribution questions across the federated sources.
+        style_guidance: Keep answers concise and clearly grounded in query results.
+      memory:
+        strategy: database
+      features:
+        bi_copilot_enabled: false
+        deep_research_enabled: false
+        visualization_enabled: true
+        mcp_enabled: false
+      tools:
+        - name: governed_revenue_sql
+          tool_type: sql
+          description: Governed semantic analytics access for the federated revenue model.
+          config:
+            semantic_model_ids: [customer_revenue_federation]
+        - name: federated_dataset_sql
+          tool_type: sql
+          description: Dataset-level federated access across the source systems.
+          config:
+            dataset_ids: [sales_orders, crm_contacts, marketing_campaigns]
+      access_policy:
+        allowed_connectors: [sales_reporting, crm_reporting, campaign_file]
+        denied_connectors: []
+      execution:
+        mode: iterative
+        response_mode: analyst
+        max_iterations: 3
+        max_steps_per_iteration: 5
+        allow_parallel_tools: false
+      output:
+        format: markdown
+      guardrails:
+        moderation_enabled: true
+      observability:
+        log_level: info
+        emit_traces: false
+        capture_prompts: false
+        audit_fields: []

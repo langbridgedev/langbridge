@@ -1,0 +1,10 @@
+[
+  {
+    "customers__region": "North America",
+    "completed_net_revenue": 110
+  },
+  {
+    "customers__region": "Europe",
+    "completed_net_revenue": 210
+  }
+]

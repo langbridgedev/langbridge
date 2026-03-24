@@ -1,0 +1,7 @@
+dimensions:
+  - Marketing__campaigns.campaign_name
+measures:
+  - Commerce__orders.revenue
+order:
+  - Commerce__orders.revenue: desc
+

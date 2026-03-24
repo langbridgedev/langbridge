@@ -1,0 +1,19 @@
+dimensions:
+  - Commerce__customers.region
+  - Marketing__campaigns.channel
+  - Support__tickets.severity
+measures:
+  - Commerce__orders.revenue
+  - Marketing__campaigns.spend
+  - Support__tickets.ticket_count
+filters:
+  - member: Commerce__orders.status
+    operator: equals
+    values:
+      - completed
+  - member: Support__tickets.status
+    operator: equals
+    values:
+      - open
+order:
+  - Commerce__orders.revenue: desc

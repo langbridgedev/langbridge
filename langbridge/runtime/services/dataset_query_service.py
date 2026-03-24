@@ -140,7 +140,7 @@ class DatasetQueryService:
         request: DatasetExecutionRequest,
     ) -> None:
         if self._federated_query_tool is None:
-            raise ExecutionValidationError("Federated query tool is not configured on this worker.")
+            raise ExecutionValidationError("Federated query tool is not configured on this runtime node.")
 
         try:
             if isinstance(request, CreateDatasetPreviewJobRequest):

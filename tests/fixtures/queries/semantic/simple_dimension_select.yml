@@ -1,0 +1,6 @@
+dimensions:
+  - customers.region
+order:
+  - customers.region: asc
+limit: 10
+

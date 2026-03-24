@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from importlib import import_module
 from importlib.metadata import entry_points
 from logging import Logger, getLogger
+from pathlib import Path
+import sys
 from typing import TYPE_CHECKING, Type
 
 from langbridge.connectors.base.config import (
@@ -18,7 +20,6 @@ from langbridge.connectors.base.config import (
     ConnectorFamily,
     ConnectorRuntimeType,
     ConnectorSyncStrategy,
-    ConnectorType,
 )
 
 if TYPE_CHECKING:
@@ -27,10 +28,8 @@ if TYPE_CHECKING:
         Connector,
         ManagedVectorDB,
         NoSqlConnector,
-        SqlDialetcs,
         SqlConnector,
         VecotorDBConnector,
-        VectorDBType,
     )
 
 _BUILTIN_PLUGIN_MODULES = (
@@ -46,10 +45,10 @@ _BUILTIN_PLUGIN_MODULES = (
     "langbridge.connectors.vector.faiss",
     "langbridge.connectors.vector.qdrant",
     "langbridge.connectors.saas.shopify",
-    "langbridge.connectors.saas.stripe",
     "langbridge.connectors.saas.hubspot",
     "langbridge.connectors.saas.google_analytics",
     "langbridge.connectors.saas.salesforce",
+    "langbridge_connector_stripe.plugin",
 )
 _BUILTIN_CONNECTOR_MODULES = (
     "langbridge.connectors.builtin.postgres.connector",
@@ -72,11 +71,23 @@ _entrypoint_plugins_loaded = False
 logger = getLogger(__name__)
 
 
+def _ensure_repo_connector_src_paths() -> None:
+    repo_connectors_dir = Path(__file__).resolve().parents[2] / "langbridge-connectors"
+    if not repo_connectors_dir.exists():
+        return
+    for src_dir in sorted(repo_connectors_dir.glob("*/src")):
+        src_path = str(src_dir.resolve())
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+
+
 def ensure_builtin_plugins_loaded() -> None:
     global _builtin_plugins_loaded
 
     if _builtin_plugins_loaded:
         return
+
+    _ensure_repo_connector_src_paths()
 
     for module_path in _BUILTIN_PLUGIN_MODULES:
         try:
@@ -92,6 +103,8 @@ def ensure_builtin_connectors_loaded() -> None:
 
     if _builtin_connectors_loaded:
         return
+
+    _ensure_repo_connector_src_paths()
 
     for module_path in _BUILTIN_CONNECTOR_MODULES:
         try:
@@ -186,7 +199,7 @@ def list_connector_plugins() -> list[ConnectorPlugin]:
     ensure_entrypoint_plugins_loaded()
     return _plugin_registry.list()
 
-def get_connector_config_factory(type_s: ConnectorType) -> Type[BaseConnectorConfigFactory]:
+def get_connector_config_factory(type_s: ConnectorRuntimeType) -> Type[BaseConnectorConfigFactory]:
     ensure_builtin_connectors_loaded()
     plugin = get_connector_plugin(type_s)
     if plugin is not None and plugin.config_factory is not None:
@@ -218,24 +231,35 @@ class SqlConnectorFactory:
         pass
 
     @staticmethod
-    def get_sql_connector_class_reference(sql_dialetc: SqlDialetcs) -> Type[SqlConnector]:
+    def get_sql_connector_class_reference(
+        connector_type: ConnectorRuntimeType,
+    ) -> Type[SqlConnector]:
         from langbridge.connectors.base.connector import SqlConnector
 
         ensure_builtin_connectors_loaded()
         subclasses = SqlConnector.__subclasses__()
         for subclass in subclasses:
-            if subclass.DIALECT == sql_dialetc:
+            if getattr(subclass, "RUNTIME_TYPE", None) == connector_type:
                 return subclass
-        raise ValueError(f"No connector found for dialect: {sql_dialetc}")
+        raise ValueError(f"No SQL connector found for runtime type: {connector_type}")
 
     @staticmethod
     def create_sql_connector(
-        sql_dialetc: SqlDialetcs,
+        connector_type: ConnectorRuntimeType,
         config: BaseConnectorConfig,
         logger: Logger,
     ) -> SqlConnector:
-        connector_class = SqlConnectorFactory.get_sql_connector_class_reference(sql_dialetc)
+        connector_class = SqlConnectorFactory.get_sql_connector_class_reference(
+            connector_type
+        )
         return connector_class(config=config, logger=logger)
+
+    @staticmethod
+    def get_sqlglot_dialect(connector_type: ConnectorRuntimeType) -> str:
+        connector_class = SqlConnectorFactory.get_sql_connector_class_reference(
+            connector_type
+        )
+        return str(getattr(connector_class, "SQLGLOT_DIALECT", "tsql"))
 
 
 class ApiConnectorFactory:
@@ -302,49 +326,53 @@ class VectorDBConnectorFactory:
 
     @staticmethod
     def get_vector_connector_class_reference(
-        vector_db: VectorDBType,
+        connector_type: ConnectorRuntimeType,
     ) -> Type[VecotorDBConnector]:
         from langbridge.connectors.base.connector import VecotorDBConnector
 
         ensure_builtin_connectors_loaded()
         subclasses = VecotorDBConnector.__subclasses__()
         for subclass in subclasses:
-            if subclass.VECTOR_DB_TYPE == vector_db:
+            if getattr(subclass, "RUNTIME_TYPE", None) == connector_type:
                 return subclass
-        raise ValueError(f"No vector connector found for type: {vector_db}")
+        raise ValueError(f"No vector connector found for runtime type: {connector_type}")
 
     @staticmethod
     def get_managed_vector_db_class_reference(
-        vector_db: VectorDBType,
+        connector_type: ConnectorRuntimeType,
     ) -> Type[ManagedVectorDB]:
         from langbridge.connectors.base.connector import ManagedVectorDB
 
         ensure_builtin_connectors_loaded()
         subclasses = ManagedVectorDB.__subclasses__()
         for subclass in subclasses:
-            if subclass.VECTOR_DB_TYPE == vector_db:
+            if getattr(subclass, "RUNTIME_TYPE", None) == connector_type:
                 return subclass
-        raise ValueError(f"No managed vector DB found for type: {vector_db}")
+        raise ValueError(
+            f"No managed vector DB found for runtime type: {connector_type}"
+        )
 
     @staticmethod
-    def get_all_managed_vector_dbs() -> list[VectorDBType]:
+    def get_all_managed_vector_dbs() -> list[ConnectorRuntimeType]:
         from langbridge.connectors.base.connector import ManagedVectorDB
 
         ensure_builtin_connectors_loaded()
-        managed_vector_dbs = []
+        managed_vector_dbs: list[ConnectorRuntimeType] = []
         subclasses = ManagedVectorDB.__subclasses__()
         for subclass in subclasses:
-            managed_vector_dbs.append(subclass.VECTOR_DB_TYPE)
+            runtime_type = getattr(subclass, "RUNTIME_TYPE", None)
+            if runtime_type is not None:
+                managed_vector_dbs.append(runtime_type)
         return managed_vector_dbs
 
     @staticmethod
     def create_vector_connector(
-        vector_db: VectorDBType,
+        connector_type: ConnectorRuntimeType,
         config: BaseConnectorConfig,
         logger: Logger,
     ) -> VecotorDBConnector:
         connector_class = VectorDBConnectorFactory.get_vector_connector_class_reference(
-            vector_db
+            connector_type
         )
         return connector_class(config=config, logger=logger)
 

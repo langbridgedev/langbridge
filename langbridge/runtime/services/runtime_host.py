@@ -8,6 +8,7 @@ from langbridge.runtime.providers import (
     CredentialProvider,
     DatasetMetadataProvider,
     SemanticModelMetadataProvider,
+    SemanticVectorIndexMetadataProvider,
     SyncStateProvider,
 )
 from langbridge.runtime.services.agent_execution_service import AgentExecutionService
@@ -15,6 +16,9 @@ from langbridge.runtime.services.dataset_query_service import DatasetQueryServic
 from langbridge.runtime.services.dataset_sync_service import ConnectorSyncRuntime
 from langbridge.runtime.services.semantic_query_execution_service import (
     SemanticQueryExecutionService,
+)
+from langbridge.runtime.services.semantic_vector_search_service import (
+    SemanticVectorSearchService,
 )
 from langbridge.runtime.services.sql_query_service import SqlQueryService
 
@@ -24,6 +28,7 @@ class RuntimeProviders:
     dataset_metadata: DatasetMetadataProvider | None = None
     connector_metadata: ConnectorMetadataProvider | None = None
     semantic_models: SemanticModelMetadataProvider | None = None
+    semantic_vector_indexes: SemanticVectorIndexMetadataProvider | None = None
     sync_state: SyncStateProvider | None = None
     credentials: CredentialProvider | None = None
 
@@ -32,6 +37,7 @@ class RuntimeProviders:
 class RuntimeServices:
     federated_query_tool: FederatedQueryTool | None = None
     semantic_query: SemanticQueryExecutionService | None = None
+    semantic_vector_search: SemanticVectorSearchService | None = None
     sql_query: SqlQueryService | None = None
     dataset_query: DatasetQueryService | None = None
     dataset_sync: ConnectorSyncRuntime | None = None
@@ -79,3 +85,35 @@ class RuntimeHost:
         if self.services.semantic_query is None:
             raise RuntimeError("SemanticQueryExecutionService is not configured for this runtime host.")
         return await self.services.semantic_query.execute_unified_query(*args, **kwargs)
+
+    async def refresh_semantic_vector_search(self, *args: Any, **kwargs: Any) -> Any:
+        if self.services.semantic_vector_search is None:
+            raise RuntimeError("SemanticVectorSearchService is not configured for this runtime host.")
+        kwargs.setdefault("workspace_id", self.context.workspace_id)
+        return await self.services.semantic_vector_search.refresh_workspace(*args, **kwargs)
+
+    async def search_semantic_vectors(self, *args: Any, **kwargs: Any) -> Any:
+        if self.services.semantic_vector_search is None:
+            raise RuntimeError("SemanticVectorSearchService is not configured for this runtime host.")
+        kwargs.setdefault("workspace_id", self.context.workspace_id)
+        return await self.services.semantic_vector_search.search(*args, **kwargs)
+
+    def can_refresh_semantic_vector_search(self) -> bool:
+        if self.services.semantic_vector_search is None:
+            return False
+        capability = getattr(self.services.semantic_vector_search, "can_refresh", None)
+        if callable(capability):
+            return bool(capability())
+        return True
+
+    def semantic_vector_refresh_unavailable_reason(self) -> str | None:
+        if self.services.semantic_vector_search is None:
+            return "SemanticVectorSearchService is not configured for this runtime host."
+        reason = getattr(
+            self.services.semantic_vector_search,
+            "refresh_unavailable_reason",
+            None,
+        )
+        if callable(reason):
+            return reason()
+        return None

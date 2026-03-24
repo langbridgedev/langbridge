@@ -43,7 +43,7 @@ Langbridge is a self-hostable analytics runtime with a Python SDK, runtime host 
 
 - `docs/development.md`
 - `docs/development/local-dev.md`
-- `docs/development/worker-dev.md`
+- `docs/development/worker-dev.md` for preview scale-out notes and path stability
 
 ## Interfaces
 

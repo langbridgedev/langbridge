@@ -7,7 +7,8 @@ import uuid
 
 import numpy as np
 
-from langbridge.connectors.base.connector import ManagedVectorDB, VectorDBType
+from langbridge.connectors.base.config import ConnectorRuntimeType
+from langbridge.connectors.base.connector import ManagedVectorDB
 from langbridge.connectors.base.connector import run_sync
 from langbridge.connectors.base.errors import ConnectorError
 from .config import FaissConnectorConfig
@@ -24,7 +25,7 @@ else:
 class FaissConnector(ManagedVectorDB):
     """Lightweight FAISS connector that stores a persistent local index."""
 
-    VECTOR_DB_TYPE = VectorDBType.FAISS
+    RUNTIME_TYPE = ConnectorRuntimeType.FAISS
 
     def __init__(self, config: FaissConnectorConfig, logger: Optional[Any] = None) -> None:
         super().__init__(config=config, logger=logger)

@@ -23,18 +23,21 @@ def test_sql_job_contract_requires_connection_for_single_mode() -> None:
         )
 
 
-def test_sql_job_contract_requires_federated_datasets() -> None:
-    with pytest.raises(ValidationError):
-        CreateSqlJobRequest(
-            sql_job_id=uuid.uuid4(),
-            workspace_id=uuid.uuid4(),
-            actor_id=uuid.uuid4(),
-            execution_mode="federated",
-            query="SELECT * FROM sales.orders",
-            enforced_limit=1000,
-            enforced_timeout_seconds=30,
-            allow_federation=True,
-        )
+def test_sql_job_contract_allows_federated_execution_without_selected_datasets() -> None:
+    payload = CreateSqlJobRequest(
+        sql_job_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        actor_id=uuid.uuid4(),
+        execution_mode="federated",
+        query="SELECT * FROM sales_orders",
+        enforced_limit=1000,
+        enforced_timeout_seconds=30,
+        allow_federation=True,
+    )
+
+    assert payload.execution_mode == "federated"
+    assert payload.workbench_mode.value == "dataset"
+    assert payload.selected_datasets == []
 
 
 def test_sql_job_contract_accepts_dataset_backed_federated_execution() -> None:
@@ -48,25 +51,14 @@ def test_sql_job_contract_accepts_dataset_backed_federated_execution() -> None:
         enforced_limit=1000,
         enforced_timeout_seconds=30,
         allow_federation=True,
-        federated_datasets=[{"alias": "shop", "dataset_id": dataset_id}],
+        selected_datasets=[dataset_id],
     )
 
     assert payload.execution_mode == "federated"
     assert payload.workbench_mode.value == "dataset"
     assert payload.connection_id is None
     assert payload.query_dialect == "tsql"
-    assert [dataset.model_dump(mode="json") for dataset in payload.selected_datasets] == [
-        {
-            "alias": "shop",
-            "sql_alias": "shop",
-            "dataset_id": str(dataset_id),
-            "dataset_name": None,
-            "canonical_reference": None,
-            "connector_id": None,
-            "source_kind": None,
-            "storage_kind": None,
-        }
-    ]
+    assert payload.selected_datasets == [dataset_id]
 
 
 def test_runtime_sql_query_request_accepts_direct_sql_payload() -> None:
@@ -93,6 +85,15 @@ def test_runtime_sql_job_defaults_to_direct_sql_workbench_mode() -> None:
     )
 
     assert payload.workbench_mode == SqlWorkbenchMode.direct_sql
+
+
+def test_runtime_sql_query_request_rejects_selected_datasets_for_direct_sql() -> None:
+    with pytest.raises(ValidationError):
+        RuntimeSqlQueryRequest(
+            query="SELECT 1",
+            connection_name="commerce_demo",
+            selected_datasets=[uuid.uuid4()],
+        )
 
 
 def test_runtime_sql_job_rejects_blank_query() -> None:

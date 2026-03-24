@@ -1,6 +1,6 @@
-# Worker Development
+# Worker Preview Notes
 
-This document is retained for path stability, but the repository no longer documents a worker-first development flow.
+This document is retained for path stability. The repository does not currently document a worker-first development flow as the primary release path.
 
 ## Current Direction
 
@@ -15,6 +15,8 @@ Optional runtime-owned features are enabled on the same host:
 - `--features ui`
 - `--features mcp`
 - `--features ui,mcp`
+
+Coordinator/worker scale-out is still preview groundwork for a later release line. Treat it as implementation direction inside the federation/runtime code, not as the center of the v1 self-hosted product.
 
 ## If You Are Looking For Execution Internals
 

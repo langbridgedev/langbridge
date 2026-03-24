@@ -24,10 +24,10 @@ class LocalStageDispatcher(StageDispatcher):
 
 class CallbackStageDispatcher(StageDispatcher):
     """
-    Distributed dispatch adapter.
+    Preview distributed dispatch adapter.
 
-    This dispatcher can be wired to the existing worker task system by providing a callback
-    that publishes and waits for stage completion on remote workers.
+    This dispatcher keeps a narrow callback seam for coordinator/worker style execution,
+    but the primary v1 runtime path remains local stage dispatch on a single runtime node.
     """
 
     def __init__(

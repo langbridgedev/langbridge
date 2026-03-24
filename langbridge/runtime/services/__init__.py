@@ -14,6 +14,7 @@ __all__ = [
     "RuntimeProviders",
     "RuntimeServices",
     "SemanticQueryExecutionService",
+    "SemanticVectorSearchService",
     "SqlQueryService",
     "build_binding_for_dataset",
     "build_file_scan_sql",
@@ -88,6 +89,12 @@ def __getattr__(name: str) -> Any:
         )
 
         return SemanticQueryExecutionService
+    if name == "SemanticVectorSearchService":
+        from langbridge.runtime.services.semantic_vector_search_service import (
+            SemanticVectorSearchService,
+        )
+
+        return SemanticVectorSearchService
     if name == "SqlQueryService":
         from langbridge.runtime.services.sql_query_service import SqlQueryService
 

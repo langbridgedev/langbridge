@@ -16,6 +16,7 @@ from langbridge.runtime.persistence import (
     RepositoryLLMConnectionStore,
     RepositoryLineageEdgeStore,
     RepositorySemanticModelStore,
+    RepositorySemanticVectorIndexStore,
     RepositorySqlJobArtifactStore,
     RepositoryThreadMessageStore,
     RepositoryThreadStore,
@@ -50,6 +51,9 @@ from langbridge.runtime.persistence.repositories.semantic_model_repository impor
 from langbridge.runtime.persistence.repositories.sql_repository import (
     SqlJobResultArtifactRepository,
 )
+from langbridge.runtime.persistence.repositories.semantic_search_repository import (
+    SemanticVectorIndexRepository,
+)
 from langbridge.runtime.persistence.repositories.thread_message_repository import (
     ThreadMessageRepository,
 )
@@ -67,6 +71,7 @@ from langbridge.runtime.providers import (
     RepositoryConnectorMetadataProvider,
     RepositoryDatasetMetadataProvider,
     RepositorySemanticModelMetadataProvider,
+    RepositorySemanticVectorIndexMetadataProvider,
     RepositorySyncStateProvider,
     SecretRegistryCredentialProvider,
 )
@@ -84,6 +89,9 @@ from langbridge.runtime.services.runtime_host import (
 from langbridge.runtime.services.semantic_query_execution_service import (
     SemanticQueryExecutionService,
 )
+from langbridge.runtime.services.semantic_vector_search_service import (
+    SemanticVectorSearchService,
+)
 from langbridge.runtime.services.sql_query_service import SqlQueryService
 
 
@@ -95,6 +103,7 @@ def build_local_runtime(
     dataset_policy_repository: DatasetPolicyRepository | None,
     connector_repository: ConnectorRepository,
     semantic_model_repository: SemanticModelRepository | None,
+    semantic_vector_index_repository: SemanticVectorIndexRepository | None = None,
     connector_sync_state_repository: ConnectorSyncStateRepository | None = None,
     dataset_revision_repository: DatasetRevisionRepository | None = None,
     lineage_edge_repository: LineageEdgeRepository | None = None,
@@ -164,6 +173,11 @@ def build_local_runtime(
         if isinstance(memory_repository, ConversationMemoryRepository)
         else memory_repository
     )
+    runtime_semantic_vector_index_store = (
+        RepositorySemanticVectorIndexStore(repository=semantic_vector_index_repository)
+        if semantic_vector_index_repository is not None
+        else None
+    )
     credential_provider = SecretRegistryCredentialProvider(registry=secret_provider_registry)
     dataset_provider = CachedDatasetMetadataProvider(
         RepositoryDatasetMetadataProvider(
@@ -182,6 +196,13 @@ def build_local_runtime(
             )
         )
         if semantic_model_repository is not None
+        else None
+    )
+    semantic_vector_index_provider = (
+        RepositorySemanticVectorIndexMetadataProvider(
+            semantic_vector_index_repository=semantic_vector_index_repository
+        )
+        if semantic_vector_index_repository is not None
         else None
     )
     sync_state_provider = (
@@ -205,6 +226,23 @@ def build_local_runtime(
             logger=logger or logging.getLogger("langbridge.runtime.semantic"),
         )
         if semantic_model_repository is not None
+        else None
+    )
+    semantic_vector_search_service = (
+        SemanticVectorSearchService(
+            dataset_repository=dataset_store,
+            dataset_provider=dataset_provider,
+            semantic_model_provider=semantic_provider,
+            semantic_vector_index_store=runtime_semantic_vector_index_store,
+            connector_provider=connector_provider,
+            credential_provider=credential_provider,
+            federated_query_tool=federated_query_tool,
+            logger=logger or logging.getLogger("langbridge.runtime.semantic.vector"),
+        )
+        if (
+            semantic_model_repository is not None
+            and runtime_semantic_vector_index_store is not None
+        )
         else None
     )
     dataset_query_service = DatasetQueryService(
@@ -252,6 +290,7 @@ def build_local_runtime(
             thread_message_repository=thread_message_store,
             memory_repository=runtime_memory_store,
             federated_query_tool=federated_query_tool,
+            semantic_vector_search_service=semantic_vector_search_service,
         )
         if (
             agent_definition_store is not None
@@ -270,6 +309,7 @@ def build_local_runtime(
             dataset_metadata=dataset_provider,
             connector_metadata=connector_provider,
             semantic_models=semantic_provider,
+            semantic_vector_indexes=semantic_vector_index_provider,
             sync_state=sync_state_provider,
             credentials=credential_provider,
         ),
@@ -277,6 +317,7 @@ def build_local_runtime(
             dataset_query=dataset_query_service,
             federated_query_tool=federated_query_tool,
             semantic_query=semantic_query_service,
+            semantic_vector_search=semantic_vector_search_service,
             sql_query=sql_query_service,
             dataset_sync=dataset_sync_service,
             agent_execution=agent_execution_service,

@@ -43,6 +43,7 @@ from langbridge.orchestrator.runtime import (
     AgentOrchestratorFactory,
 )
 from ..execution.federated_query_tool import FederatedQueryTool
+from .semantic_vector_search_service import SemanticVectorSearchService
 
 
 @dataclass(slots=True)
@@ -66,6 +67,7 @@ class AgentExecutionService:
         thread_message_repository: ThreadMessageStore,
         memory_repository: ConversationMemoryStore,
         federated_query_tool: FederatedQueryTool,
+        semantic_vector_search_service: SemanticVectorSearchService | None = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
         self._agent_definition_repository = agent_definition_repository
@@ -78,6 +80,7 @@ class AgentExecutionService:
             dataset_repository=dataset_repository,
             dataset_column_repository=dataset_column_repository,
             federated_query_tool=federated_query_tool,
+            semantic_vector_search_service=semantic_vector_search_service,
         )
 
     async def execute(
@@ -275,9 +278,8 @@ class AgentExecutionService:
         job_id: uuid.UUID,
         llm_connection: LLMConnectionSecret,
     ) -> Optional[EmbeddingProvider]:
-        llm_connection_response = LLMConnectionSecret.model_validate(llm_connection)
         try:
-            return EmbeddingProvider.from_llm_connection(llm_connection_response)
+            return EmbeddingProvider.from_llm_connection(llm_connection)
         except EmbeddingProviderError as exc:
             self._logger.warning(
                 "request_id=%s embedding provider unavailable; skipping vector search: %s",

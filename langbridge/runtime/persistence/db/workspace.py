@@ -19,7 +19,7 @@ from sqlalchemy.sql import func
 from .base import Base
 
 if TYPE_CHECKING:
-    from .semantic import SemanticModelEntry, SemanticVectorStoreEntry
+    from .semantic import SemanticModelEntry, SemanticVectorIndexEntry
 
 
 class Workspace(Base):
@@ -44,8 +44,8 @@ class Workspace(Base):
         back_populates="workspace",
         cascade="all, delete-orphan",
     )
-    semantic_vector_stores: Mapped[list["SemanticVectorStoreEntry"]] = relationship(
-        "SemanticVectorStoreEntry",
+    semantic_vector_indexes: Mapped[list["SemanticVectorIndexEntry"]] = relationship(
+        "SemanticVectorIndexEntry",
         back_populates="workspace",
         cascade="all, delete-orphan",
     )

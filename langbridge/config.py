@@ -25,10 +25,10 @@ class Settings(BaseSettings):
 
     OTEL_SDK_DISABLED: bool = True
 
-    SHOPIFY_APP_CLIENT_ID: str = ""
-    SHOPIFY_APP_CLIENT_SECRET: str = ""
     API_HTTP_CA_BUNDLE: str = ""
     API_HTTP_SKIP_TLS_VERIFY: bool = False
+    SHOPIFY_APP_CLIENT_ID: str = ""
+    SHOPIFY_APP_CLIENT_SECRET: str = ""
 
     REDIS_DEAD_LETTER_STREAM: str = "langbridge:dead-letter"
     REDIS_WORKER_STREAM: str = "langbridge:worker_stream"

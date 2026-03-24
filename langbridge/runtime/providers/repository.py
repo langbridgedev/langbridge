@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from langbridge.runtime.models import SqlJobResultArtifact
 from langbridge.runtime.persistence.mappers import (
     from_connector_record,
     from_semantic_model_record,
+    from_semantic_vector_index_record,
     from_sql_job_result_artifact_record,
     to_secret_reference,
     to_sql_job_result_artifact_record,
@@ -15,10 +17,12 @@ from langbridge.runtime.persistence.repositories.connector_repository import (
 from langbridge.runtime.persistence.repositories.semantic_model_repository import (
     SemanticModelRepository,
 )
+from langbridge.runtime.persistence.repositories.semantic_search_repository import (
+    SemanticVectorIndexRepository,
+)
 from langbridge.runtime.persistence.repositories.sql_repository import (
     SqlJobResultArtifactRepository,
 )
-from langbridge.runtime.models import SqlJobResultArtifact
 from langbridge.runtime.ports import (
     ConnectorSyncStateStore,
     DatasetCatalogStore,
@@ -30,6 +34,7 @@ from langbridge.runtime.providers.protocols import (
     CredentialProvider,
     DatasetMetadataProvider,
     SemanticModelMetadataProvider,
+    SemanticVectorIndexMetadataProvider,
     SqlJobResultArtifactProvider,
     SyncStateProvider,
 )
@@ -82,6 +87,15 @@ class RepositoryConnectorMetadataProvider(ConnectorMetadataProvider):
         )
         return from_connector_record(connector)
 
+    async def get_connector_by_name(self, *, workspace_id, connector_name) -> Any | None:
+        connector = await self._connector_repository.get_by_name(connector_name)
+        runtime_connector = from_connector_record(connector)
+        if runtime_connector is None:
+            return None
+        if runtime_connector.workspace_id is None or runtime_connector.workspace_id == workspace_id:
+            return runtime_connector
+        return None
+
 
 class RepositorySemanticModelMetadataProvider(SemanticModelMetadataProvider):
     def __init__(self, *, semantic_model_repository: SemanticModelRepository) -> None:
@@ -93,6 +107,59 @@ class RepositorySemanticModelMetadataProvider(SemanticModelMetadataProvider):
             workspace_id=workspace_id,
         )
         return from_semantic_model_record(semantic_model)
+
+    async def get_semantic_models(self, *, workspace_id, semantic_model_ids) -> list[Any]:
+        if semantic_model_ids is None:
+            semantic_models = await self._semantic_model_repository.list_for_workspace(workspace_id)
+        else:
+            semantic_models = await self._semantic_model_repository.get_by_ids_for_workspace(
+                workspace_id=workspace_id,
+                model_ids=semantic_model_ids,
+            )
+        return [
+            runtime_model
+            for model in semantic_models
+            if (runtime_model := from_semantic_model_record(model)) is not None
+        ]
+
+
+class RepositorySemanticVectorIndexMetadataProvider(SemanticVectorIndexMetadataProvider):
+    def __init__(self, *, semantic_vector_index_repository: SemanticVectorIndexRepository) -> None:
+        self._semantic_vector_index_repository = semantic_vector_index_repository
+
+    async def get_semantic_vector_index(self, *, workspace_id, semantic_vector_index_id) -> Any | None:
+        index = await self._semantic_vector_index_repository.get_for_workspace(
+            vector_index_id=semantic_vector_index_id,
+            workspace_id=workspace_id,
+        )
+        return from_semantic_vector_index_record(index)
+
+    async def get_semantic_vector_index_for_dimension(
+        self,
+        *,
+        workspace_id,
+        semantic_model_id,
+        dataset_key,
+        dimension_name,
+    ) -> Any | None:
+        index = await self._semantic_vector_index_repository.get_for_dimension(
+            workspace_id=workspace_id,
+            semantic_model_id=semantic_model_id,
+            dataset_key=dataset_key,
+            dimension_name=dimension_name,
+        )
+        return from_semantic_vector_index_record(index)
+
+    async def list_semantic_vector_indexes(self, *, workspace_id, semantic_model_id=None) -> list[Any]:
+        indexes = await self._semantic_vector_index_repository.list_for_workspace(
+            workspace_id=workspace_id,
+            semantic_model_id=semantic_model_id,
+        )
+        return [
+            runtime_index
+            for item in indexes
+            if (runtime_index := from_semantic_vector_index_record(item)) is not None
+        ]
 
 
 class RepositorySyncStateProvider(SyncStateProvider):
@@ -116,6 +183,7 @@ class RepositorySyncStateProvider(SyncStateProvider):
         state.status = kwargs["status"]
         state.error_message = kwargs["error_message"]
         await self._connector_sync_state_repository.save(state)
+
 
 class SqlArtifactRepository(SqlJobResultArtifactProvider):
     def __init__(self, *, sql_job_result_artifact_repository: SqlJobResultArtifactRepository) -> None:

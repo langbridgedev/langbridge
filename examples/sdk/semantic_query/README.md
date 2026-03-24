@@ -12,6 +12,7 @@ It runs entirely against a configured local runtime built from the monolith
 - semantic query
 - direct SQL query
 - agent ask against a configured local agent
+- canonical local agent authoring through `agents[].definition.tools`
 
 ## Files
 
@@ -69,3 +70,4 @@ jupyter notebook examples/sdk/semantic_query/example.ipynb
 - this example is runtime-local, not cloud-hosted
 - the runtime context is workspace-scoped even in local mode
 - the config file in this folder is aligned with the seeded warehouse structure
+- the agent config in `langbridge_config.yml` uses the canonical `definition.tools` shape and shows both semantic-model and dataset-backed SQL tool bindings

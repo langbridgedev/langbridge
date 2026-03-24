@@ -1,8 +1,9 @@
 import logging
 from typing import Any, Dict, Optional
 
-from langbridge.connectors.base.connector import SqlConnector, SqlDialetcs
-from connectors.base.errors import ConnectorError
+from langbridge.connectors.base.config import ConnectorRuntimeType
+from langbridge.connectors.base.connector import SqlConnector
+from langbridge.connectors.base.errors import ConnectorError
 from langbridge.connectors.base.metadata import (
     ColumnMetadata,
     ForeignKeyMetadata,
@@ -22,7 +23,8 @@ else:  # pragma: no cover - optional dependency
 
 
 class SnowflakeConnector(SqlConnector):
-    DIALECT = SqlDialetcs.SNOWFLAKE
+    RUNTIME_TYPE = ConnectorRuntimeType.SNOWFLAKE
+    SQLGLOT_DIALECT = "snowflake"
 
     def __init__(
         self,

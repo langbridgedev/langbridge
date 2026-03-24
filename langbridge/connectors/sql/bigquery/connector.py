@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from langbridge.connectors.base import SqlDialetcs
+from langbridge.connectors.base.config import ConnectorRuntimeType
 from langbridge.connectors.base.connector import SqlConnector
 from langbridge.connectors.base.metadata import ColumnMetadata, ForeignKeyMetadata, TableMetadata
 from langbridge.connectors.base.errors import ConnectorError
@@ -23,7 +23,8 @@ class BigQueryConnector(SqlConnector):
     Google BigQuery connector implementation.
     """
 
-    DIALECT = SqlDialetcs.BIGQUERY
+    RUNTIME_TYPE = ConnectorRuntimeType.BIGQUERY
+    SQLGLOT_DIALECT = "bigquery"
 
     def __init__(
         self,

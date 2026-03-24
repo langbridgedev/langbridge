@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from langbridge.connectors.base import SqlDialetcs
+from langbridge.connectors.base.config import ConnectorRuntimeType
 from langbridge.connectors.base.connector import SqlConnector
 from langbridge.connectors.base.metadata import ColumnMetadata, ForeignKeyMetadata, TableMetadata
 from langbridge.connectors.base.errors import ConnectorError
@@ -28,7 +28,8 @@ class MySqlConnector(SqlConnector):
     MySQL connector implementation.
     """
 
-    DIALECT = SqlDialetcs.MYSQL
+    RUNTIME_TYPE = ConnectorRuntimeType.MYSQL
+    SQLGLOT_DIALECT = "mysql"
 
     def __init__(
         self,

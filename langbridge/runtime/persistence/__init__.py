@@ -11,6 +11,7 @@ __all__ = [
     "RepositoryLLMConnectionStore",
     "RepositoryLineageEdgeStore",
     "RepositorySemanticModelStore",
+    "RepositorySemanticVectorIndexStore",
     "RepositorySqlJobArtifactStore",
     "RepositorySqlJobStore",
     "RepositoryThreadMessageStore",

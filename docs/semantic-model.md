@@ -60,6 +60,31 @@ Fields:
 - `alias`
 - `description`
 - `synonyms`
+- `vector`
+
+`vector` is the canonical semantic dimension vector-search contract:
+
+```yaml
+dimensions:
+  - name: country
+    expression: country
+    type: string
+    vector:
+      enabled: true
+      refresh_interval: 1d
+      max_values: 5000
+      store:
+        type: managed_faiss
+```
+
+`vector.store` supports:
+
+- `type: managed_faiss`
+- `type: connector` with `connector_name`
+- optional `index_name` for an explicit runtime index namespace
+
+Legacy dimension fields are still normalized on load:
+
 - `vectorized`
 - `vector_reference`
 - `vector_index`

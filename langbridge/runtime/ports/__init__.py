@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import uuid
 from typing import Any, Protocol
 
@@ -19,6 +17,7 @@ from langbridge.runtime.models import (
     RuntimeThreadMessage,
     SecretReference,
     SemanticModelMetadata,
+    SemanticVectorIndexMetadata,
     SqlJob,
     SqlJobResultArtifact,
 )
@@ -45,7 +44,6 @@ class ISemanticModelStore(Protocol):
         self,
         model_ids: list[uuid.UUID],
     ) -> list[SemanticModelMetadata]: ...
-
 
 class DatasetMetadataProvider(Protocol):
     async def get_dataset(
@@ -82,7 +80,37 @@ class SemanticModelMetadataProvider(Protocol):
         workspace_id: uuid.UUID,
         semantic_model_id: uuid.UUID,
     ) -> SemanticModelMetadata | None: ...
+    
+    async def get_semantic_models(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_model_ids: list[uuid.UUID] | None = None,
+    ) -> list[SemanticModelMetadata]: ...
 
+class SemanticVectorIndexMetadataProvider(Protocol):
+    async def get_semantic_vector_index(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_vector_index_id: uuid.UUID,
+    ) -> SemanticVectorIndexMetadata | None: ...
+
+    async def get_semantic_vector_index_for_dimension(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_model_id: uuid.UUID,
+        dataset_key: str,
+        dimension_name: str,
+    ) -> SemanticVectorIndexMetadata | None: ...
+
+    async def list_semantic_vector_indexes(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_model_id: uuid.UUID | None = None,
+    ) -> list[SemanticVectorIndexMetadata]: ...
 
 class ConnectorMetadataProvider(Protocol):
     async def get_connector(
@@ -90,6 +118,13 @@ class ConnectorMetadataProvider(Protocol):
         *,
         workspace_id: uuid.UUID,
         connector_id: uuid.UUID,
+    ) -> ConnectorMetadata | None: ...
+
+    async def get_connector_by_name(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        connector_name: str,
     ) -> ConnectorMetadata | None: ...
 
 
@@ -141,11 +176,17 @@ class ThreadStore(Protocol):
 
     async def get_by_id(self, id_: object) -> RuntimeThread | None: ...
 
+    async def delete(self, id_: object) -> None: ...
+
+    async def list_for_actor(self, actor_id: uuid.UUID | None = None) -> list[RuntimeThread]: ...
+
 
 class ThreadMessageStore(Protocol):
     def add(self, instance: RuntimeThreadMessage) -> RuntimeThreadMessage: ...
 
     async def list_for_thread(self, thread_id: uuid.UUID) -> list[RuntimeThreadMessage]: ...
+
+    async def delete_for_thread(self, thread_id: uuid.UUID) -> None: ...
 
 
 class SemanticModelStore(Protocol):
@@ -153,6 +194,41 @@ class SemanticModelStore(Protocol):
 
     async def get_by_ids(self, model_ids: list[uuid.UUID]) -> list[SemanticModelMetadata]: ...
 
+class SemanticVectorIndexStore(Protocol):
+    async def get_by_id(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_vector_index_id: uuid.UUID,
+    ) -> SemanticVectorIndexMetadata | None: ...
+
+    async def get_for_dimension(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_model_id: uuid.UUID,
+        dataset_key: str,
+        dimension_name: str,
+    ) -> SemanticVectorIndexMetadata | None: ...
+
+    async def list_for_workspace(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_model_id: uuid.UUID | None = None,
+    ) -> list[SemanticVectorIndexMetadata]: ...
+
+    async def save(
+        self,
+        instance: SemanticVectorIndexMetadata,
+    ) -> SemanticVectorIndexMetadata: ...
+
+    async def delete(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_vector_index_id: uuid.UUID,
+    ) -> None: ...
 
 class ConversationMemoryStore(Protocol):
     async def list_for_thread(
@@ -337,6 +413,8 @@ __all__ = [
     "MutableJobHandle",
     "SemanticModelStore",
     "SemanticModelMetadataProvider",
+    "SemanticVectorIndexMetadataProvider",
+    "SemanticVectorIndexStore",
     "SqlJobArtifactStore",
     "SqlJobStore",
     "SqlJobResultArtifactProvider",

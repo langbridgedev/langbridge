@@ -8,8 +8,8 @@ from langbridge.connectors.nosql.mongodb import (
     MongoDBConnectorConfigFactory as LegacyMongoDBConnectorConfigFactory,
 )
 from langbridge.connectors.base import (
-    ConnectorRuntimeTypeSqlDialectMap,
     NoSqlConnectorFactory,
+    SqlConnectorFactory,
 )
 from langbridge.connectors.base.config import ConnectorRuntimeType
 from langbridge.connectors.nosql.mongodb import (
@@ -123,7 +123,10 @@ def test_mongodb_connector_registration_uses_nosql_factory() -> None:
     )
 
     assert connector_class is MongoDBConnector
-    assert ConnectorRuntimeTypeSqlDialectMap.get(ConnectorRuntimeType.MONGODB) is None
+    with pytest.raises(ValueError, match="No SQL connector found"):
+        SqlConnectorFactory.get_sql_connector_class_reference(
+            ConnectorRuntimeType.MONGODB
+        )
 
 
 def test_legacy_mongodb_config_import_is_a_compatibility_alias() -> None:

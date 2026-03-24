@@ -49,3 +49,5 @@ Feature-gated surfaces can be mounted on the same host:
 
 - `ui`
 - `mcp`
+
+This v1 repository is centered on that single runtime host. Distributed coordinator/worker scale-out remains preview groundwork for a later runtime release slice.

@@ -1,0 +1,83 @@
+version: "1.0"
+name: Commerce
+description: Core commerce semantic model for fixture-driven semantic and federation tests.
+datasets:
+  orders:
+    dataset_id: "11111111-1111-1111-1111-111111111111"
+    relation_name: orders
+    schema_name: analytics
+    dimensions:
+      - name: order_id
+        type: integer
+        primary_key: true
+      - name: customer_id
+        type: integer
+      - name: order_date
+        type: date
+      - name: order_ts
+        type: timestamp
+      - name: status
+        type: string
+      - name: channel
+        type: string
+      - name: country
+        type: string
+        vector:
+          enabled: true
+          refresh_interval: 1d
+          store:
+            type: managed_faiss
+    measures:
+      - name: revenue
+        expression: amount
+        type: number
+        aggregation: sum
+      - name: order_count
+        expression: order_id
+        type: integer
+        aggregation: count
+      - name: net_revenue
+        expression: amount - discount
+        type: number
+        aggregation: sum
+    filters:
+      completed_only:
+        condition: orders.status = 'completed'
+  customers:
+    dataset_id: "22222222-2222-2222-2222-222222222222"
+    relation_name: customers
+    schema_name: analytics
+    dimensions:
+      - name: customer_id
+        type: integer
+        primary_key: true
+      - name: customer_name
+        expression: name
+        type: string
+      - name: region
+        type: string
+      - name: tier
+        type: string
+relationships:
+  - name: orders_to_customers
+    source_dataset: orders
+    source_field: customer_id
+    target_dataset: customers
+    target_field: customer_id
+    type: left
+metrics:
+  revenue_delta:
+    description: Raw value difference used to confirm metric loading.
+    expression: orders.amount - orders.discount
+  completed_net_revenue:
+    description: Completed-only net revenue using an explicit filtered aggregate expression.
+    expression: SUM(CASE WHEN orders.status = 'completed' THEN orders.amount - orders.discount ELSE 0 END)
+  revenue_per_customer:
+    description: Ratio-style metric that guards against zero distinct customers.
+    expression: SUM(orders.amount) / NULLIF(COUNT(DISTINCT orders.customer_id), 0)
+  open_pipeline_net_revenue:
+    description: Net revenue still outside the completed order set.
+    expression: SUM(orders.amount - orders.discount) - SUM(CASE WHEN orders.status = 'completed' THEN orders.amount - orders.discount ELSE 0 END)
+  cancelled_revenue_per_customer:
+    description: Null-safe ratio metric for a zero-row cancelled cohort.
+    expression: SUM(CASE WHEN orders.status = 'cancelled' THEN orders.amount ELSE 0 END) / NULLIF(COUNT(DISTINCT CASE WHEN orders.status = 'cancelled' THEN orders.customer_id END), 0)

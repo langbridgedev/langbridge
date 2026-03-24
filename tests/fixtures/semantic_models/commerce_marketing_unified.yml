@@ -1,0 +1,21 @@
+version: "1.0"
+name: CommerceMarketing
+description: Unified semantic fixture that joins commerce and marketing sources by customer.
+source_models:
+  - id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    alias: Commerce
+    name: Commerce
+  - id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    alias: Marketing
+    name: Marketing
+relationships:
+  - name: commerce_to_marketing
+    source_semantic_model_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    source_field: orders.customer_id
+    target_semantic_model_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    target_field: campaigns.customer_id
+    relationship_type: left
+metrics:
+  revenue_minus_spend:
+    description: Cross-model raw value expression used to validate unified model loading.
+    expression: Commerce.orders.revenue - Marketing.campaigns.spend

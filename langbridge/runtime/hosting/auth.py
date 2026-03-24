@@ -5,6 +5,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -12,6 +13,11 @@ from fastapi import HTTPException, Request, status
 from jose import JWTError, jwt
 
 from langbridge.runtime.context import RuntimeContext
+from langbridge.runtime.hosting.local_auth import (
+    RuntimeLocalAuthBootstrapRequiredError,
+    RuntimeLocalAuthError,
+    RuntimeLocalAuthManager,
+)
 
 
 _REQUEST_ID_HEADERS = ("x-request-id", "x-correlation-id")
@@ -19,6 +25,7 @@ _REQUEST_ID_HEADERS = ("x-request-id", "x-correlation-id")
 
 class RuntimeAuthMode(str, Enum):
     none = "none"
+    local = "local"
     static_token = "static_token"
     jwt = "jwt"
 
@@ -34,6 +41,10 @@ class RuntimeAuthPrincipal:
 @dataclass(slots=True, frozen=True)
 class RuntimeAuthConfig:
     mode: RuntimeAuthMode = RuntimeAuthMode.none
+    local_store_path: str | None = None
+    local_cookie_name: str = "langbridge_runtime_session"
+    local_session_max_age_seconds: int = 60 * 60 * 24 * 14
+    local_session_secret: str | None = None
     static_token: str | None = None
     static_workspace_id: uuid.UUID | None = None
     static_actor_id: uuid.UUID | None = None
@@ -49,16 +60,28 @@ class RuntimeAuthConfig:
     jwt_subject_claim: str = "sub"
 
     def validate(self) -> None:
+        if self.mode == RuntimeAuthMode.local and not self.local_store_path:
+            raise ValueError("local auth mode requires a resolved runtime auth store path.")
         if self.mode == RuntimeAuthMode.static_token and not self.static_token:
             raise ValueError("static_token auth mode requires LANGBRIDGE_RUNTIME_AUTH_STATIC_TOKEN.")
         if self.mode == RuntimeAuthMode.jwt and not self.jwt_secret and not self.jwt_jwks_url:
             raise ValueError("jwt auth mode requires LANGBRIDGE_RUNTIME_AUTH_JWT_SECRET or LANGBRIDGE_RUNTIME_AUTH_JWT_JWKS_URL.")
 
     @classmethod
-    def from_env(cls) -> "RuntimeAuthConfig":
+    def from_env(cls, *, config_path: str | Path | None = None) -> "RuntimeAuthConfig":
         mode_raw = str(os.getenv("LANGBRIDGE_RUNTIME_AUTH_MODE", "none")).strip().lower() or "none"
         config = cls(
             mode=RuntimeAuthMode(mode_raw),
+            local_store_path=_resolve_local_store_path(
+                explicit_path=_optional_env("LANGBRIDGE_RUNTIME_AUTH_LOCAL_STORE_PATH"),
+                config_path=config_path,
+            ),
+            local_cookie_name=_optional_env("LANGBRIDGE_RUNTIME_AUTH_LOCAL_COOKIE_NAME") or "langbridge_runtime_session",
+            local_session_max_age_seconds=_int_env(
+                "LANGBRIDGE_RUNTIME_AUTH_LOCAL_SESSION_MAX_AGE_SECONDS",
+                default=60 * 60 * 24 * 14,
+            ),
+            local_session_secret=_optional_env("LANGBRIDGE_RUNTIME_AUTH_LOCAL_SESSION_SECRET"),
             static_token=_optional_env("LANGBRIDGE_RUNTIME_AUTH_STATIC_TOKEN"),
             static_workspace_id=_uuid_env("LANGBRIDGE_RUNTIME_AUTH_STATIC_WORKSPACE_ID"),
             static_actor_id=_uuid_env("LANGBRIDGE_RUNTIME_AUTH_STATIC_ACTOR_ID"),
@@ -91,10 +114,25 @@ class RuntimeAuthResolver:
         self._jwks_cache_ttl_seconds = max(1, int(jwks_cache_ttl_seconds))
         self._jwks_cache: dict[str, Any] | None = None
         self._jwks_cache_expires_at = 0.0
+        self._local_auth = (
+            RuntimeLocalAuthManager(
+                workspace_id=self._default_context.workspace_id,
+                store_path=Path(str(self._config.local_store_path)),
+                cookie_name=self._config.local_cookie_name,
+                session_max_age_seconds=self._config.local_session_max_age_seconds,
+                session_secret=self._config.local_session_secret,
+            )
+            if self._config.mode == RuntimeAuthMode.local
+            else None
+        )
 
     @property
     def mode(self) -> RuntimeAuthMode:
         return self._config.mode
+
+    @property
+    def local_auth(self) -> RuntimeLocalAuthManager | None:
+        return self._local_auth
 
     async def authenticate(self, request: Request) -> RuntimeAuthPrincipal:
         if self._config.mode == RuntimeAuthMode.none:
@@ -102,6 +140,21 @@ class RuntimeAuthResolver:
                 workspace_id=self._default_context.workspace_id,
                 actor_id=self._default_context.actor_id,
                 roles=tuple(self._default_context.roles),
+            )
+
+        if self._config.mode == RuntimeAuthMode.local:
+            local_auth = self._require_local_auth()
+            try:
+                session = local_auth.authenticate_request(request)
+            except RuntimeLocalAuthBootstrapRequiredError as exc:
+                raise self._unauthorized(str(exc)) from exc
+            except RuntimeLocalAuthError as exc:
+                raise self._unauthorized(str(exc)) from exc
+            return RuntimeAuthPrincipal(
+                workspace_id=self._default_context.workspace_id,
+                actor_id=session.id,
+                roles=tuple(session.roles),
+                subject=session.username,
             )
 
         token = self._extract_bearer_token(request)
@@ -213,6 +266,11 @@ class RuntimeAuthResolver:
             subject=subject,
         )
 
+    def _require_local_auth(self) -> RuntimeLocalAuthManager:
+        if self._local_auth is None:
+            raise RuntimeError("Runtime local auth is not configured.")
+        return self._local_auth
+
     def _resolve_request_id(self, request: Request) -> str:
         for header_name in _REQUEST_ID_HEADERS:
             value = str(request.headers.get(header_name) or "").strip()
@@ -245,6 +303,26 @@ def _split_csv_env(name: str, *, default: tuple[str, ...] = ()) -> tuple[str, ..
     if value is None:
         return default
     return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
+def _int_env(name: str, *, default: int) -> int:
+    value = _optional_env(name)
+    if value is None:
+        return int(default)
+    return int(value)
+
+
+def _resolve_local_store_path(
+    *,
+    explicit_path: str | None,
+    config_path: str | Path | None,
+) -> str | None:
+    if explicit_path:
+        return str(Path(explicit_path).expanduser().resolve())
+    if config_path is None:
+        return str((Path.cwd() / ".langbridge" / "auth.json").resolve())
+    base_path = Path(config_path).expanduser().resolve()
+    return str((base_path.parent / ".langbridge" / "auth.json").resolve())
 
 
 def _coerce_uuid(value: Any, *, field_name: str) -> uuid.UUID:

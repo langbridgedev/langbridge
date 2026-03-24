@@ -15,6 +15,7 @@ from langbridge.runtime.utils.connector_runtime import (
 )
 from langbridge.runtime.context import RuntimeContext
 from langbridge.runtime.execution import FederatedQueryTool
+from langbridge.runtime.embeddings import EmbeddingProvider, EmbeddingProviderError
 from langbridge.runtime.models import (
     ConnectionMetadata,
     ConnectionPolicy,
@@ -37,12 +38,14 @@ from langbridge.runtime.models import (
     RuntimeThreadMessage,
     RuntimeThreadState,
     SemanticModelMetadata,
+    SemanticVectorIndexMetadata,
     SecretReference,
     SqlWorkbenchMode,
 )
 from langbridge.runtime.providers import (
     MemoryConnectorProvider,
     MemorySemanticModelProvider,
+    MemorySemanticVectorIndexProvider,
     RepositoryDatasetMetadataProvider,
     RepositorySyncStateProvider,
     SecretRegistryCredentialProvider,
@@ -67,8 +70,17 @@ from langbridge.connectors.base import (
 from langbridge.runtime.services.semantic_query_execution_service import (
     SemanticQueryExecutionService,
 )
+from langbridge.runtime.services.semantic_vector_search_service import (
+    SemanticVectorSearchService,
+)
 from langbridge.runtime.services.sql_query_service import SqlQueryService
 from langbridge.runtime.settings import runtime_settings as settings
+from langbridge.orchestrator.definitions import AgentDefinitionFactory
+from langbridge.semantic.loader import (
+    SemanticModelError,
+    load_semantic_model,
+    load_unified_semantic_model,
+)
 from langbridge.semantic.model import SemanticModel
 from langbridge.semantic.query import SemanticQuery
 
@@ -172,11 +184,22 @@ class LocalRuntimeAgentConfig(BaseModel):
     name: str
     description: str | None = None
     llm_connection: str | None = None
-    semantic_model: str
-    dataset: str
+    semantic_model: str | None = None
+    dataset: str | None = None
     default: bool = False
     instructions: str | None = None
     definition: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_authoring_shape(self) -> "LocalRuntimeAgentConfig":
+        has_definition = bool(self.definition)
+        has_semantic_model = bool(str(self.semantic_model or "").strip())
+        has_dataset = bool(str(self.dataset or "").strip())
+        if not has_definition and not has_semantic_model and not has_dataset:
+            raise ValueError(
+                "Agent config must define definition or a shorthand semantic_model/dataset binding."
+            )
+        return self
 
 
 class LocalRuntimeConfig(BaseModel):
@@ -207,7 +230,9 @@ class LocalRuntimeDatasetRecord:
 class LocalRuntimeSemanticModelRecord:
     id: uuid.UUID
     name: str
-    semantic_model: SemanticModel
+    semantic_model: SemanticModel | None
+    content_yaml: str
+    content_json: dict[str, Any]
 
 
 @dataclass(slots=True, frozen=True)
@@ -542,6 +567,7 @@ class _InMemoryLLMConnectionRepository:
             model=record.connection.model,
             configuration=dict(record.connection.configuration or {}),
             is_active=record.connection.is_active,
+            workspace_id=record.connection.workspace_id,
             created_at=record.connection.created_at,
             updated_at=record.connection.updated_at,
         )
@@ -562,6 +588,19 @@ class _InMemoryThreadRepository:
     async def get_by_id(self, id_: object) -> RuntimeThread | None:
         return self._threads.get(id_)
 
+    async def list_for_actor(self, actor_id: uuid.UUID | None = None) -> list[RuntimeThread]:
+        items = list(self._threads.values())
+        if actor_id is not None:
+            items = [thread for thread in items if thread.created_by == actor_id]
+        return sorted(
+            items,
+            key=lambda thread: thread.updated_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+
+    async def delete(self, id_: object) -> None:
+        self._threads.pop(id_, None)
+
 
 class _InMemoryThreadMessageRepository:
     def __init__(self) -> None:
@@ -576,6 +615,9 @@ class _InMemoryThreadMessageRepository:
             [message for message in self.items if message.thread_id == thread_id],
             key=lambda message: message.created_at or datetime.min.replace(tzinfo=timezone.utc),
         )
+
+    async def delete_for_thread(self, thread_id: uuid.UUID) -> None:
+        self.items = [message for message in self.items if message.thread_id != thread_id]
 
 
 class _InMemoryConversationMemoryRepository:
@@ -855,6 +897,84 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             )
         return items
 
+    async def get_dataset(
+        self,
+        *,
+        dataset_ref: str,
+    ) -> dict[str, Any]:
+        dataset = await self._resolve_dataset_record(dataset_ref)
+        configured_record = self._datasets_by_id.get(dataset.id)
+        connector = self._connector_for_id(dataset.connection_id)
+        columns = await self._dataset_column_repository.list_for_dataset(dataset_id=dataset.id)
+        policy = await self._dataset_policy_repository.get_for_dataset(dataset_id=dataset.id)
+        return {
+            "id": dataset.id,
+            "name": dataset.name,
+            "label": configured_record.label if configured_record is not None else dataset.name,
+            "description": dataset.description,
+            "sql_alias": dataset.sql_alias,
+            "connector": connector.name if connector is not None else None,
+            "connector_id": connector.id if connector is not None else None,
+            "semantic_model": configured_record.semantic_model_name if configured_record is not None else None,
+            "dataset_type": dataset.dataset_type,
+            "source_kind": dataset.source_kind,
+            "storage_kind": dataset.storage_kind,
+            "table_name": dataset.table_name,
+            "storage_uri": dataset.storage_uri,
+            "dialect": dataset.dialect,
+            "tags": list(dataset.tags_json or []),
+            "managed": "managed" in {str(tag).strip().lower() for tag in (dataset.tags_json or [])},
+            "relation_identity": dataset.relation_identity_json,
+            "execution_capabilities": dataset.execution_capabilities_json,
+            "columns": [
+                {
+                    "id": column.id,
+                    "name": column.name,
+                    "data_type": column.data_type,
+                    "nullable": bool(column.nullable),
+                    "description": column.description,
+                    "is_computed": bool(column.is_computed),
+                    "expression": column.expression,
+                    "ordinal_position": column.ordinal_position,
+                }
+                for column in columns
+            ],
+            "policy": (
+                {
+                    "max_rows_preview": policy.max_rows_preview,
+                    "max_export_rows": policy.max_export_rows,
+                    "redaction_rules": dict(policy.redaction_rules_json),
+                    "row_filters": list(policy.row_filters_json),
+                    "allow_dml": bool(policy.allow_dml),
+                }
+                if policy is not None
+                else None
+            ),
+            "created_at": dataset.created_at,
+            "updated_at": dataset.updated_at,
+        }
+
+    async def list_semantic_models(self) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for name, record in self._semantic_models.items():
+            items.append(self._build_semantic_model_summary(name=name, record=record))
+        items.sort(key=lambda item: (not bool(item["default"]), str(item["name"]).lower()))
+        return items
+
+    async def get_semantic_model(
+        self,
+        *,
+        model_ref: str,
+    ) -> dict[str, Any]:
+        record = self._resolve_semantic_model_record(model_ref)
+        items = await self.list_semantic_models()
+        summary = next((item for item in items if item["id"] == record.id), None) or {}
+        return {
+            **summary,
+            "content_yaml": record.content_yaml,
+            "content_json": copy.deepcopy(record.content_json),
+        }
+
     async def query_dataset(self, *, request) -> dict[str, Any]:
         payload = await self._runtime_host.query_dataset(request=request)
         return self._normalize_dataset_query_payload(payload)
@@ -885,6 +1005,18 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         time_dimensions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         semantic_model_records = self._resolve_semantic_models(semantic_models)
+        unified_records = [
+            record for record in semantic_model_records if record.semantic_model is None
+        ]
+        if unified_records:
+            if len(semantic_model_records) > 1:
+                raise ValueError(
+                    "Configured unified semantic models cannot be combined with other semantic_models in a single request."
+                )
+            raise ValueError(
+                f"Configured unified semantic model '{unified_records[0].name}' "
+                "cannot be queried directly; select its source semantic_models instead."
+            )
         semantic_query = SemanticQuery(
             measures=self._normalize_semantic_members(
                 members=measures,
@@ -908,21 +1040,39 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             ),
             limit=int(limit) if limit else None,
         )
+        execution_query = semantic_query
         if len(semantic_model_records) == 1:
             semantic_model_record = semantic_model_records[0]
             result = await self._runtime_host.query_semantic(
                 workspace_id=self.context.workspace_id,
                 semantic_model_id=semantic_model_record.id,
-                semantic_query=semantic_query,
+                semantic_query=execution_query,
             )
             semantic_model_ids = [semantic_model_record.id]
             semantic_model_id = semantic_model_record.id
             connector_id = None
         else:
+            configured_unified = self._resolve_configured_unified_model(
+                semantic_models=semantic_model_records,
+            )
+            execution_query = self._rewrite_semantic_query_for_unified_execution(
+                semantic_query=semantic_query,
+                semantic_models=semantic_model_records,
+                configured_unified=configured_unified,
+            )
             result = await self._runtime_host.query_unified_semantic(
                 workspace_id=self.context.workspace_id,
                 semantic_model_ids=[record.id for record in semantic_model_records],
-                semantic_query=semantic_query,
+                semantic_query=execution_query,
+                source_models=(
+                    configured_unified.source_models if configured_unified is not None else None
+                ),
+                relationships=(
+                    configured_unified.relationships if configured_unified is not None else None
+                ),
+                metrics=(
+                    configured_unified.metrics if configured_unified is not None else None
+                ),
             )
             semantic_model_ids = list(result.response.semantic_model_ids)
             semantic_model_id = None
@@ -951,6 +1101,189 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         if connector_id is not None:
             response_payload["connector_id"] = connector_id
         return response_payload
+
+    def _build_semantic_model_summary(
+        self,
+        *,
+        name: str,
+        record: LocalRuntimeSemanticModelRecord,
+    ) -> dict[str, Any]:
+        semantic_model = record.semantic_model
+        if semantic_model is not None:
+            dataset_keys = list(semantic_model.datasets.keys())
+            dimension_count = sum(
+                len(dataset.dimensions or [])
+                for dataset in semantic_model.datasets.values()
+            )
+            measure_count = sum(
+                len(dataset.measures or [])
+                for dataset in semantic_model.datasets.values()
+            )
+            return {
+                "id": record.id,
+                "name": name,
+                "description": semantic_model.description,
+                "default": name == self._default_semantic_model_name,
+                "dataset_count": len(dataset_keys),
+                "dataset_names": dataset_keys,
+                "dimension_count": dimension_count,
+                "measure_count": measure_count,
+            }
+
+        configured_unified = SemanticQueryExecutionService.parse_unified_model_config_from_record(
+            record
+        )
+        source_model_names = [
+            source.alias or source.name or str(source.id)
+            for source in (configured_unified.source_models or [])
+        ]
+        return {
+            "id": record.id,
+            "name": name,
+            "description": record.content_json.get("description"),
+            "default": name == self._default_semantic_model_name,
+            "dataset_count": len(configured_unified.semantic_model_ids),
+            "dataset_names": source_model_names,
+            "dimension_count": 0,
+            "measure_count": len(configured_unified.metrics or {}),
+        }
+
+    def _resolve_configured_unified_model(
+        self,
+        *,
+        semantic_models: list[LocalRuntimeSemanticModelRecord],
+    ):
+        selected_model_ids = [record.id for record in semantic_models]
+        selected_model_id_set = set(selected_model_ids)
+        matches = []
+        for record in self._semantic_models.values():
+            if record.semantic_model is not None:
+                continue
+            configured_unified = (
+                SemanticQueryExecutionService.parse_unified_model_config_from_record(record)
+            )
+            if set(configured_unified.semantic_model_ids) != selected_model_id_set:
+                continue
+            if len(configured_unified.semantic_model_ids) != len(selected_model_ids):
+                continue
+            matches.append(configured_unified)
+
+        if len(matches) > 1:
+            raise ValueError(
+                "Multiple configured unified semantic models match the selected semantic_models."
+            )
+        return matches[0] if matches else None
+
+    def _rewrite_semantic_query_for_unified_execution(
+        self,
+        *,
+        semantic_query: SemanticQuery,
+        semantic_models: list[LocalRuntimeSemanticModelRecord],
+        configured_unified,
+    ) -> SemanticQuery:
+        dataset_source_keys = self._build_unified_dataset_source_keys(
+            semantic_models=semantic_models,
+            configured_unified=configured_unified,
+        )
+        payload = semantic_query.model_dump(by_alias=True, exclude_none=True)
+        payload["measures"] = [
+            self._rewrite_member_for_unified_execution(
+                member=member,
+                dataset_source_keys=dataset_source_keys,
+            )
+            for member in semantic_query.measures
+        ]
+        payload["dimensions"] = [
+            self._rewrite_member_for_unified_execution(
+                member=member,
+                dataset_source_keys=dataset_source_keys,
+            )
+            for member in semantic_query.dimensions
+        ]
+        payload["filters"] = [
+            {
+                **item.model_dump(by_alias=True, exclude_none=True),
+                "member": self._rewrite_member_for_unified_execution(
+                    member=item.member,
+                    dataset_source_keys=dataset_source_keys,
+                ),
+            }
+            for item in semantic_query.filters
+        ]
+        payload["timeDimensions"] = [
+            {
+                **item.model_dump(by_alias=True, exclude_none=True),
+                "dimension": self._rewrite_member_for_unified_execution(
+                    member=item.dimension,
+                    dataset_source_keys=dataset_source_keys,
+                ),
+            }
+            for item in semantic_query.time_dimensions
+        ]
+        payload["order"] = self._rewrite_order_for_unified_execution(
+            order=semantic_query.order,
+            dataset_source_keys=dataset_source_keys,
+        )
+        return SemanticQuery.model_validate(payload)
+
+    def _build_unified_dataset_source_keys(
+        self,
+        *,
+        semantic_models: list[LocalRuntimeSemanticModelRecord],
+        configured_unified,
+    ) -> dict[str, str]:
+        configured_source_keys = {}
+        if configured_unified is not None:
+            configured_source_keys = {
+                source.id: str(source.alias or source.name or "").strip() or str(source.id)
+                for source in (configured_unified.source_models or [])
+            }
+
+        dataset_source_keys: dict[str, str] = {}
+        for semantic_model in semantic_models:
+            source_key = configured_source_keys.get(semantic_model.id) or semantic_model.name
+            for dataset_name in semantic_model.semantic_model.datasets.keys():
+                dataset_source_keys[dataset_name] = source_key
+        return dataset_source_keys
+
+    @staticmethod
+    def _rewrite_member_for_unified_execution(
+        *,
+        member: str,
+        dataset_source_keys: Mapping[str, str],
+    ) -> str:
+        normalized_member = str(member or "").strip()
+        if not normalized_member or "." not in normalized_member:
+            return normalized_member
+        dataset_name, field_name = normalized_member.split(".", 1)
+        source_key = dataset_source_keys.get(dataset_name)
+        if not source_key:
+            return normalized_member
+        return f"{source_key}__{dataset_name}.{field_name}"
+
+    def _rewrite_order_for_unified_execution(
+        self,
+        *,
+        order: dict[str, str] | list[dict[str, str]] | None,
+        dataset_source_keys: Mapping[str, str],
+    ) -> dict[str, str] | list[dict[str, str]] | None:
+        if order is None:
+            return None
+        entries = [order] if isinstance(order, dict) else list(order)
+        rewritten = []
+        for entry in entries:
+            rewritten.append(
+                {
+                    self._rewrite_member_for_unified_execution(
+                        member=str(member),
+                        dataset_source_keys=dataset_source_keys,
+                    ): direction
+                    for member, direction in entry.items()
+                }
+            )
+        if isinstance(order, dict):
+            return rewritten[0] if rewritten else None
+        return rewritten
 
     async def execute_sql_text(
         self,
@@ -985,27 +1318,49 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         payload.setdefault("generated_sql", None)
         return payload
 
+    def _resolve_actor_id(self) -> uuid.UUID:
+        return self.context.actor_id or _stable_uuid("local-runtime-actor", str(self._config_path))
+
     async def ask_agent(
         self,
         *,
         prompt: str,
         agent_name: str | None = None,
+        thread_id: uuid.UUID | None = None,
+        title: str | None = None,
     ) -> dict[str, Any]:
         agent = self._resolve_agent(agent_name)
-        actor_id = self.context.actor_id or _stable_uuid("local-runtime-actor", str(self._config_path))
-        thread_id = uuid.uuid4()
+        actor_id = self._resolve_actor_id()
         timestamp = datetime.now(timezone.utc)
-        thread = RuntimeThread(
-            id=thread_id,
-            workspace_id=self.context.workspace_id,
-            title=agent.config.name,
-            created_by=actor_id,
-            state=RuntimeThreadState.processing,
-            metadata={"runtime_mode": "local_config"},
-            created_at=timestamp,
-            updated_at=timestamp,
-        )
-        self._thread_repository.add(thread)
+        existing_thread = None
+        if thread_id is not None:
+            existing_thread = await self._thread_repository.get_by_id(thread_id)
+            if existing_thread is None:
+                raise ValueError(f"Thread '{thread_id}' was not found.")
+            if existing_thread.workspace_id != self.context.workspace_id:
+                raise ValueError("Thread does not belong to the current runtime workspace.")
+            if existing_thread.created_by != actor_id:
+                raise ValueError("Thread does not belong to the current actor.")
+        if existing_thread is None:
+            thread_id = uuid.uuid4()
+            thread = RuntimeThread(
+                id=thread_id,
+                workspace_id=self.context.workspace_id,
+                title=str(title or "").strip() or agent.config.name,
+                created_by=actor_id,
+                state=RuntimeThreadState.processing,
+                metadata={"runtime_mode": "local_config"},
+                created_at=timestamp,
+                updated_at=timestamp,
+            )
+            self._thread_repository.add(thread)
+        else:
+            thread = existing_thread
+            thread.state = RuntimeThreadState.processing
+            thread.updated_at = timestamp
+            if str(title or "").strip():
+                thread.title = str(title).strip()
+            await self._thread_repository.save(thread)
 
         user_message = RuntimeThreadMessage(
             id=uuid.uuid4(),
@@ -1038,6 +1393,138 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             "visualization": response.get("visualization"),
             "error": response.get("error"),
         }
+
+    async def create_thread(
+        self,
+        *,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        actor_id = self._resolve_actor_id()
+        timestamp = datetime.now(timezone.utc)
+        thread = RuntimeThread(
+            id=uuid.uuid4(),
+            workspace_id=self.context.workspace_id,
+            title=str(title or "").strip() or "New thread",
+            created_by=actor_id,
+            state=RuntimeThreadState.awaiting_user_input,
+            metadata={"runtime_mode": "local_config"},
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
+        self._thread_repository.add(thread)
+        return self._serialize_thread(thread)
+
+    async def update_thread(
+        self,
+        *,
+        thread_id: uuid.UUID,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        actor_id = self._resolve_actor_id()
+        thread = await self._thread_repository.get_by_id(thread_id)
+        if thread is None or thread.workspace_id != self.context.workspace_id:
+            raise ValueError(f"Thread '{thread_id}' was not found.")
+        if thread.created_by != actor_id:
+            raise ValueError("Thread does not belong to the current actor.")
+        normalized_title = str(title or "").strip()
+        thread.title = normalized_title or None
+        thread.updated_at = datetime.now(timezone.utc)
+        await self._thread_repository.save(thread)
+        return self._serialize_thread(thread)
+
+    async def delete_thread(
+        self,
+        *,
+        thread_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        actor_id = self._resolve_actor_id()
+        thread = await self._thread_repository.get_by_id(thread_id)
+        if thread is None or thread.workspace_id != self.context.workspace_id:
+            raise ValueError(f"Thread '{thread_id}' was not found.")
+        if thread.created_by != actor_id:
+            raise ValueError("Thread does not belong to the current actor.")
+        delete_messages = getattr(self._thread_message_repository, "delete_for_thread", None)
+        if delete_messages is not None:
+            await delete_messages(thread_id)
+        await self._thread_repository.delete(thread_id)
+        return {
+            "status": "deleted",
+            "thread_id": thread_id,
+        }
+
+    async def list_agents(self) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for name, record in self._agents.items():
+            definition = dict(record.agent_definition.definition or {})
+            tools = definition.get("tools") if isinstance(definition.get("tools"), list) else []
+            items.append(
+                {
+                    "id": record.id,
+                    "name": name,
+                    "description": record.config.description or record.agent_definition.description,
+                    "default": self._default_agent is not None and self._default_agent.id == record.id,
+                    "llm_connection": record.config.llm_connection,
+                    "tool_count": len(tools),
+                    "tools": [
+                        {
+                            "name": item.get("name"),
+                            "tool_type": item.get("tool_type"),
+                            "description": item.get("description"),
+                        }
+                        for item in tools
+                        if isinstance(item, dict)
+                    ],
+                }
+            )
+        items.sort(key=lambda item: (not bool(item["default"]), str(item["name"]).lower()))
+        return items
+
+    async def get_agent(
+        self,
+        *,
+        agent_ref: str,
+    ) -> dict[str, Any]:
+        record = self._resolve_agent_record(agent_ref)
+        items = await self.list_agents()
+        summary = next((item for item in items if item["id"] == record.id), None) or {}
+        return {
+            **summary,
+            "definition": dict(record.agent_definition.definition or {}),
+            "semantic_model": record.config.semantic_model,
+            "dataset": record.config.dataset,
+            "instructions": record.config.instructions,
+        }
+
+    async def list_threads(self) -> list[dict[str, Any]]:
+        threads = await self._thread_repository.list_for_actor(self._resolve_actor_id())
+        return [self._serialize_thread(thread) for thread in threads]
+
+    async def get_thread(
+        self,
+        *,
+        thread_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        actor_id = self._resolve_actor_id()
+        thread = await self._thread_repository.get_by_id(thread_id)
+        if thread is None or thread.workspace_id != self.context.workspace_id:
+            raise ValueError(f"Thread '{thread_id}' was not found.")
+        if thread.created_by != actor_id:
+            raise ValueError("Thread does not belong to the current actor.")
+        return self._serialize_thread(thread)
+
+    async def list_thread_messages(
+        self,
+        *,
+        thread_id: uuid.UUID,
+    ) -> list[dict[str, Any]]:
+        actor_id = self._resolve_actor_id()
+        thread = await self._thread_repository.get_by_id(thread_id)
+        if thread is None or thread.workspace_id != self.context.workspace_id:
+            raise ValueError(f"Thread '{thread_id}' was not found.")
+        if thread.created_by != actor_id:
+            raise ValueError("Thread does not belong to the current actor.")
+        messages = await self._thread_message_repository.list_for_thread(thread_id)
+        return [self._serialize_thread_message(message) for message in messages]
 
     async def list_connectors(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -1254,6 +1741,101 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             return next(iter(self._agents.values()))
         raise ValueError("No agents are configured for this local runtime.")
 
+    def _resolve_agent_record(self, agent_ref: str) -> LocalRuntimeAgentRecord:
+        normalized_ref = str(agent_ref or "").strip()
+        if not normalized_ref:
+            raise ValueError("agent_ref is required.")
+        agent = self._agents.get(normalized_ref)
+        if agent is not None:
+            return agent
+        try:
+            agent_id = uuid.UUID(normalized_ref)
+        except ValueError:
+            agent_id = None
+        if agent_id is not None:
+            for candidate in self._agents.values():
+                if candidate.id == agent_id:
+                    return candidate
+        raise ValueError(f"Unknown agent '{agent_ref}'.")
+
+    def _resolve_semantic_model_record(self, model_ref: str) -> LocalRuntimeSemanticModelRecord:
+        normalized_ref = str(model_ref or "").strip()
+        if not normalized_ref:
+            raise ValueError("model_ref is required.")
+        record = self._semantic_models.get(normalized_ref)
+        if record is not None:
+            return record
+        try:
+            model_id = uuid.UUID(normalized_ref)
+        except ValueError:
+            model_id = None
+        if model_id is not None:
+            for candidate in self._semantic_models.values():
+                if candidate.id == model_id:
+                    return candidate
+        raise ValueError(f"Unknown semantic model '{model_ref}'.")
+
+    async def _resolve_dataset_record(self, dataset_ref: str) -> DatasetMetadata:
+        normalized_ref = str(dataset_ref or "").strip()
+        if not normalized_ref:
+            raise ValueError("dataset_ref is required.")
+        try:
+            dataset_id = uuid.UUID(normalized_ref)
+        except ValueError:
+            dataset_id = None
+        if dataset_id is not None:
+            dataset = await self._dataset_repository.get_for_workspace(
+                dataset_id=dataset_id,
+                workspace_id=self.context.workspace_id,
+            )
+            if dataset is not None:
+                return dataset
+        records = await self._dataset_repository.list_for_workspace(
+            workspace_id=self.context.workspace_id,
+            limit=1000,
+            offset=0,
+        )
+        for dataset in records:
+            if dataset.name == normalized_ref:
+                return dataset
+        raise ValueError(f"Unknown dataset '{dataset_ref}'.")
+
+    def _connector_for_id(self, connector_id: uuid.UUID | None) -> ConnectorMetadata | None:
+        if connector_id is None:
+            return None
+        return next(
+            (candidate for candidate in self._connectors.values() if candidate.id == connector_id),
+            None,
+        )
+
+    @staticmethod
+    def _serialize_thread(thread: RuntimeThread) -> dict[str, Any]:
+        return {
+            "id": thread.id,
+            "workspace_id": thread.workspace_id,
+            "title": thread.title,
+            "state": thread.state,
+            "metadata": dict(thread.metadata_json),
+            "created_at": thread.created_at,
+            "updated_at": thread.updated_at,
+            "created_by": thread.created_by,
+            "last_message_id": thread.last_message_id,
+        }
+
+    @staticmethod
+    def _serialize_thread_message(message: RuntimeThreadMessage) -> dict[str, Any]:
+        return {
+            "id": message.id,
+            "thread_id": message.thread_id,
+            "parent_message_id": message.parent_message_id,
+            "role": message.role,
+            "content": dict(message.content or {}),
+            "model_snapshot": message.model_snapshot_json,
+            "token_usage": message.token_usage_json,
+            "error": dict(message.error or {}) if message.error else None,
+            "created_at": message.created_at,
+        }
+
     def _resolve_semantic_models(
         self,
         semantic_model_names: list[str] | None,
@@ -1451,7 +2033,11 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             normalized_row: dict[str, Any] = {}
             for key, value in row.items():
                 normalized_key = str(key)
-                if "__" in normalized_key:
+                if normalized_key.count("__") >= 2:
+                    _, dataset_name, suffix = normalized_key.split("__", 2)
+                    if dataset_name in dataset_names:
+                        normalized_key = f"{dataset_name}.{suffix}"
+                elif "__" in normalized_key:
                     dataset_name, suffix = normalized_key.split("__", 1)
                     if dataset_name in dataset_names:
                         normalized_key = f"{dataset_name}.{suffix}"
@@ -1478,7 +2064,10 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         return normalized
 
     def _get_connector_plugin(self, connector: ConnectorMetadata):
-        connector_type = self._resolve_connector_runtime_type(connector)
+        try:
+            connector_type = self._resolve_connector_runtime_type(connector)
+        except ValueError:
+            return None
         return get_connector_plugin(connector_type)
 
     def _connector_supports_sync(self, connector: ConnectorMetadata) -> bool:
@@ -1979,12 +2568,22 @@ class ConfiguredLocalRuntimeHostFactory:
                 semantic_model=item,
                 datasets=datasets,
             )
-            semantic_model = SemanticModel.model_validate(payload)
+            try:
+                semantic_model = load_semantic_model(payload)
+                content_yaml = semantic_model.yml_dump()
+                content_json = semantic_model.model_dump(exclude_none=True)
+            except SemanticModelError:
+                load_unified_semantic_model(payload)
+                semantic_model = None
+                content_json = copy.deepcopy(payload)
+                content_yaml = yaml.safe_dump(content_json, sort_keys=False).strip()
             semantic_model_id = _stable_uuid("semantic-model", f"{context.workspace_id}:{item.name}")
             semantic_models[item.name] = LocalRuntimeSemanticModelRecord(
                 id=semantic_model_id,
                 name=item.name,
                 semantic_model=semantic_model,
+                content_yaml=content_yaml,
+                content_json=content_json,
             )
         return semantic_models
 
@@ -2038,15 +2637,6 @@ class ConfiguredLocalRuntimeHostFactory:
             config.llm_connections[0].name if config.llm_connections else None,
         )
         for agent in config.agents:
-            dataset = datasets.get(agent.dataset)
-            if dataset is None:
-                raise ValueError(f"Agent '{agent.name}' references unknown dataset '{agent.dataset}'.")
-            semantic_model = semantic_models.get(agent.semantic_model)
-            if semantic_model is None:
-                raise ValueError(
-                    f"Agent '{agent.name}' references unknown semantic model '{agent.semantic_model}'."
-                )
-
             llm_connection_name = str(agent.llm_connection or default_llm_connection_name or "").strip()
             if not llm_connection_name:
                 raise ValueError(
@@ -2058,16 +2648,12 @@ class ConfiguredLocalRuntimeHostFactory:
                     f"Agent '{agent.name}' references unknown llm connection '{llm_connection_name}'."
                 )
 
-            connector_id = dataset.connection_id
             agent_id = _stable_uuid("agent", f"{config_path}:{agent.name}")
             definition = ConfiguredLocalRuntimeHostFactory._build_agent_definition_payload(
                 agent=agent,
-                semantic_model_id=semantic_model.id,
-                connector_id=connector_id,
-                connector_name=next(
-                    (name for name, item in connectors.items() if item.id == connector_id),
-                    None,
-                ),
+                datasets=datasets,
+                connectors=connectors,
+                semantic_models=semantic_models,
             )
             records[agent.name] = LocalRuntimeAgentRecord(
                 id=agent_id,
@@ -2089,15 +2675,75 @@ class ConfiguredLocalRuntimeHostFactory:
     def _build_agent_definition_payload(
         *,
         agent: LocalRuntimeAgentConfig,
-        semantic_model_id: uuid.UUID,
-        connector_id: uuid.UUID | None,
-        connector_name: str | None,
+        datasets: dict[str, DatasetMetadata],
+        connectors: dict[str, ConnectorMetadata],
+        semantic_models: dict[str, LocalRuntimeSemanticModelRecord],
     ) -> dict[str, Any]:
-        if agent.definition:
-            return copy.deepcopy(agent.definition)
+        payload = (
+            copy.deepcopy(agent.definition)
+            if agent.definition
+            else ConfiguredLocalRuntimeHostFactory._build_shorthand_agent_definition_payload(
+                agent=agent,
+                datasets=datasets,
+                semantic_models=semantic_models,
+            )
+        )
+        normalized = ConfiguredLocalRuntimeHostFactory._normalize_agent_definition_payload(
+            agent=agent,
+            definition=payload,
+            datasets=datasets,
+            connectors=connectors,
+            semantic_models=semantic_models,
+        )
+        definition_model = AgentDefinitionFactory().create_agent_definition(normalized)
+        return definition_model.model_dump(mode="json", exclude_none=True)
+
+    @staticmethod
+    def _build_shorthand_agent_definition_payload(
+        *,
+        agent: LocalRuntimeAgentConfig,
+        datasets: dict[str, DatasetMetadata],
+        semantic_models: dict[str, LocalRuntimeSemanticModelRecord],
+    ) -> dict[str, Any]:
+        semantic_model_name = str(agent.semantic_model or "").strip()
+        dataset_name = str(agent.dataset or "").strip()
+        semantic_model = semantic_models.get(semantic_model_name) if semantic_model_name else None
+        dataset = datasets.get(dataset_name) if dataset_name else None
+        if semantic_model_name and semantic_model is None:
+            raise ValueError(
+                f"Agent '{agent.name}' references unknown semantic model '{semantic_model_name}'."
+            )
+        if dataset_name and dataset is None:
+            raise ValueError(f"Agent '{agent.name}' references unknown dataset '{dataset_name}'.")
+
+        selected_connector_ids: list[str] = []
+        if dataset is not None and dataset.connection_id is not None:
+            selected_connector_ids.append(str(dataset.connection_id))
+        if semantic_model is not None:
+            for dataset_key in semantic_model.semantic_model.datasets.keys():
+                semantic_dataset = datasets.get(dataset_key)
+                if semantic_dataset is None or semantic_dataset.connection_id is None:
+                    continue
+                connector_id = str(semantic_dataset.connection_id)
+                if connector_id not in selected_connector_ids:
+                    selected_connector_ids.append(connector_id)
+
+        tool_name_suffix = semantic_model_name or dataset_name or agent.name
+        tool_config: dict[str, list[str]]
+        tool_description: str
+        if semantic_model is not None:
+            tool_config = {"semantic_model_ids": [str(semantic_model.id)]}
+            tool_description = f"Semantic analytics access for '{semantic_model.name}'."
+        elif dataset is not None:
+            tool_config = {"dataset_ids": [str(dataset.id)]}
+            tool_description = f"Dataset analytics access for '{dataset.name}'."
+        else:
+            raise ValueError(
+                f"Agent '{agent.name}' must define definition or a shorthand semantic_model/dataset binding."
+            )
 
         system_prompt = (
-            "You are a Langbridge analytics agent. Use the configured semantic model and tools "
+            "You are a Langbridge analytics agent. Use the configured tools "
             "to answer questions with grounded, concise analysis."
         )
         user_instructions = str(agent.instructions or "").strip() or None
@@ -2118,19 +2764,14 @@ class ConfiguredLocalRuntimeHostFactory:
             },
             "tools": [
                 {
-                    "name": f"{agent.name}_semantic_sql",
+                    "name": f"{agent.name}_{_dataset_sql_alias(tool_name_suffix)}_sql",
                     "tool_type": "sql",
-                    "description": (
-                        f"Semantic analytics access for '{agent.semantic_model}'"
-                        + (f" via connector '{connector_name}'." if connector_name else ".")
-                    ),
-                    "config": {
-                        "semantic_model_ids": [str(semantic_model_id)],
-                    },
+                    "description": tool_description,
+                    "config": tool_config,
                 }
             ],
             "access_policy": {
-                "allowed_connectors": [str(connector_id)] if connector_id is not None else [],
+                "allowed_connectors": selected_connector_ids,
                 "denied_connectors": [],
             },
             "execution": {
@@ -2153,6 +2794,147 @@ class ConfiguredLocalRuntimeHostFactory:
                 "audit_fields": [],
             },
         }
+
+    @staticmethod
+    def _normalize_agent_definition_payload(
+        *,
+        agent: LocalRuntimeAgentConfig,
+        definition: Mapping[str, Any],
+        datasets: dict[str, DatasetMetadata],
+        connectors: dict[str, ConnectorMetadata],
+        semantic_models: dict[str, LocalRuntimeSemanticModelRecord],
+    ) -> dict[str, Any]:
+        payload = copy.deepcopy(dict(definition))
+
+        tools_payload = payload.get("tools")
+        if tools_payload is not None:
+            if not isinstance(tools_payload, list):
+                raise ValueError(f"Agent '{agent.name}' definition.tools must be a list.")
+            normalized_tools: list[dict[str, Any]] = []
+            for raw_tool in tools_payload:
+                if not isinstance(raw_tool, Mapping):
+                    raise ValueError(f"Agent '{agent.name}' definition.tools entries must be mappings.")
+                tool_payload = copy.deepcopy(dict(raw_tool))
+                if str(tool_payload.get("tool_type") or "").strip().lower() == "sql":
+                    config_payload = tool_payload.get("config") or {}
+                    if not isinstance(config_payload, Mapping):
+                        raise ValueError(
+                            f"Agent '{agent.name}' SQL tool '{tool_payload.get('name')}' must define a mapping config."
+                        )
+                    tool_payload["config"] = ConfiguredLocalRuntimeHostFactory._normalize_local_sql_tool_config(
+                        agent_name=agent.name,
+                        tool_name=str(tool_payload.get("name") or "").strip() or "sql_tool",
+                        config=dict(config_payload),
+                        datasets=datasets,
+                        semantic_models=semantic_models,
+                    )
+                normalized_tools.append(tool_payload)
+            payload["tools"] = normalized_tools
+
+        access_policy_payload = payload.get("access_policy")
+        if isinstance(access_policy_payload, Mapping):
+            normalized_access_policy = copy.deepcopy(dict(access_policy_payload))
+            for field_name in ("allowed_connectors", "denied_connectors"):
+                if field_name in normalized_access_policy:
+                    normalized_access_policy[field_name] = (
+                        ConfiguredLocalRuntimeHostFactory._normalize_local_connector_refs(
+                            agent_name=agent.name,
+                            field_name=field_name,
+                            raw_values=normalized_access_policy.get(field_name),
+                            connectors=connectors,
+                        )
+                    )
+            payload["access_policy"] = normalized_access_policy
+
+        return payload
+
+    @staticmethod
+    def _normalize_local_sql_tool_config(
+        *,
+        agent_name: str,
+        tool_name: str,
+        config: dict[str, Any],
+        datasets: dict[str, DatasetMetadata],
+        semantic_models: dict[str, LocalRuntimeSemanticModelRecord],
+    ) -> dict[str, Any]:
+        normalized = copy.deepcopy(config)
+        normalized.setdefault("dataset_ids", [])
+        normalized.setdefault("semantic_model_ids", [])
+        if "dataset_ids" in normalized:
+            normalized["dataset_ids"] = ConfiguredLocalRuntimeHostFactory._normalize_named_uuid_refs(
+                agent_name=agent_name,
+                field_name=f"tool '{tool_name}' dataset_ids",
+                raw_values=normalized.get("dataset_ids"),
+                by_name=datasets,
+                by_id={record.id: record for record in datasets.values()},
+            )
+        if "semantic_model_ids" in normalized:
+            normalized["semantic_model_ids"] = ConfiguredLocalRuntimeHostFactory._normalize_named_uuid_refs(
+                agent_name=agent_name,
+                field_name=f"tool '{tool_name}' semantic_model_ids",
+                raw_values=normalized.get("semantic_model_ids"),
+                by_name=semantic_models,
+                by_id={record.id: record for record in semantic_models.values()},
+            )
+        return normalized
+
+    @staticmethod
+    def _normalize_local_connector_refs(
+        *,
+        agent_name: str,
+        field_name: str,
+        raw_values: Any,
+        connectors: dict[str, ConnectorMetadata],
+    ) -> list[str]:
+        return ConfiguredLocalRuntimeHostFactory._normalize_named_uuid_refs(
+            agent_name=agent_name,
+            field_name=field_name,
+            raw_values=raw_values,
+            by_name=connectors,
+            by_id={record.id: record for record in connectors.values()},
+        )
+
+    @staticmethod
+    def _normalize_named_uuid_refs(
+        *,
+        agent_name: str,
+        field_name: str,
+        raw_values: Any,
+        by_name: Mapping[str, Any],
+        by_id: Mapping[uuid.UUID, Any],
+    ) -> list[str]:
+        if raw_values is None:
+            return []
+        if not isinstance(raw_values, list):
+            raise ValueError(f"Agent '{agent_name}' {field_name} must be a list.")
+
+        normalized_values: list[str] = []
+        for raw_value in raw_values:
+            normalized_ref = str(raw_value or "").strip()
+            if not normalized_ref:
+                raise ValueError(f"Agent '{agent_name}' {field_name} must not contain empty values.")
+            resolved_id: uuid.UUID | None = None
+            try:
+                candidate_id = uuid.UUID(normalized_ref)
+            except (TypeError, ValueError):
+                candidate_id = None
+            if candidate_id is not None:
+                if candidate_id not in by_id:
+                    raise ValueError(
+                        f"Agent '{agent_name}' {field_name} references unknown id '{normalized_ref}'."
+                    )
+                resolved_id = candidate_id
+            else:
+                referenced_item = by_name.get(normalized_ref)
+                if referenced_item is None:
+                    raise ValueError(
+                        f"Agent '{agent_name}' {field_name} references unknown name '{normalized_ref}'."
+                    )
+                resolved_id = referenced_item.id
+            resolved_id_str = str(resolved_id)
+            if resolved_id_str not in normalized_values:
+                normalized_values.append(resolved_id_str)
+        return normalized_values
 
     @staticmethod
     def _build_dataset_repository_records(
@@ -2194,6 +2976,8 @@ class ConfiguredLocalRuntimeHostFactory:
             ordinal = 0
             if str(dataset.source_kind or "").lower() != "file":
                 for semantic_model in semantic_models.values():
+                    if semantic_model.semantic_model is None:
+                        continue
                     semantic_dataset = semantic_model.semantic_model.datasets.get(dataset.name)
                     if semantic_dataset is None:
                         continue
@@ -2244,9 +3028,13 @@ class ConfiguredLocalRuntimeHostFactory:
                 id=semantic_model.id,
                 workspace_id=context.workspace_id,
                 name=semantic_model.name,
-                description=semantic_model.semantic_model.description,
-                content_yaml=semantic_model.semantic_model.yml_dump(),
-                content_json=None,
+                description=(
+                    semantic_model.semantic_model.description
+                    if semantic_model.semantic_model is not None
+                    else semantic_model.content_json.get("description")
+                ),
+                content_yaml=semantic_model.content_yaml,
+                content_json=copy.deepcopy(semantic_model.content_json),
                 created_at=now,
                 updated_at=now,
                 connector_id=None,
@@ -2260,6 +3048,10 @@ class ConfiguredLocalRuntimeHostFactory:
         datasets: dict[str, DatasetMetadata],
     ) -> dict[str, Any]:
         payload = copy.deepcopy(semantic_model.model or {})
+        is_unified_model = bool(
+            payload.get("source_models")
+            or payload.get("sourceModels")
+        )
         if not payload:
             payload = {
                 "version": "1",
@@ -2300,7 +3092,11 @@ class ConfiguredLocalRuntimeHostFactory:
             dataset_payload["relation_name"] = relation_name
             normalized_datasets[dataset_name] = dataset_payload
 
-        payload["datasets"] = normalized_datasets
+        if is_unified_model:
+            payload.pop("datasets", None)
+            payload.pop("tables", None)
+        else:
+            payload["datasets"] = normalized_datasets
         payload.setdefault("name", semantic_model.name)
         if semantic_model.description and not payload.get("description"):
             payload["description"] = semantic_model.description
@@ -2339,9 +3135,13 @@ class ConfiguredLocalRuntimeHostFactory:
                     connector_id=None,
                     workspace_id=context.workspace_id,
                     name=record.name,
-                    description=record.semantic_model.description,
-                    content_yaml=record.semantic_model.yml_dump(),
-                    content_json=record.semantic_model.model_dump(exclude_none=True),
+                    description=(
+                        record.semantic_model.description
+                        if record.semantic_model is not None
+                        else record.content_json.get("description")
+                    ),
+                    content_yaml=record.content_yaml,
+                    content_json=copy.deepcopy(record.content_json),
                     created_at=datetime.utcnow(),
                     updated_at=datetime.utcnow(),
                 )
@@ -2353,6 +3153,9 @@ class ConfiguredLocalRuntimeHostFactory:
                 semantic_models=semantic_models,
                 context=context,
             )
+        )
+        semantic_vector_index_store = MemorySemanticVectorIndexProvider(
+            {}
         )
         thread_repository = _InMemoryThreadRepository()
         thread_message_repository = _InMemoryThreadMessageRepository()
@@ -2376,6 +3179,15 @@ class ConfiguredLocalRuntimeHostFactory:
             credential_provider=credential_provider,
             secret_provider_registry=secret_provider_registry,
         )
+        default_embedding_provider = None
+        first_llm_connection = next(iter(llm_connections.values()), None)
+        if first_llm_connection is not None:
+            try:
+                default_embedding_provider = EmbeddingProvider.from_llm_connection(
+                    first_llm_connection.connection
+                )
+            except EmbeddingProviderError:
+                default_embedding_provider = None
         semantic_query_service = (
             SemanticQueryExecutionService(
                 dataset_repository=dataset_repository,
@@ -2383,6 +3195,21 @@ class ConfiguredLocalRuntimeHostFactory:
                 logger=logging.getLogger("langbridge.runtime.semantic.local"),
                 dataset_provider=dataset_provider,
                 semantic_model_provider=semantic_model_provider,
+            )
+            if semantic_models
+            else None
+        )
+        semantic_vector_search_service = (
+            SemanticVectorSearchService(
+                dataset_repository=dataset_repository,
+                federated_query_tool=federated_query_tool,
+                logger=logging.getLogger("langbridge.runtime.semantic.vector.local"),
+                dataset_provider=dataset_provider,
+                semantic_model_provider=semantic_model_provider,
+                semantic_vector_index_store=semantic_vector_index_store,
+                connector_provider=connector_provider,
+                credential_provider=credential_provider,
+                embedding_provider=default_embedding_provider,
             )
             if semantic_models
             else None
@@ -2424,6 +3251,7 @@ class ConfiguredLocalRuntimeHostFactory:
                 thread_message_repository=thread_message_repository,
                 memory_repository=memory_repository,
                 federated_query_tool=federated_query_tool,
+                semantic_vector_search_service=semantic_vector_search_service,
             )
             if agents
             else None
@@ -2434,12 +3262,14 @@ class ConfiguredLocalRuntimeHostFactory:
                 dataset_metadata=dataset_provider,
                 connector_metadata=connector_provider,
                 semantic_models=semantic_model_provider if semantic_models else None,
+                semantic_vector_indexes=semantic_vector_index_store if semantic_models else None,
                 sync_state=sync_state_provider,
                 credentials=credential_provider,
             ),
             services=RuntimeServices(
                 federated_query_tool=federated_query_tool,
                 semantic_query=semantic_query_service,
+                semantic_vector_search=semantic_vector_search_service,
                 sql_query=sql_query_service,
                 dataset_query=dataset_query_service,
                 dataset_sync=dataset_sync_service,

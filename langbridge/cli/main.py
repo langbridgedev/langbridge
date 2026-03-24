@@ -48,6 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Comma-separated runtime features to enable. Currently supported: mcp, ui",
     )
+    serve.add_argument("--debug", action="store_true", help="Enable verbose runtime and MCP debug logging")
     serve.add_argument("--reload", action="store_true", help="Enable auto reload")
     serve.set_defaults(handler=_handle_serve)
 
@@ -97,7 +98,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dataset",
         action="append",
         default=[],
-        help="Dataset alias mapping in alias=name form for federated SQL. Repeat for multiple datasets.",
+        help="Dataset name or UUID used to narrow federated SQL scope. Repeat for multiple datasets.",
     )
     sql_query.add_argument("--limit", type=int, default=None, help="Requested limit")
     sql_query.set_defaults(handler=_handle_sql_query)
@@ -169,6 +170,7 @@ def _handle_serve(args: argparse.Namespace) -> int:
         host=args.host,
         port=args.port,
         features=_parse_feature_flags(args.features),
+        debug=bool(args.debug),
         reload=bool(args.reload),
     )
     return 0
@@ -328,19 +330,14 @@ def _fetch_remote_runtime_info(*, base_url: str, token: str | None) -> dict[str,
         return dict(response.json())
 
 
-def _resolve_dataset_alias(client: LangbridgeClient, value: str) -> dict[str, Any]:
-    alias, _, dataset_ref = str(value or "").partition("=")
-    alias = alias.strip()
-    dataset_ref = dataset_ref.strip()
-    if not alias or not dataset_ref:
-        raise ValueError("--dataset entries must use alias=name form.")
+def _resolve_dataset_alias(client: LangbridgeClient, value: str) -> str:
+    dataset_ref = str(value or "").strip()
+    if not dataset_ref:
+        raise ValueError("--dataset entries must contain a dataset name or UUID.")
     datasets = client.datasets.list(search=dataset_ref)
     for item in datasets.items:
         if item.name == dataset_ref or str(item.id) == dataset_ref:
-            return {
-                "alias": alias,
-                "dataset_id": str(item.id),
-            }
+            return str(item.id)
     raise ValueError(f"Dataset '{dataset_ref}' was not found.")
 
 

@@ -434,8 +434,8 @@ def test_local_sdk_dataset_and_sql_queries_use_runtime_adapter() -> None:
     assert dataset_result.row_count_preview == 1
     assert sql_result.status == "succeeded"
     assert sql_result.rows == [{"value": 7}]
-    assert len(runtime_host.execute_sql_text_calls) == 1
-    assert len(runtime_host.execute_sql_calls) == 0
+    assert len(runtime_host.execute_sql_text_calls) == 0
+    assert len(runtime_host.execute_sql_calls) == 1
 
 
 def test_local_sdk_semantic_queries_use_dedicated_semantic_client() -> None:
@@ -488,7 +488,7 @@ def test_dataset_client_rejects_semantic_style_arguments() -> None:
         raise AssertionError("Expected semantic-style dataset query to be rejected.")
 
 
-def test_local_sdk_dataset_backed_sql_uses_runtime_sql_service() -> None:
+def test_local_sdk_direct_sql_by_connection_name_uses_runtime_shortcut() -> None:
     actor_id = uuid.uuid4()
     runtime_host = _FakeRuntimeHost(actor_id=actor_id)
     client = LangbridgeClient.for_local_runtime(
@@ -498,18 +498,50 @@ def test_local_sdk_dataset_backed_sql_uses_runtime_sql_service() -> None:
     )
 
     result = client.sql.query(
-        query="SELECT value FROM some_dataset",
-        selected_datasets=[
-            {
-                "dataset_id": str(uuid.uuid4()),
-                "alias": "orders",
-            }
-        ],
+        query="SELECT value FROM source_table",
+        connection_name="commerce_demo",
     )
+
+    assert result.status == "succeeded"
+    assert len(runtime_host.execute_sql_calls) == 0
+    assert len(runtime_host.execute_sql_text_calls) == 1
+
+
+def test_local_sdk_federated_sql_defaults_to_runtime_sql_service_without_selected_datasets() -> None:
+    actor_id = uuid.uuid4()
+    runtime_host = _FakeRuntimeHost(actor_id=actor_id)
+    client = LangbridgeClient.for_local_runtime(
+        runtime_host=runtime_host,
+        default_workspace_id=runtime_host.context.workspace_id,
+        default_actor_id=actor_id,
+    )
+
+    result = client.sql.query(query="SELECT value FROM sales_orders")
 
     assert result.status == "succeeded"
     assert len(runtime_host.execute_sql_calls) == 1
     assert len(runtime_host.execute_sql_text_calls) == 0
+
+
+def test_local_sdk_selected_datasets_is_a_uuid_subset_selector() -> None:
+    actor_id = uuid.uuid4()
+    runtime_host = _FakeRuntimeHost(actor_id=actor_id)
+    client = LangbridgeClient.for_local_runtime(
+        runtime_host=runtime_host,
+        default_workspace_id=runtime_host.context.workspace_id,
+        default_actor_id=actor_id,
+    )
+    selected_dataset_id = uuid.uuid4()
+
+    result = client.sql.query(
+        query="SELECT value FROM some_dataset",
+        selected_datasets=[selected_dataset_id],
+    )
+
+    assert result.status == "succeeded"
+    assert len(runtime_host.execute_sql_calls) == 1
+    request = runtime_host.execute_sql_calls[0]
+    assert request.selected_datasets == [selected_dataset_id]
 
 
 def test_local_sdk_agents_ask_uses_runtime_host() -> None:
@@ -659,6 +691,60 @@ def test_remote_sdk_runtime_host_requests_use_runtime_payload_shapes() -> None:
     assert agent_result.job_id == job_id
 
 
+def test_remote_sdk_runtime_host_sql_defaults_to_federation_without_selected_datasets() -> None:
+    workspace_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+
+    def _payload(request: httpx.Request) -> dict[str, object]:
+        return json.loads(request.content.decode("utf-8")) if request.content else {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/api/runtime/v1/info":
+            return httpx.Response(
+                200,
+                json={
+                    "runtime_mode": "configured_local",
+                    "workspace_id": str(workspace_id),
+                    "actor_id": str(actor_id),
+                    "roles": ["runtime:viewer"],
+                    "capabilities": ["sql.query"],
+                },
+            )
+        if request.method == "POST" and request.url.path == "/api/runtime/v1/sql/query":
+            payload = _payload(request)
+            assert payload == {
+                "query": "SELECT * FROM sales_orders",
+                "selected_datasets": [],
+                "query_dialect": "tsql",
+                "params": {},
+                "explain": False,
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "sql_job_id": str(uuid.uuid4()),
+                    "status": "succeeded",
+                    "columns": [{"name": "value", "type": "integer"}],
+                    "rows": [{"value": 7}],
+                    "row_count_preview": 1,
+                    "redaction_applied": False,
+                    "query": "SELECT * FROM sales_orders",
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://sdk.test")
+    client = LangbridgeClient.remote(
+        base_url="https://sdk.test",
+        http_client=http_client,
+    )
+
+    result = client.sql.query(query="SELECT * FROM sales_orders")
+
+    assert result.status == "succeeded"
+    assert result.rows == [{"value": 7}]
+
+
 def test_local_sdk_sync_clients_use_runtime_host() -> None:
     actor_id = uuid.uuid4()
     runtime_host = _FakeRuntimeHost(actor_id=actor_id)
@@ -772,9 +858,40 @@ llm_connections:
 agents:
   - name: commerce_analyst
     llm_connection: local_openai
-    semantic_model: commerce_performance
-    dataset: shopify_orders
     default: true
+    definition:
+      prompt:
+        system_prompt: You are a commerce analytics agent.
+      memory:
+        strategy: database
+      features:
+        bi_copilot_enabled: false
+        deep_research_enabled: false
+        visualization_enabled: true
+        mcp_enabled: false
+      tools:
+        - name: commerce_semantic_sql
+          tool_type: sql
+          config:
+            semantic_model_ids: [commerce_performance]
+      access_policy:
+        allowed_connectors: [commerce_demo]
+        denied_connectors: []
+      execution:
+        mode: iterative
+        response_mode: analyst
+        max_iterations: 3
+        max_steps_per_iteration: 5
+        allow_parallel_tools: false
+      output:
+        format: markdown
+      guardrails:
+        moderation_enabled: true
+      observability:
+        log_level: info
+        emit_traces: false
+        capture_prompts: false
+        audit_fields: []
 """.strip(),
         encoding="utf-8",
     )

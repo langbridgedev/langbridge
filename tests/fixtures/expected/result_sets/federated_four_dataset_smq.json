@@ -1,0 +1,26 @@
+[
+  {
+    "Commerce__customers__region": "Europe",
+    "Marketing__campaigns__channel": "partner",
+    "Support__tickets__severity": "high",
+    "Commerce__orders__revenue": 150.0,
+    "Marketing__campaigns__spend": 25.0,
+    "Support__tickets__ticket_count": 1
+  },
+  {
+    "Commerce__customers__region": "Europe",
+    "Marketing__campaigns__channel": "partner",
+    "Support__tickets__severity": "low",
+    "Commerce__orders__revenue": 150.0,
+    "Marketing__campaigns__spend": 25.0,
+    "Support__tickets__ticket_count": 1
+  },
+  {
+    "Commerce__customers__region": "North America",
+    "Marketing__campaigns__channel": "paid_search",
+    "Support__tickets__severity": "high",
+    "Commerce__orders__revenue": 120.0,
+    "Marketing__campaigns__spend": 30.0,
+    "Support__tickets__ticket_count": 1
+  }
+]

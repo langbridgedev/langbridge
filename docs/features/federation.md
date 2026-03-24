@@ -19,8 +19,11 @@ cross-source structured workloads.
 
 Federation is runtime-owned. It is part of the runtime itself, not a separate service boundary.
 
+For product positioning, the primary v1 story is still single-node runtime execution. The scheduler and dispatch seams in `langbridge.federation` are technical groundwork for preview scale-out, not a claim that coordinator/worker deployment is already the default release surface.
+
 ## Why It Matters
 
 - SQL and semantic query share one structured execution substrate
 - connectors stay inside the runtime boundary
 - cross-source joins and transformations work in embedded, self-hosted, and hybrid runtime modes
+- federated SQL can target all eligible workspace datasets by default, with `selected_datasets` used only to narrow scope

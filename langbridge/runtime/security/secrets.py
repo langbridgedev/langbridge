@@ -63,6 +63,6 @@ class SecretProviderRegistry:
         provider = self._providers.get(reference.provider_type)
         if provider is None:
             raise ValueError(
-                f"Secret provider '{reference.provider_type}' is not supported by this worker runtime."
+                f"Secret provider '{reference.provider_type}' is not supported by this runtime node."
             )
         return provider.resolve(reference)

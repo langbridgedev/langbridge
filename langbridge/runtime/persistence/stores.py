@@ -1,4 +1,4 @@
-from __future__ import annotations
+import uuid
 
 from langbridge.runtime.models import (
     ConnectorSyncState,
@@ -13,6 +13,7 @@ from langbridge.runtime.models import (
     RuntimeThread,
     RuntimeThreadMessage,
     SemanticModelMetadata,
+    SemanticVectorIndexMetadata,
     SqlJob,
     SqlJobResultArtifact,
 )
@@ -27,6 +28,7 @@ from langbridge.runtime.persistence.mappers import (
     from_lineage_edge_record,
     from_llm_connection_record,
     from_semantic_model_record,
+    from_semantic_vector_index_record,
     from_sql_job_record,
     from_sql_job_result_artifact_record,
     from_thread_message_record,
@@ -37,6 +39,7 @@ from langbridge.runtime.persistence.mappers import (
     to_dataset_record,
     to_dataset_revision_record,
     to_lineage_edge_record,
+    to_semantic_vector_index_record,
     to_sql_job_record,
     to_sql_job_result_artifact_record,
     to_thread_message_record,
@@ -66,6 +69,9 @@ from langbridge.runtime.persistence.repositories.llm_connection_repository impor
 from langbridge.runtime.persistence.repositories.semantic_model_repository import (
     SemanticModelRepository,
 )
+from langbridge.runtime.persistence.repositories.semantic_search_repository import (
+    SemanticVectorIndexRepository,
+)
 from langbridge.runtime.persistence.repositories.sql_repository import (
     SqlJobRepository,
     SqlJobResultArtifactRepository,
@@ -87,6 +93,7 @@ from langbridge.runtime.ports import (
     LLMConnectionStore,
     LineageEdgeStore,
     SemanticModelStore,
+    SemanticVectorIndexStore,
     SqlJobArtifactStore,
     SqlJobStore,
     ThreadMessageStore,
@@ -125,6 +132,21 @@ class RepositoryThreadStore(ThreadStore):
     async def get_by_id(self, id_: object) -> RuntimeThread | None:
         return from_thread_record(await self._repository.get_by_id(id_))
 
+    async def delete(self, id_: object) -> None:
+        record = await self._repository.get_by_id(id_)
+        if record is None:
+            return
+        await self._repository.delete(record)
+
+    async def list_for_actor(self, actor_id: uuid.UUID | None = None) -> list[RuntimeThread]:
+        if actor_id is None:
+            return []
+        return [
+            runtime_thread
+            for item in await self._repository.list_for_actor(actor_id)
+            if (runtime_thread := from_thread_record(item)) is not None
+        ]
+
 
 class RepositoryThreadMessageStore(ThreadMessageStore):
     def __init__(self, *, repository: ThreadMessageRepository) -> None:
@@ -141,6 +163,10 @@ class RepositoryThreadMessageStore(ThreadMessageStore):
             if (runtime_message := from_thread_message_record(item)) is not None
         ]
 
+    async def delete_for_thread(self, thread_id) -> None:
+        for item in await self._repository.list_for_thread(thread_id):
+            await self._repository.delete(item)
+
 
 class RepositorySemanticModelStore(SemanticModelStore):
     def __init__(self, *, repository: SemanticModelRepository) -> None:
@@ -155,6 +181,61 @@ class RepositorySemanticModelStore(SemanticModelStore):
             for item in await self._repository.get_by_ids(model_ids)
             if (runtime_model := from_semantic_model_record(item)) is not None
         ]
+
+
+class RepositorySemanticVectorIndexStore(SemanticVectorIndexStore):
+    def __init__(self, *, repository: SemanticVectorIndexRepository) -> None:
+        self._repository = repository
+
+    async def get_by_id(self, *, workspace_id, semantic_vector_index_id) -> SemanticVectorIndexMetadata | None:
+        return from_semantic_vector_index_record(
+            await self._repository.get_for_workspace(
+                vector_index_id=semantic_vector_index_id,
+                workspace_id=workspace_id,
+            )
+        )
+
+    async def get_for_dimension(
+        self,
+        *,
+        workspace_id,
+        semantic_model_id,
+        dataset_key,
+        dimension_name,
+    ) -> SemanticVectorIndexMetadata | None:
+        return from_semantic_vector_index_record(
+            await self._repository.get_for_dimension(
+                workspace_id=workspace_id,
+                semantic_model_id=semantic_model_id,
+                dataset_key=dataset_key,
+                dimension_name=dimension_name,
+            )
+        )
+
+    async def list_for_workspace(
+        self,
+        *,
+        workspace_id,
+        semantic_model_id=None,
+    ) -> list[SemanticVectorIndexMetadata]:
+        return [
+            runtime_index
+            for item in await self._repository.list_for_workspace(
+                workspace_id=workspace_id,
+                semantic_model_id=semantic_model_id,
+            )
+            if (runtime_index := from_semantic_vector_index_record(item)) is not None
+        ]
+
+    async def save(self, instance: SemanticVectorIndexMetadata) -> SemanticVectorIndexMetadata:
+        record = await self._repository.save(to_semantic_vector_index_record(instance))
+        return from_semantic_vector_index_record(record) or instance
+
+    async def delete(self, *, workspace_id, semantic_vector_index_id) -> None:
+        await self._repository.delete_for_workspace(
+            workspace_id=workspace_id,
+            vector_index_id=semantic_vector_index_id,
+        )
 
 
 class RepositoryConversationMemoryStore(ConversationMemoryStore):
@@ -471,6 +552,7 @@ __all__ = [
     "RepositoryLLMConnectionStore",
     "RepositoryLineageEdgeStore",
     "RepositorySemanticModelStore",
+    "RepositorySemanticVectorIndexStore",
     "RepositorySqlJobArtifactStore",
     "RepositorySqlJobStore",
     "RepositoryThreadMessageStore",

@@ -17,6 +17,7 @@ dependencies = [
   "opentelemetry-instrumentation-fastapi==0.60b1",
   "opentelemetry-instrumentation-logging==0.60b1",
   "dependency-injector==4.48.2",
+  "apscheduler==3.11.2",
   "sqlalchemy==2.0.43",
   "aiosqlite==0.20.0",
   "asyncpg==0.30.0",

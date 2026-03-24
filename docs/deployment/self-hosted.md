@@ -2,6 +2,8 @@
 
 Self-hosted deployment means running the Langbridge runtime in your own environment.
 
+The primary supported shape in this release is a single runtime host process. Distributed coordinator/worker scale-out remains preview direction and is not the main self-hosted deployment contract yet.
+
 ## Runtime Host
 
 Start the runtime host from an installed environment:

@@ -1,0 +1,26 @@
+version: "1.0"
+name: CommerceMarketingSupport
+description: Unified semantic fixture that joins commerce, marketing, and support sources by customer.
+source_models:
+  - id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    alias: Commerce
+    name: Commerce
+  - id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    alias: Marketing
+    name: Marketing
+  - id: "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    alias: Support
+    name: Support
+relationships:
+  - name: commerce_to_marketing
+    source_semantic_model_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    source_field: orders.customer_id
+    target_semantic_model_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    target_field: campaigns.customer_id
+    relationship_type: left
+  - name: commerce_customer_to_support
+    source_semantic_model_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    source_field: customers.customer_id
+    target_semantic_model_id: "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    target_field: tickets.customer_id
+    relationship_type: left

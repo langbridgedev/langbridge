@@ -1,66 +1,15 @@
 from abc import ABC, abstractmethod
 import asyncio
 from dataclasses import dataclass
-from enum import Enum
 import json
 import logging
 import time
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import re
 
 from .errors import AuthError, ConnectorError, QueryValidationError
 from langbridge.connectors.base.config import BaseConnectorConfig, ConnectorRuntimeType
 from langbridge.connectors.base.metadata import TableMetadata, ColumnMetadata, ForeignKeyMetadata
-
-
-class ConnectorType(Enum):
-    SQL = "SQL"
-    NO_SQL = "NO_SQL"
-    VECTOR_DB = "VECTOR_DB"
-
-class SqlDialetcs(Enum):
-    POSTGRES = "POSTGRES"
-    MYSQL = "MYSQL"
-    MARIADB = "MARIADB"
-    MONGODB = "MONGODB"
-    SNOWFLAKE = "SNOWFLAKE"
-    REDSHIFT = "REDSHIFT"
-    BIGQUERY = "BIGQUERY"
-    SQLSERVER = "SQLSERVER"
-    ORACLE = "ORACLE"
-    SQLITE = "SQLITE"
-
-class VectorDBType(Enum):
-    FAISS = "FAISS"
-    PINECONE = "PINECONE"
-    WEAVIATE = "WEAVIATE"
-    MILVUS = "MILVUS"
-    QDRANT = "QDRANT"
-
-class VectorType(Enum):
-    EMBEDDING = "EMBEDDING"
-    IMAGE = "IMAGE"
-    AUDIO = "AUDIO"
-    VIDEO = "VIDEO"
-    
-    
-# TODO: remove this mapping after refactoring ConnectorType to ConnectorRuntimeType
-ConnectorRuntimeTypeSqlDialectMap: Dict[ConnectorRuntimeType, SqlDialetcs] = {
-    ConnectorRuntimeType.POSTGRES: SqlDialetcs.POSTGRES,
-    ConnectorRuntimeType.MYSQL: SqlDialetcs.MYSQL,
-    ConnectorRuntimeType.MARIADB: SqlDialetcs.MARIADB,
-    ConnectorRuntimeType.SNOWFLAKE: SqlDialetcs.SNOWFLAKE,
-    ConnectorRuntimeType.REDSHIFT: SqlDialetcs.REDSHIFT,
-    ConnectorRuntimeType.BIGQUERY: SqlDialetcs.BIGQUERY,
-    ConnectorRuntimeType.SQLSERVER: SqlDialetcs.SQLSERVER,
-    ConnectorRuntimeType.ORACLE: SqlDialetcs.ORACLE,
-    ConnectorRuntimeType.SQLITE: SqlDialetcs.SQLITE,
-}
-
-ConnectorRuntimeTypeVectorDBMap: Dict[ConnectorRuntimeType, VectorDBType] = {
-    ConnectorRuntimeType.FAISS: VectorDBType.FAISS,
-    ConnectorRuntimeType.QDRANT: VectorDBType.QDRANT,
-}
 
 @dataclass(slots=True)
 class QueryResult:
@@ -233,7 +182,6 @@ class ApiConnector(Connector):
     Base class for API connectors.
     """
     
-    CONNECTOR_TYPE: ConnectorType = ConnectorType.NO_SQL
     RUNTIME_TYPE: ConnectorRuntimeType | None = None
     
     def __init__(
@@ -293,7 +241,6 @@ class NoSqlConnector(Connector):
     Base class for document-oriented connectors.
     """
 
-    CONNECTOR_TYPE: ConnectorType = ConnectorType.NO_SQL
     RUNTIME_TYPE: ConnectorRuntimeType | None = None
 
     def __init__(
@@ -387,9 +334,8 @@ class VecotorDBConnector(Connector):
     """
     Base class for Vector DB connectors.
     """
-        
-    CONNECTOR_TYPE: ConnectorType = ConnectorType.VECTOR_DB
-    VECTOR_DB_TYPE: VectorDBType
+
+    RUNTIME_TYPE: ConnectorRuntimeType | None = None
     
     def __init__(
         self,
@@ -432,9 +378,9 @@ class SqlConnector(Connector):
     """
     Base class for SQL connectors.
     """
-    
-    CONNECTOR_TYPE: ConnectorType = ConnectorType.SQL
-    DIALECT: SqlDialetcs
+
+    RUNTIME_TYPE: ConnectorRuntimeType | None = None
+    SQLGLOT_DIALECT: str = "tsql"
     EXPRESSION_REWRITE: bool = False
     
     def __init__(

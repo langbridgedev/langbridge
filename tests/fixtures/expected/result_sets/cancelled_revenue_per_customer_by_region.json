@@ -1,0 +1,10 @@
+[
+  {
+    "customers__region": "Europe",
+    "cancelled_revenue_per_customer": null
+  },
+  {
+    "customers__region": "North America",
+    "cancelled_revenue_per_customer": null
+  }
+]

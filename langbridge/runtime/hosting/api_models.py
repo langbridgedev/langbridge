@@ -5,9 +5,6 @@ from typing import Any
 from pydantic import Field, model_validator
 
 from langbridge.runtime.models.base import RuntimeModel, RuntimeRequestModel
-from langbridge.runtime.models.jobs import SqlSelectedDataset
-
-
 class RuntimeInfoResponse(RuntimeModel):
     api_version: str = "v1"
     runtime_mode: str
@@ -113,12 +110,26 @@ class RuntimeSqlQueryRequest(RuntimeRequestModel):
     query: str = Field(..., min_length=1)
     connection_id: uuid.UUID | None = None
     connection_name: str | None = None
-    selected_datasets: list[SqlSelectedDataset] = Field(default_factory=list)
+    selected_datasets: list[uuid.UUID] = Field(default_factory=list)
     query_dialect: str = "tsql"
     params: dict[str, Any] = Field(default_factory=dict)
     requested_limit: int | None = Field(default=None, ge=1)
     requested_timeout_seconds: int | None = Field(default=None, ge=1)
     explain: bool = False
+
+    @model_validator(mode="after")
+    def _validate_sql_mode(self) -> "RuntimeSqlQueryRequest":
+        normalized: list[uuid.UUID] = []
+        for dataset_id in self.selected_datasets:
+            if dataset_id not in normalized:
+                normalized.append(dataset_id)
+        self.selected_datasets = normalized
+
+        if self.connection_id is not None and self.connection_name:
+            raise ValueError("Specify only one of connection_id or connection_name for direct SQL requests.")
+        if (self.connection_id is not None or self.connection_name) and self.selected_datasets:
+            raise ValueError("selected_datasets cannot be combined with explicit direct SQL requests.")
+        return self
 
 
 class RuntimeSqlQueryResponse(RuntimeModel):
@@ -154,6 +165,14 @@ class RuntimeAgentAskResponse(RuntimeModel):
     visualization: Any | None = None
     error: dict[str, Any] | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RuntimeThreadCreateRequest(RuntimeRequestModel):
+    title: str | None = None
+
+
+class RuntimeThreadUpdateRequest(RuntimeRequestModel):
+    title: str | None = None
 
 
 class RuntimeSyncResourceSummary(RuntimeModel):
@@ -242,3 +261,27 @@ class RuntimeSyncResponse(RuntimeModel):
     resources: list[RuntimeSyncExecutionResult] = Field(default_factory=list)
     summary: str | None = None
     error: str | None = None
+
+
+class RuntimeAuthBootstrapRequest(RuntimeRequestModel):
+    username: str = Field(..., min_length=3, max_length=64)
+    email: str = Field(..., min_length=3, max_length=320)
+    password: str = Field(..., min_length=8)
+
+
+class RuntimeAuthLoginRequest(RuntimeRequestModel):
+    identifier: str | None = Field(default=None, min_length=1, max_length=320)
+    username: str | None = Field(default=None, min_length=1, max_length=64)
+    email: str | None = Field(default=None, min_length=1, max_length=320)
+    password: str = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def _normalize_identifier(self) -> "RuntimeAuthLoginRequest":
+        if not str(self.identifier or "").strip():
+            if str(self.username or "").strip():
+                self.identifier = str(self.username).strip()
+            elif str(self.email or "").strip():
+                self.identifier = str(self.email).strip()
+        if not str(self.identifier or "").strip():
+            raise ValueError("identifier, username, or email is required.")
+        return self

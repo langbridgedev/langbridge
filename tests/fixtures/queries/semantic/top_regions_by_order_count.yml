@@ -1,0 +1,9 @@
+dimensions:
+  - customers.region
+measures:
+  - orders.order_count
+order:
+  - orders.order_count: desc
+  - customers.region: asc
+limit: 2
+

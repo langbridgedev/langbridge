@@ -82,18 +82,12 @@ class ShopifyApiConnector(HttpApiConnector):
         }
     
     async def _authenticate(self) -> None:
-        client_id: str | None = settings.SHOPIFY_APP_CLIENT_ID
-        client_secret: str | None = settings.SHOPIFY_APP_CLIENT_SECRET
-
-        if not client_id or not client_secret:
-            raise ValueError("Shopify app credentials are required for authentication")
-        
         payload, response = await self._request_json(
             "POST",
             self.OAUTH_TOKEN_URL.format(shop_domain=self.config.shop_domain),
             data={
-                "client_id": client_id,
-                "client_secret": client_secret,
+                "client_id": self.config.shopify_app_client_id,
+                "client_secret": self.config.shopify_app_client_secret,
                 "grant_type": "client_credentials",
             },
         )

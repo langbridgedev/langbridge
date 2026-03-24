@@ -1,0 +1,24 @@
+version: "1.0"
+name: Marketing
+description: Lightweight marketing semantic model used for unified semantic and federation planning tests.
+datasets:
+  campaigns:
+    dataset_id: "33333333-3333-3333-3333-333333333333"
+    relation_name: campaigns
+    schema_name: marketing
+    dimensions:
+      - name: campaign_id
+        type: integer
+        primary_key: true
+      - name: customer_id
+        type: integer
+      - name: campaign_name
+        type: string
+      - name: channel
+        type: string
+    measures:
+      - name: spend
+        expression: spend
+        type: number
+        aggregation: sum
+

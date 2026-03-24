@@ -1,0 +1,11 @@
+measures:
+  - orders.net_revenue
+timeDimensions:
+  - dimension: orders.order_ts
+    granularity: month
+    dateRange:
+      - "2026-01-01"
+      - "2026-02-28"
+order:
+  - orders.order_ts: asc
+

@@ -1,0 +1,5 @@
+campaign_id,customer_id,campaign_name,channel,spend
+9001,101,Spring Launch,paid_search,30
+9002,102,Retention Wave,email,20
+9003,103,Channel Push,partner,25
+

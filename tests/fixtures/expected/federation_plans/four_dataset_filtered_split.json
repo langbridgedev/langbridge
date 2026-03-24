@@ -1,0 +1,178 @@
+{
+  "sql": "SELECT t1.\"region\" AS \"Commerce__customers__region\", t2.\"channel\" AS \"Marketing__campaigns__channel\", t3.\"severity\" AS \"Support__tickets__severity\", SUM(t0.\"amount\") AS \"Commerce__orders__revenue\", SUM(t2.\"spend\") AS \"Marketing__campaigns__spend\", COUNT(t3.\"ticket_id\") AS \"Support__tickets__ticket_count\" FROM analytics.orders AS t0 LEFT JOIN analytics.customers AS t1 ON t0.customer_id = t1.customer_id LEFT JOIN marketing.campaigns AS t2 ON t0.customer_id = t2.customer_id LEFT JOIN support.tickets AS t3 ON t1.customer_id = t3.customer_id WHERE t0.\"status\" = 'completed' AND t3.\"status\" = 'open' GROUP BY t1.\"region\", t2.\"channel\", t3.\"severity\" ORDER BY \"Commerce__orders__revenue\" DESC NULLS LAST",
+  "logical_plan": {
+    "query_type": "smq",
+    "from_alias": "t0",
+    "tables": {
+      "t0": {
+        "table_key": "Commerce__orders",
+        "source_id": "src_commerce",
+        "schema_name": "analytics",
+        "table": "orders",
+        "catalog": null
+      },
+      "t1": {
+        "table_key": "Commerce__customers",
+        "source_id": "src_commerce",
+        "schema_name": "analytics",
+        "table": "customers",
+        "catalog": null
+      },
+      "t2": {
+        "table_key": "Marketing__campaigns",
+        "source_id": "src_marketing",
+        "schema_name": "marketing",
+        "table": "campaigns",
+        "catalog": null
+      },
+      "t3": {
+        "table_key": "Support__tickets",
+        "source_id": "src_support",
+        "schema_name": "support",
+        "table": "tickets",
+        "catalog": null
+      }
+    },
+    "joins": [
+      {
+        "left_alias": "t0",
+        "right_alias": "t1",
+        "join_type": "inner",
+        "on_sql": "t0.customer_id = t1.customer_id"
+      },
+      {
+        "left_alias": "t1",
+        "right_alias": "t2",
+        "join_type": "inner",
+        "on_sql": "t0.customer_id = t2.customer_id"
+      },
+      {
+        "left_alias": "t2",
+        "right_alias": "t3",
+        "join_type": "inner",
+        "on_sql": "t1.customer_id = t3.customer_id"
+      }
+    ],
+    "where_sql": "t0.\"status\" = 'completed' AND t3.\"status\" = 'open'",
+    "group_by_sql": [
+      "t1.\"region\"",
+      "t2.\"channel\"",
+      "t3.\"severity\""
+    ],
+    "order_by_sql": [
+      "\"Commerce__orders__revenue\" DESC NULLS LAST"
+    ],
+    "limit": null,
+    "offset": null,
+    "has_cte": false
+  },
+  "physical_plan": {
+    "result_stage_id": "local_compute_final",
+    "join_order": [
+      "t1",
+      "t2",
+      "t0",
+      "t3"
+    ],
+    "join_strategies": {
+      "t0->t1": "broadcast",
+      "t1->t2": "broadcast",
+      "t2->t3": "broadcast"
+    },
+    "stages": [
+      {
+        "stage_id": "scan_t0",
+        "stage_type": "remote_scan",
+        "dependencies": [],
+        "source_id": "src_commerce",
+        "sql": null,
+        "subplan": {
+          "stage_id": "scan_t0",
+          "source_id": "src_commerce",
+          "alias": "t0",
+          "table_key": "Commerce__orders",
+          "sql": "SELECT * FROM analytics.orders AS t0 WHERE t0.\"status\" = 'completed'",
+          "projected_columns": [
+            "*"
+          ],
+          "pushed_filters": [
+            "t0.\"status\" = 'completed'"
+          ],
+          "pushed_limit": null
+        }
+      },
+      {
+        "stage_id": "scan_t1",
+        "stage_type": "remote_scan",
+        "dependencies": [],
+        "source_id": "src_commerce",
+        "sql": null,
+        "subplan": {
+          "stage_id": "scan_t1",
+          "source_id": "src_commerce",
+          "alias": "t1",
+          "table_key": "Commerce__customers",
+          "sql": "SELECT * FROM analytics.customers AS t1",
+          "projected_columns": [
+            "*"
+          ],
+          "pushed_filters": [],
+          "pushed_limit": null
+        }
+      },
+      {
+        "stage_id": "scan_t2",
+        "stage_type": "remote_scan",
+        "dependencies": [],
+        "source_id": "src_marketing",
+        "sql": null,
+        "subplan": {
+          "stage_id": "scan_t2",
+          "source_id": "src_marketing",
+          "alias": "t2",
+          "table_key": "Marketing__campaigns",
+          "sql": "SELECT * FROM marketing.campaigns AS t2",
+          "projected_columns": [
+            "*"
+          ],
+          "pushed_filters": [],
+          "pushed_limit": null
+        }
+      },
+      {
+        "stage_id": "scan_t3",
+        "stage_type": "remote_scan",
+        "dependencies": [],
+        "source_id": "src_support",
+        "sql": null,
+        "subplan": {
+          "stage_id": "scan_t3",
+          "source_id": "src_support",
+          "alias": "t3",
+          "table_key": "Support__tickets",
+          "sql": "SELECT * FROM support.tickets AS t3 WHERE t3.`status` = 'open'",
+          "projected_columns": [
+            "*"
+          ],
+          "pushed_filters": [
+            "t3.`status` = 'open'"
+          ],
+          "pushed_limit": null
+        }
+      },
+      {
+        "stage_id": "local_compute_final",
+        "stage_type": "local_compute",
+        "dependencies": [
+          "scan_t0",
+          "scan_t1",
+          "scan_t2",
+          "scan_t3"
+        ],
+        "source_id": null,
+        "sql": "SELECT t1.\"region\" AS \"Commerce__customers__region\", t2.\"channel\" AS \"Marketing__campaigns__channel\", t3.\"severity\" AS \"Support__tickets__severity\", SUM(t0.\"amount\") AS \"Commerce__orders__revenue\", SUM(t2.\"spend\") AS \"Marketing__campaigns__spend\", COUNT(t3.\"ticket_id\") AS \"Support__tickets__ticket_count\" FROM scan_t0 AS t0 LEFT JOIN scan_t1 AS t1 ON t0.customer_id = t1.customer_id LEFT JOIN scan_t2 AS t2 ON t0.customer_id = t2.customer_id LEFT JOIN scan_t3 AS t3 ON t1.customer_id = t3.customer_id WHERE t0.\"status\" = 'completed' AND t3.\"status\" = 'open' GROUP BY t1.\"region\", t2.\"channel\", t3.\"severity\" ORDER BY \"Commerce__orders__revenue\" DESC NULLS FIRST",
+        "subplan": null
+      }
+    ]
+  }
+}

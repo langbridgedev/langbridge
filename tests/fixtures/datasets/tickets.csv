@@ -1,0 +1,5 @@
+ticket_id,customer_id,severity,status
+5001,101,high,open
+5002,102,medium,closed
+5003,103,low,open
+5004,103,high,open

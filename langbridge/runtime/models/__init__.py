@@ -26,6 +26,9 @@ from langbridge.runtime.models.metadata import (
     SecretReference,
     DatasetStorageKind,
     SemanticModelMetadata,
+    SemanticVectorIndexMetadata,
+    SemanticVectorIndexStatus,
+    SemanticVectorStoreTarget,
 )
 from langbridge.runtime.models.jobs import (
     CreateAgentJobRequest,
@@ -100,6 +103,9 @@ __all__ = [
     "SemanticQueryResponse",
     "SecretReference",
     "SemanticModelMetadata",
+    "SemanticVectorIndexMetadata",
+    "SemanticVectorIndexStatus",
+    "SemanticVectorStoreTarget",
     "SqlJob",
     "RuntimeThread",
     "RuntimeThreadMessage",

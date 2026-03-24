@@ -3,6 +3,7 @@ from langbridge.runtime.ports import (
     CredentialProvider,
     DatasetMetadataProvider,
     SemanticModelMetadataProvider,
+    SemanticVectorIndexMetadataProvider,
     SqlJobResultArtifactProvider,
     SyncStateProvider,
 )
@@ -12,6 +13,7 @@ __all__ = [
     "CredentialProvider",
     "DatasetMetadataProvider",
     "SemanticModelMetadataProvider",
+    "SemanticVectorIndexMetadataProvider",
     "SqlJobResultArtifactProvider",
     "SyncStateProvider",
 ]

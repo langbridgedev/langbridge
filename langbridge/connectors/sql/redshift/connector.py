@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from langbridge.connectors.base import SqlDialetcs
+from langbridge.connectors.base.config import ConnectorRuntimeType
 from langbridge.connectors.base.connector import SqlConnector
 from langbridge.connectors.base.metadata import ColumnMetadata, ForeignKeyMetadata, TableMetadata
 from langbridge.connectors.base.errors import ConnectorError
@@ -24,7 +24,8 @@ class RedshiftConnector(SqlConnector):
     Amazon Redshift connector implementation (PostgreSQL-compatible).
     """
 
-    DIALECT = SqlDialetcs.REDSHIFT
+    RUNTIME_TYPE = ConnectorRuntimeType.REDSHIFT
+    SQLGLOT_DIALECT = "redshift"
 
     def __init__(
         self,

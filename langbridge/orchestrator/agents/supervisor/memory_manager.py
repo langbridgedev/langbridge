@@ -13,8 +13,9 @@ from langbridge.runtime.models import (
 )
 from langbridge.runtime.embeddings import EmbeddingProvider
 from langbridge.runtime.ports import ConversationMemoryStore
-from langbridge.connectors.base.connector import ManagedVectorDB, VectorDBType
-from langbridge.connectors.base.registry import VectorDBConnectorFactory
+from langbridge.connectors.base.config import ConnectorRuntimeType
+from langbridge.connectors.base.connector import ManagedVectorDB
+from langbridge.plugins.connectors import VectorDBConnectorFactory
 
 from .schemas import MemoryItem, MemoryRetrievalResult
 
@@ -384,7 +385,9 @@ class MemoryManager:
 
     async def _get_vector_store(self, thread_id: uuid.UUID) -> Optional[ManagedVectorDB]:
         try:
-            vector_class = self._vector_factory.get_managed_vector_db_class_reference(VectorDBType.FAISS)
+            vector_class = self._vector_factory.get_managed_vector_db_class_reference(
+                ConnectorRuntimeType.FAISS
+            )
             index_name = f"thread_memory_{thread_id.hex}"
             vector_store = await vector_class.create_managed_instance(
                 kwargs={"index_name": index_name},

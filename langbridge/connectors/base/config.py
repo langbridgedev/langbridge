@@ -46,8 +46,6 @@ class ConnectorSyncStrategy(str, Enum):
     WINDOWED_INCREMENTAL = "WINDOWED_INCREMENTAL"
     MANUAL = "MANUAL"
 
-ConnectorType = ConnectorRuntimeType
-
 class ConnectorConfigEntrySchema(_Base):
     field: str
     value: Optional[Any] = None

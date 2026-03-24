@@ -1,0 +1,6 @@
+order_id,customer_id,order_date,order_ts,status,channel,country,amount,discount
+1,101,2026-01-05,2026-01-05 10:00:00,completed,online,US,120,10
+2,102,2026-01-15,2026-01-15 12:00:00,completed,retail,UK,80,5
+3,101,2026-02-10,2026-02-10 09:30:00,pending,online,US,200,20
+4,103,2026-02-20,2026-02-20 15:45:00,completed,partner,DE,150,15
+

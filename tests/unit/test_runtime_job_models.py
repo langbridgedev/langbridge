@@ -21,6 +21,7 @@ from langbridge.runtime.models import (
 
 def test_create_sql_job_request_accepts_camel_case_payload() -> None:
     workspace_id = uuid.uuid4()
+    dataset_id = uuid.uuid4()
     request = CreateSqlJobRequest.model_validate(
         {
             "sqlJobId": str(uuid.uuid4()),
@@ -31,18 +32,13 @@ def test_create_sql_job_request_accepts_camel_case_payload() -> None:
             "enforcedLimit": 25,
             "enforcedTimeoutSeconds": 30,
             "allowFederation": True,
-            "selectedDatasets": [
-                {
-                    "datasetId": str(uuid.uuid4()),
-                    "alias": "Orders",
-                }
-            ],
+            "selectedDatasets": [str(dataset_id)],
         }
     )
 
     assert request.workspace_id == workspace_id
     assert request.workbench_mode.value == "dataset"
-    assert request.selected_datasets[0].sql_alias == "orders"
+    assert request.selected_datasets == [dataset_id]
 
 
 def test_create_dataset_bulk_create_request_accepts_nested_camel_case_payload() -> None:

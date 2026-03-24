@@ -196,6 +196,18 @@ class _FakeSemanticModelProvider:
         semantic_model_id: uuid.UUID,
     ) -> _ModelRecord | None:
         return self._models.get(semantic_model_id)
+    
+    async def get_semantic_models(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_model_ids: list[uuid.UUID],
+    ) -> list[_ModelRecord]:
+        return [
+            model
+            for model_id, model in self._models.items()
+            if model_id in semantic_model_ids
+        ]
 
 
 class _FakeFederatedQueryTool:

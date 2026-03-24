@@ -1,0 +1,1 @@
+SELECT t0."region" AS "customers__region", SUM(t1.amount - t1.discount) - SUM(CASE WHEN t1.status = 'completed' THEN t1.amount - t1.discount ELSE 0 END) AS "open_pipeline_net_revenue" FROM analytics.customers AS t0 LEFT JOIN analytics.orders AS t1 ON t1.customer_id = t0.customer_id GROUP BY t0."region" ORDER BY "open_pipeline_net_revenue" DESC NULLS LAST

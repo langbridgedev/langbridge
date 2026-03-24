@@ -212,3 +212,35 @@ class SemanticModelMetadata(RuntimeModel):
     content_json: dict[str, Any] | str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+class SemanticVectorIndexStatus(str, Enum):
+    PENDING = "pending"
+    REFRESHING = "refreshing"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class SemanticVectorStoreTarget(str, Enum):
+    MANAGED_FAISS = "managed_faiss"
+    CONNECTOR = "connector"
+
+
+class SemanticVectorIndexMetadata(RuntimeModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    semantic_model_id: uuid.UUID
+    dataset_key: str
+    dimension_name: str
+    vector_store_target: SemanticVectorStoreTarget
+    vector_connector_name: str | None = None
+    vector_connector_id: uuid.UUID | None = None
+    vector_index_name: str
+    refresh_interval_seconds: int | None = None
+    refresh_status: SemanticVectorIndexStatus = SemanticVectorIndexStatus.PENDING
+    indexed_value_count: int | None = None
+    embedding_dimension: int | None = None
+    last_refresh_started_at: datetime | None = None
+    last_refreshed_at: datetime | None = None
+    last_refresh_error: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None

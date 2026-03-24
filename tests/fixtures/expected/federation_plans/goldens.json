@@ -1,0 +1,345 @@
+{
+  "two_dataset_pushdown": {
+    "logical_plan": {
+      "from_alias": "t0",
+      "group_by_sql": [
+        "t1.\"region\""
+      ],
+      "has_cte": false,
+      "joins": [
+        {
+          "join_type": "inner",
+          "left_alias": "t0",
+          "on_sql": "t0.customer_id = t1.customer_id",
+          "right_alias": "t1"
+        }
+      ],
+      "limit": null,
+      "offset": null,
+      "order_by_sql": [
+        "\"orders__revenue\" DESC NULLS LAST"
+      ],
+      "query_type": "smq",
+      "tables": {
+        "t0": {
+          "catalog": null,
+          "schema_name": "analytics",
+          "source_id": "src_commerce",
+          "table": "orders",
+          "table_key": "orders"
+        },
+        "t1": {
+          "catalog": null,
+          "schema_name": "analytics",
+          "source_id": "src_commerce",
+          "table": "customers",
+          "table_key": "customers"
+        }
+      },
+      "where_sql": null
+    },
+    "physical_plan": {
+      "join_order": [
+        "t0"
+      ],
+      "join_strategies": {},
+      "result_stage_id": "scan_full_query",
+      "stages": [
+        {
+          "dependencies": [],
+          "source_id": "src_commerce",
+          "sql": null,
+          "stage_id": "scan_full_query",
+          "stage_type": "remote_full_query",
+          "subplan": {
+            "alias": "t0",
+            "projected_columns": [],
+            "pushed_filters": [],
+            "pushed_limit": null,
+            "source_id": "src_commerce",
+            "sql": "SELECT t1.\"region\" AS \"customers__region\", SUM(t0.\"amount\") AS \"orders__revenue\" FROM analytics.orders AS t0 LEFT JOIN analytics.customers AS t1 ON t0.customer_id = t1.customer_id GROUP BY t1.\"region\" ORDER BY \"orders__revenue\" DESC NULLS LAST",
+            "stage_id": "scan_full_query",
+            "table_key": "orders"
+          }
+        }
+      ]
+    },
+    "sql": "SELECT t1.\"region\" AS \"customers__region\", SUM(t0.\"amount\") AS \"orders__revenue\" FROM analytics.orders AS t0 LEFT JOIN analytics.customers AS t1 ON t0.customer_id = t1.customer_id GROUP BY t1.\"region\" ORDER BY \"orders__revenue\" DESC NULLS LAST"
+  },
+  "three_dataset_split": {
+    "logical_plan": {
+      "from_alias": "t0",
+      "group_by_sql": [
+        "t1.\"region\"",
+        "t2.\"channel\""
+      ],
+      "has_cte": false,
+      "joins": [
+        {
+          "join_type": "inner",
+          "left_alias": "t0",
+          "on_sql": "t0.customer_id = t1.customer_id",
+          "right_alias": "t1"
+        },
+        {
+          "join_type": "inner",
+          "left_alias": "t1",
+          "on_sql": "t0.customer_id = t2.customer_id",
+          "right_alias": "t2"
+        }
+      ],
+      "limit": null,
+      "offset": null,
+      "order_by_sql": [
+        "\"Commerce__orders__revenue\" DESC NULLS LAST"
+      ],
+      "query_type": "smq",
+      "tables": {
+        "t0": {
+          "catalog": null,
+          "schema_name": "analytics",
+          "source_id": "src_commerce",
+          "table": "orders",
+          "table_key": "Commerce__orders"
+        },
+        "t1": {
+          "catalog": null,
+          "schema_name": "analytics",
+          "source_id": "src_commerce",
+          "table": "customers",
+          "table_key": "Commerce__customers"
+        },
+        "t2": {
+          "catalog": null,
+          "schema_name": "marketing",
+          "source_id": "src_marketing",
+          "table": "campaigns",
+          "table_key": "Marketing__campaigns"
+        }
+      },
+      "where_sql": null
+    },
+    "physical_plan": {
+      "join_order": [
+        "t1",
+        "t2",
+        "t0"
+      ],
+      "join_strategies": {
+        "t0->t1": "broadcast",
+        "t1->t2": "broadcast"
+      },
+      "result_stage_id": "local_compute_final",
+      "stages": [
+        {
+          "dependencies": [],
+          "source_id": "src_commerce",
+          "sql": null,
+          "stage_id": "scan_t0",
+          "stage_type": "remote_scan",
+          "subplan": {
+            "alias": "t0",
+            "projected_columns": [
+              "*"
+            ],
+            "pushed_filters": [],
+            "pushed_limit": null,
+            "source_id": "src_commerce",
+            "sql": "SELECT * FROM analytics.orders AS t0",
+            "stage_id": "scan_t0",
+            "table_key": "Commerce__orders"
+          }
+        },
+        {
+          "dependencies": [],
+          "source_id": "src_commerce",
+          "sql": null,
+          "stage_id": "scan_t1",
+          "stage_type": "remote_scan",
+          "subplan": {
+            "alias": "t1",
+            "projected_columns": [
+              "*"
+            ],
+            "pushed_filters": [],
+            "pushed_limit": null,
+            "source_id": "src_commerce",
+            "sql": "SELECT * FROM analytics.customers AS t1",
+            "stage_id": "scan_t1",
+            "table_key": "Commerce__customers"
+          }
+        },
+        {
+          "dependencies": [],
+          "source_id": "src_marketing",
+          "sql": null,
+          "stage_id": "scan_t2",
+          "stage_type": "remote_scan",
+          "subplan": {
+            "alias": "t2",
+            "projected_columns": [
+              "*"
+            ],
+            "pushed_filters": [],
+            "pushed_limit": null,
+            "source_id": "src_marketing",
+            "sql": "SELECT * FROM marketing.campaigns AS t2",
+            "stage_id": "scan_t2",
+            "table_key": "Marketing__campaigns"
+          }
+        },
+        {
+          "dependencies": [
+            "scan_t0",
+            "scan_t1",
+            "scan_t2"
+          ],
+          "source_id": null,
+          "sql": "SELECT t1.\"region\" AS \"Commerce__customers__region\", t2.\"channel\" AS \"Marketing__campaigns__channel\", SUM(t0.\"amount\") AS \"Commerce__orders__revenue\", SUM(t2.\"spend\") AS \"Marketing__campaigns__spend\" FROM scan_t0 AS t0 LEFT JOIN scan_t1 AS t1 ON t0.customer_id = t1.customer_id LEFT JOIN scan_t2 AS t2 ON t0.customer_id = t2.customer_id GROUP BY t1.\"region\", t2.\"channel\" ORDER BY \"Commerce__orders__revenue\" DESC NULLS FIRST",
+          "stage_id": "local_compute_final",
+          "stage_type": "local_compute",
+          "subplan": null
+        }
+      ]
+    },
+    "sql": "SELECT t1.\"region\" AS \"Commerce__customers__region\", t2.\"channel\" AS \"Marketing__campaigns__channel\", SUM(t0.\"amount\") AS \"Commerce__orders__revenue\", SUM(t2.\"spend\") AS \"Marketing__campaigns__spend\" FROM analytics.orders AS t0 LEFT JOIN analytics.customers AS t1 ON t0.customer_id = t1.customer_id LEFT JOIN marketing.campaigns AS t2 ON t0.customer_id = t2.customer_id GROUP BY t1.\"region\", t2.\"channel\" ORDER BY \"Commerce__orders__revenue\" DESC NULLS LAST"
+  },
+  "mixed_sql_split": {
+    "logical_plan": {
+      "from_alias": "o",
+      "group_by_sql": [],
+      "has_cte": false,
+      "joins": [
+        {
+          "join_type": "inner",
+          "left_alias": "o",
+          "on_sql": "o.customer_id = c.customer_id",
+          "right_alias": "c"
+        },
+        {
+          "join_type": "inner",
+          "left_alias": "c",
+          "on_sql": "o.customer_id = m.customer_id",
+          "right_alias": "m"
+        }
+      ],
+      "limit": null,
+      "offset": null,
+      "order_by_sql": [
+        "o.order_id"
+      ],
+      "query_type": "sql",
+      "tables": {
+        "c": {
+          "catalog": null,
+          "schema_name": "analytics",
+          "source_id": "src_commerce",
+          "table": "customers",
+          "table_key": "Commerce__customers"
+        },
+        "m": {
+          "catalog": null,
+          "schema_name": "marketing",
+          "source_id": "src_marketing",
+          "table": "campaigns",
+          "table_key": "Marketing__campaigns"
+        },
+        "o": {
+          "catalog": null,
+          "schema_name": "analytics",
+          "source_id": "src_commerce",
+          "table": "orders",
+          "table_key": "Commerce__orders"
+        }
+      },
+      "where_sql": null
+    },
+    "physical_plan": {
+      "join_order": [
+        "c",
+        "m",
+        "o"
+      ],
+      "join_strategies": {
+        "c->m": "broadcast",
+        "o->c": "broadcast"
+      },
+      "result_stage_id": "local_compute_final",
+      "stages": [
+        {
+          "dependencies": [],
+          "source_id": "src_commerce",
+          "sql": null,
+          "stage_id": "scan_o",
+          "stage_type": "remote_scan",
+          "subplan": {
+            "alias": "o",
+            "projected_columns": [
+              "customer_id",
+              "order_id"
+            ],
+            "pushed_filters": [],
+            "pushed_limit": null,
+            "source_id": "src_commerce",
+            "sql": "SELECT o.customer_id, o.order_id FROM analytics.orders AS o",
+            "stage_id": "scan_o",
+            "table_key": "Commerce__orders"
+          }
+        },
+        {
+          "dependencies": [],
+          "source_id": "src_commerce",
+          "sql": null,
+          "stage_id": "scan_c",
+          "stage_type": "remote_scan",
+          "subplan": {
+            "alias": "c",
+            "projected_columns": [
+              "customer_id",
+              "region"
+            ],
+            "pushed_filters": [],
+            "pushed_limit": null,
+            "source_id": "src_commerce",
+            "sql": "SELECT c.customer_id, c.region FROM analytics.customers AS c",
+            "stage_id": "scan_c",
+            "table_key": "Commerce__customers"
+          }
+        },
+        {
+          "dependencies": [],
+          "source_id": "src_marketing",
+          "sql": null,
+          "stage_id": "scan_m",
+          "stage_type": "remote_scan",
+          "subplan": {
+            "alias": "m",
+            "projected_columns": [
+              "campaign_name",
+              "customer_id"
+            ],
+            "pushed_filters": [],
+            "pushed_limit": null,
+            "source_id": "src_marketing",
+            "sql": "SELECT m.campaign_name, m.customer_id FROM marketing.campaigns AS m",
+            "stage_id": "scan_m",
+            "table_key": "Marketing__campaigns"
+          }
+        },
+        {
+          "dependencies": [
+            "scan_o",
+            "scan_c",
+            "scan_m"
+          ],
+          "source_id": null,
+          "sql": "SELECT o.order_id, c.region, m.campaign_name FROM scan_o AS o LEFT JOIN scan_c AS c ON o.customer_id = c.customer_id LEFT JOIN scan_m AS m ON o.customer_id = m.customer_id ORDER BY o.order_id",
+          "stage_id": "local_compute_final",
+          "stage_type": "local_compute",
+          "subplan": null
+        }
+      ]
+    },
+    "sql": "SELECT o.order_id, c.region, m.campaign_name FROM analytics.orders AS o LEFT JOIN analytics.customers AS c ON o.customer_id = c.customer_id LEFT JOIN marketing.campaigns AS m ON o.customer_id = m.customer_id ORDER BY o.order_id"
+  }
+}

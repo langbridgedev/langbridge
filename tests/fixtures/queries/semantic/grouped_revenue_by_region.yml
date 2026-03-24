@@ -1,0 +1,7 @@
+dimensions:
+  - customers.region
+measures:
+  - orders.revenue
+order:
+  - orders.revenue: desc
+

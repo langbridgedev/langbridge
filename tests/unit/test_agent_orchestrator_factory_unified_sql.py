@@ -165,12 +165,14 @@ def _build_semantic_entry(
     model_id: uuid.UUID,
     workspace_id: uuid.UUID,
     dataset: DatasetRecord,
+    model_name: str = "orders_model",
+    table_key: str = "orders",
 ) -> SemanticModelMetadata:
     model = SemanticModel(
         version="1.0",
-        name="orders_model",
+        name=model_name,
         tables={
-            "orders": Table(
+            table_key: Table(
                 dataset_id=str(dataset.id),
                 schema="public",
                 name=dataset.table_name or dataset.sql_alias,
@@ -182,8 +184,8 @@ def _build_semantic_entry(
     return SemanticModelMetadata(
         id=model_id,
         workspace_id=workspace_id,
-        name="orders_model",
-        description="Orders governed model",
+        name=model_name,
+        description=f"{model_name} governed model",
         content_yaml=model.yml_dump(),
         content_json=None,
         created_at=now,
@@ -282,3 +284,72 @@ async def test_agent_orchestrator_factory_builds_dataset_backed_semantic_tool() 
     assert response.result is not None
     assert response.result.rows == [(1,)]
     assert len(federated_tool.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_agent_orchestrator_factory_builds_multiple_semantic_tools_from_one_binding() -> None:
+    workspace_id = uuid.uuid4()
+    orders = _build_dataset(
+        dataset_id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        name="orders_dataset",
+        sql_alias="orders",
+    )
+    customers = _build_dataset(
+        dataset_id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        name="customers_dataset",
+        sql_alias="customers",
+    )
+    model_a_id = uuid.uuid4()
+    model_b_id = uuid.uuid4()
+    federated_tool = _FederatedQueryTool()
+    factory = AgentOrchestratorFactory(
+        semantic_model_store=_SemanticModelStore(
+            entries={
+                model_a_id: _build_semantic_entry(
+                    model_id=model_a_id,
+                    workspace_id=workspace_id,
+                    dataset=orders,
+                    model_name="orders_model",
+                    table_key="orders",
+                ),
+                model_b_id: _build_semantic_entry(
+                    model_id=model_b_id,
+                    workspace_id=workspace_id,
+                    dataset=customers,
+                    model_name="customers_model",
+                    table_key="customers",
+                ),
+            }
+        ),
+        dataset_repository=_DatasetRepository({orders.id: orders, customers.id: customers}),
+        dataset_column_repository=_DatasetColumnRepository(
+            {
+                orders.id: _build_columns(dataset=orders),
+                customers.id: _build_columns(dataset=customers),
+            }
+        ),
+        federated_query_tool=federated_tool,
+    )
+
+    tools = await factory._build_analyst_tools(  # noqa: SLF001
+        tool_config=AgentToolConfig(
+            allow_sql=True,
+            allow_web_search=False,
+            allow_deep_research=False,
+            allow_visualization=False,
+            analyst_bindings=[
+                AnalystBinding(
+                    name="governed_sql",
+                    semantic_model_ids=[model_a_id, model_b_id],
+                )
+            ],
+        ),
+        llm_provider=_StaticLLM("SELECT order_id FROM orders"),  # type: ignore[arg-type]
+        embedding_provider=None,
+        event_emitter=None,
+    )
+
+    assert len(tools) == 2
+    assert {tool.context.asset_name for tool in tools} == {"orders_model", "customers_model"}

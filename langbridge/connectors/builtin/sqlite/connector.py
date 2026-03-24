@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Optional
+from langbridge.connectors.base.config import ConnectorRuntimeType
 from langbridge.connectors.base.connector import SqlConnector
-from langbridge.connectors.base import SqlDialetcs
 from langbridge.connectors.base.errors import ConnectorError
 from langbridge.connectors.base.metadata import ColumnMetadata, ForeignKeyMetadata, TableMetadata
 from .config import SqliteConnectorConfig
@@ -11,7 +11,8 @@ class SqliteConnector(SqlConnector):
     """
     SQLite connector implementation.
     """
-    DIALECT = SqlDialetcs.SQLITE
+    RUNTIME_TYPE = ConnectorRuntimeType.SQLITE
+    SQLGLOT_DIALECT = "sqlite"
     
     def __init__(
         self,

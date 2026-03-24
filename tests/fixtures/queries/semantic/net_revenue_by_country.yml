@@ -1,0 +1,7 @@
+dimensions:
+  - orders.country
+measures:
+  - orders.net_revenue
+order:
+  - orders.net_revenue: desc
+

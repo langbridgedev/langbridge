@@ -5,7 +5,8 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Sequence
 
-from langbridge.connectors.base.connector import ManagedVectorDB, VectorDBType, run_sync
+from langbridge.connectors.base.config import ConnectorRuntimeType
+from langbridge.connectors.base.connector import ManagedVectorDB, run_sync
 from langbridge.connectors.base.errors import ConnectorError
 from langbridge.runtime.logger import get_root_logger
 from .config import QdrantConnectorConfig, _parse_bool
@@ -24,7 +25,7 @@ else:
 class QdrantConnector(ManagedVectorDB):
     """Managed connector for Qdrant."""
 
-    VECTOR_DB_TYPE = VectorDBType.QDRANT
+    RUNTIME_TYPE = ConnectorRuntimeType.QDRANT
 
     def __init__(self, config: QdrantConnectorConfig, logger: Optional[Any] = None) -> None:
         super().__init__(config=config, logger=logger)

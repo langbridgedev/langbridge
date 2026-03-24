@@ -14,6 +14,9 @@ from langbridge.runtime.ports import (
     DatasetColumnStore,
     SemanticModelStore,
 )
+from langbridge.runtime.services.semantic_vector_search_service import (
+    SemanticVectorSearchService,
+)
 from langbridge.runtime.services.dataset_execution import DatasetExecutionResolver
 from langbridge.orchestrator.agents.analyst import AnalystAgent
 from langbridge.orchestrator.agents.deep_research import DeepResearchAgent
@@ -133,7 +136,7 @@ class _FederatedSqlExecutor:
 
 
 class AgentOrchestratorFactory:
-    """Build worker-side orchestrator components for dataset-first federated analysis."""
+    """Build runtime-side orchestrator components for dataset-first federated analysis."""
 
     def __init__(
         self,
@@ -141,12 +144,14 @@ class AgentOrchestratorFactory:
         dataset_repository: DatasetCatalogStore | None = None,
         dataset_column_repository: DatasetColumnStore | None = None,
         federated_query_tool: Any | None = None,
+        semantic_vector_search_service: SemanticVectorSearchService | None = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
         self._semantic_model_store = semantic_model_store
         self._dataset_repository = dataset_repository
         self._dataset_column_repository = dataset_column_repository
         self._federated_query_tool = federated_query_tool
+        self._semantic_vector_search_service = semantic_vector_search_service
         self._dataset_execution_resolver = DatasetExecutionResolver(
             dataset_repository=self._dataset_repository,
         )
@@ -440,6 +445,9 @@ class AgentOrchestratorFactory:
             priority=0,
             embedder=embedding_provider,
             event_emitter=event_emitter,
+            semantic_vector_search_service=self._semantic_vector_search_service,
+            semantic_vector_search_workspace_id=semantic_model_entry.workspace_id,
+            semantic_vector_search_model_id=semantic_model_entry.id,
         )
 
     async def _build_dataset_workflow(

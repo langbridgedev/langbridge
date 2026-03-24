@@ -1,0 +1,23 @@
+version: "1.0"
+name: Support
+description: Lightweight support semantic model used for deeper federation planner coverage.
+datasets:
+  tickets:
+    dataset_id: "44444444-4444-4444-4444-444444444444"
+    relation_name: tickets
+    schema_name: support
+    dimensions:
+      - name: ticket_id
+        type: integer
+        primary_key: true
+      - name: customer_id
+        type: integer
+      - name: severity
+        type: string
+      - name: status
+        type: string
+    measures:
+      - name: ticket_count
+        expression: ticket_id
+        type: integer
+        aggregation: count

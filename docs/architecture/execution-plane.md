@@ -4,6 +4,8 @@ The execution plane is where Langbridge runtime requests actually run.
 
 Today that means the configured runtime host plus the runtime services it composes.
 
+The current execution plane should be read as single-node first. There are dispatch seams that can support later coordinator/worker scale-out, but those are preview-oriented internals rather than the primary v1 packaging story.
+
 ## Responsibilities
 
 - build a runtime context for each request

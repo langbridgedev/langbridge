@@ -4,6 +4,8 @@ Langbridge is an open source, self-hostable analytics runtime for structured dat
 
 It gives you a single runtime for connectors, datasets, semantic models, federated query, SQL execution, SaaS sync, and agent-style analytical workflows. You can run it in process through Python, expose it over HTTP, serve a lightweight UI, and optionally mount an MCP endpoint from the same runtime host.
 
+The current product center is a strong single-node runtime host. Distributed coordinator/worker scale-out remains preview groundwork in this repo, not the primary v1 deployment path.
+
 ## What You Get
 
 - A runtime host with a documented HTTP API under `/api/runtime/v1/*`
@@ -108,6 +110,8 @@ docker compose --profile host up --build runtime-host
 ```
 
 The runtime image is defined in `docker/Dockerfile`.
+
+The top-level Docker path is intentionally single-node. Preview distributed execution internals remain in the federation layer, but this repo does not currently position coordinator/worker packaging as the main release-ready self-hosted path.
 
 ## Identity And Auth
 

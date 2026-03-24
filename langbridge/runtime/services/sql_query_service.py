@@ -1,5 +1,6 @@
 import logging
 import hashlib
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -10,6 +11,7 @@ from langbridge.runtime.models import (
     CreateSqlJobRequest,
     SqlJob,
     SqlJobResultArtifact,
+    SqlSelectedDataset,
 )
 from .errors import ExecutionValidationError
 from langbridge.runtime.utils.datasets import (
@@ -26,7 +28,6 @@ from langbridge.runtime.utils.sql import (
     transpile_sql,
 )
 from langbridge.connectors.base import (
-    ConnectorRuntimeTypeSqlDialectMap,
     SqlConnectorFactory,
     get_connector_config_factory,
 )
@@ -257,7 +258,7 @@ class SqlQueryService:
         if not settings.SQL_FEDERATION_ENABLED or not request.allow_federation:
             raise ExecutionValidationError("Federated SQL execution is disabled.")
         if self._federated_query_tool is None:
-            raise ExecutionValidationError("Federated query tool is not configured on this worker.")
+            raise ExecutionValidationError("Federated query tool is not configured on this runtime node.")
 
         source_sqlglot_dialect = normalize_sql_dialect(request.query_dialect, default="tsql")
         rendered_query = render_sql_with_params(request.query, request.params)
@@ -277,15 +278,22 @@ class SqlQueryService:
             max_rows=request.enforced_limit,
             dialect=source_sqlglot_dialect,
         )
-        workflow, source_aliases = await self._build_federated_workflow(
+        workflow, federated_datasets = await self._build_federated_workflow(
             workspace_id=request.workspace_id,
             query=executable_sql,
             source_dialect=source_sqlglot_dialect,
-            federated_datasets=[
-                dataset.model_dump(mode="json") if hasattr(dataset, "model_dump") else dict(dataset)
-                for dataset in (request.selected_datasets or request.federated_datasets)
-            ],
+            selected_dataset_ids=list(request.selected_datasets or []),
             job=job,
+        )
+        request.federated_datasets = federated_datasets
+        job.selected_datasets_json = [
+            dataset.model_dump(mode="json")
+            for dataset in federated_datasets
+        ]
+        source_aliases = sorted(
+            str(dataset.sql_alias or "").strip().lower()
+            for dataset in federated_datasets
+            if str(dataset.sql_alias or "").strip()
         )
         tool_payload = {
             "workspace_id": str(request.workspace_id),
@@ -402,15 +410,16 @@ class SqlQueryService:
         connector_type: ConnectorRuntimeType,
         connector_payload: dict[str, Any],
     ):
-        dialect = ConnectorRuntimeTypeSqlDialectMap.get(connector_type)
-        if dialect is None:
+        try:
+            self._sql_connector_factory.get_sql_connector_class_reference(connector_type)
+        except ValueError as exc:
             raise ExecutionValidationError(
                 f"Connector type {connector_type.value} does not support SQL execution."
-            )
+            ) from exc
         config_factory = get_connector_config_factory(connector_type)
         config_instance = config_factory.create(connector_payload.get("config", {}))
         sql_connector = self._sql_connector_factory.create_sql_connector(
-            dialect,
+            connector_type,
             config_instance,
             logger=self._logger,
         )
@@ -457,18 +466,10 @@ class SqlQueryService:
 
     @staticmethod
     def _sqlglot_dialect_for_connector(connector_type: ConnectorRuntimeType) -> str:
-        connector_map = {
-            ConnectorRuntimeType.POSTGRES: "postgres",
-            ConnectorRuntimeType.MYSQL: "mysql",
-            ConnectorRuntimeType.MARIADB: "mysql",
-            ConnectorRuntimeType.SNOWFLAKE: "snowflake",
-            ConnectorRuntimeType.REDSHIFT: "redshift",
-            ConnectorRuntimeType.BIGQUERY: "bigquery",
-            ConnectorRuntimeType.SQLSERVER: "tsql",
-            ConnectorRuntimeType.ORACLE: "oracle",
-            ConnectorRuntimeType.SQLITE: "sqlite",
-        }
-        return connector_map.get(connector_type, "tsql")
+        try:
+            return SqlConnectorFactory.get_sqlglot_dialect(connector_type)
+        except ValueError:
+            return "tsql"
 
     @staticmethod
     def _transpile(
@@ -518,14 +519,14 @@ class SqlQueryService:
         workspace_id: uuid.UUID,
         query: str,
         source_dialect: str,
-        federated_datasets: list[dict[str, Any]],
+        selected_dataset_ids: list[uuid.UUID],
         job: SqlJob,
-    ) -> tuple[FederationWorkflow, list[str]]:
+    ) -> tuple[FederationWorkflow, list[SqlSelectedDataset]]:
         return await self._build_dataset_federated_workflow(
             workspace_id=workspace_id,
             query=query,
             source_dialect=source_dialect,
-            federated_datasets=federated_datasets,
+            selected_dataset_ids=selected_dataset_ids,
             job=job,
         )
 
@@ -535,23 +536,15 @@ class SqlQueryService:
         workspace_id: uuid.UUID,
         query: str,
         source_dialect: str,
-        federated_datasets: list[dict[str, Any]],
+        selected_dataset_ids: list[uuid.UUID],
         job: SqlJob,
-    ) -> tuple[FederationWorkflow, list[str]]:
-        dataset_map = self._normalize_federated_datasets(federated_datasets)
-        datasets = await self._get_datasets_for_workspace(
+    ) -> tuple[FederationWorkflow, list[SqlSelectedDataset]]:
+        federated_datasets, datasets_by_id = await self._resolve_federated_datasets(
             workspace_id=workspace_id,
-            dataset_ids=list(dataset_map.keys()),
+            selected_dataset_ids=selected_dataset_ids,
         )
-        datasets_by_id = {dataset.id: dataset for dataset in datasets}
-        for dataset_id, selection in dataset_map.items():
-            if dataset_id not in datasets_by_id:
-                raise ExecutionValidationError(
-                    f"Federated dataset '{selection.get('legacy_alias') or selection.get('sql_alias') or dataset_id}' references unknown dataset '{dataset_id}'."
-                )
-
         table_bindings = self._extract_dataset_federated_table_bindings(
-            dataset_map=dataset_map,
+            selected_datasets=federated_datasets,
             datasets_by_id=datasets_by_id,
         )
         workflow_id = f"workflow_sql_{job.id.hex[:12]}"
@@ -573,56 +566,152 @@ class SqlQueryService:
                 max_stage_retries=settings.FEDERATION_STAGE_MAX_RETRIES,
                 stage_parallelism=settings.FEDERATION_STAGE_PARALLELISM,
             ),
-            sorted(
-                str(getattr(datasets_by_id[dataset_id], "sql_alias", None) or selection.get("sql_alias") or "").strip().lower()
-                for dataset_id, selection in dataset_map.items()
-            ),
+            federated_datasets,
         )
 
-    @staticmethod
-    def _normalize_federated_datasets(
-        federated_datasets: list[dict[str, Any]],
-    ) -> dict[uuid.UUID, dict[str, str | uuid.UUID | None]]:
-        dataset_map: dict[uuid.UUID, dict[str, str | uuid.UUID | None]] = {}
-        for raw_item in federated_datasets or []:
-            item = dict(raw_item or {})
-            raw_dataset_id = item.get("dataset_id") or item.get("datasetId")
-            try:
-                dataset_id = uuid.UUID(str(raw_dataset_id))
-            except (TypeError, ValueError) as exc:
-                raise ExecutionValidationError(
-                    "Federated dataset entry has an invalid dataset id."
-                ) from exc
-            legacy_alias = str(item.get("alias") or "").strip() or None
-            sql_alias = str(item.get("sql_alias") or item.get("sqlAlias") or "").strip().lower() or None
-            existing = dataset_map.get(dataset_id)
-            if existing is not None:
-                existing_sql_alias = str(existing.get("sql_alias") or "").strip().lower() or None
-                if existing_sql_alias and sql_alias and existing_sql_alias != sql_alias:
-                    raise ExecutionValidationError(
-                        f"Federated dataset '{dataset_id}' maps to multiple SQL aliases."
-                    )
-            dataset_map[dataset_id] = {
-                "dataset_id": dataset_id,
-                "legacy_alias": legacy_alias,
-                "sql_alias": sql_alias,
-            }
-
-        if not dataset_map:
-            raise ExecutionValidationError(
-                "federated_datasets must include at least one dataset mapping."
+    async def _resolve_federated_datasets(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        selected_dataset_ids: list[uuid.UUID],
+    ) -> tuple[list[SqlSelectedDataset], dict[uuid.UUID, Any]]:
+        if selected_dataset_ids:
+            datasets = await self._get_datasets_for_workspace(
+                workspace_id=workspace_id,
+                dataset_ids=selected_dataset_ids,
             )
-        return dataset_map
+            datasets_by_id = {dataset.id: dataset for dataset in datasets}
+            missing_dataset_ids = [
+                dataset_id
+                for dataset_id in selected_dataset_ids
+                if dataset_id not in datasets_by_id
+            ]
+            if missing_dataset_ids:
+                missing = ", ".join(str(dataset_id) for dataset_id in missing_dataset_ids)
+                raise ExecutionValidationError(
+                    f"Selected federated datasets were not found in workspace '{workspace_id}': {missing}."
+                )
+        else:
+            datasets = await self._list_datasets_for_workspace(workspace_id=workspace_id)
+            datasets_by_id = {dataset.id: dataset for dataset in datasets}
+
+        eligible_datasets: list[Any] = []
+        ineligible_dataset_names: list[str] = []
+        for dataset in datasets:
+            descriptor = self._dataset_execution_resolver._build_dataset_execution_descriptor(dataset)
+            if dataset_supports_structured_federation(
+                source_kind=descriptor.source_kind,
+                storage_kind=descriptor.storage_kind,
+                capabilities=descriptor.execution_capabilities,
+            ):
+                eligible_datasets.append(dataset)
+            else:
+                ineligible_dataset_names.append(str(getattr(dataset, "name", dataset.id)))
+
+        if selected_dataset_ids and ineligible_dataset_names:
+            raise ExecutionValidationError(
+                "Selected datasets do not support federated structured execution: "
+                + ", ".join(sorted(ineligible_dataset_names))
+            )
+        if not eligible_datasets:
+            raise ExecutionValidationError(
+                "No eligible datasets are available for federated SQL in this workspace."
+            )
+
+        ordered_datasets = sorted(
+            eligible_datasets,
+            key=lambda dataset: (
+                str(getattr(dataset, "name", "")).strip().lower(),
+                str(getattr(dataset, "id", "")),
+            ),
+        )
+        sql_aliases = self._derive_federated_sql_aliases(ordered_datasets)
+        resolved = [
+            SqlSelectedDataset(
+                alias=sql_aliases[dataset.id],
+                sql_alias=sql_aliases[dataset.id],
+                dataset_id=dataset.id,
+                dataset_name=str(getattr(dataset, "name", "")).strip() or None,
+                canonical_reference=self._dataset_canonical_reference(dataset),
+                connector_id=getattr(dataset, "connection_id", None),
+                source_kind=str(getattr(dataset, "source_kind", "")).strip().lower() or None,
+                storage_kind=str(getattr(dataset, "storage_kind", "")).strip().lower() or None,
+            )
+            for dataset in ordered_datasets
+        ]
+        return resolved, {dataset.id: dataset for dataset in ordered_datasets}
+
+    async def _list_datasets_for_workspace(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+    ) -> list[Any]:
+        if self._dataset_repository is None:
+            raise ExecutionValidationError(
+                "Dataset catalog store is required to enumerate workspace datasets for federated SQL."
+            )
+        limit = max(1, settings.SQL_FEDERATION_MAX_ELIGIBLE_DATASETS)
+        datasets = await self._dataset_repository.list_for_workspace(
+            workspace_id=workspace_id,
+            limit=limit + 1,
+            offset=0,
+        )
+        if len(datasets) > limit:
+            raise ExecutionValidationError(
+                "Federated SQL scope exceeds the default dataset limit for this workspace. "
+                "Pass selected_datasets to narrow planner scope."
+            )
+        return datasets
+
+    @classmethod
+    def _derive_federated_sql_aliases(
+        cls,
+        datasets: list[Any],
+    ) -> dict[uuid.UUID, str]:
+        aliases: dict[uuid.UUID, str] = {}
+        used_aliases: set[str] = set()
+        for dataset in datasets:
+            base_alias = cls._normalize_dataset_sql_alias(
+                getattr(dataset, "sql_alias", None) or getattr(dataset, "name", None)
+            )
+            alias = base_alias
+            suffix = 2
+            while alias in used_aliases:
+                alias = f"{base_alias}_{suffix}"
+                suffix += 1
+            aliases[dataset.id] = alias
+            used_aliases.add(alias)
+        return aliases
+
+    @staticmethod
+    def _normalize_dataset_sql_alias(value: Any) -> str:
+        alias = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower())
+        alias = re.sub(r"_+", "_", alias).strip("_")
+        if not alias:
+            alias = "dataset"
+        if alias[0].isdigit():
+            alias = f"dataset_{alias}"
+        return alias
+
+    @staticmethod
+    def _dataset_canonical_reference(dataset: Any) -> str | None:
+        relation_identity = getattr(dataset, "relation_identity_json", None)
+        if relation_identity is None:
+            relation_identity = getattr(dataset, "relation_identity", None)
+        if isinstance(relation_identity, dict):
+            value = str(relation_identity.get("canonical_reference") or "").strip()
+            return value or None
+        return None
 
     def _extract_dataset_federated_table_bindings(
         self,
         *,
-        dataset_map: dict[uuid.UUID, dict[str, str | uuid.UUID | None]],
+        selected_datasets: list[SqlSelectedDataset],
         datasets_by_id: dict[uuid.UUID, Any],
     ) -> dict[str, VirtualTableBinding]:
         table_bindings: dict[str, VirtualTableBinding] = {}
-        for dataset_id, dataset in datasets_by_id.items():
-            selection = dataset_map[dataset_id]
+        for selection in selected_datasets:
+            dataset = datasets_by_id[selection.dataset_id]
             descriptor = self._dataset_execution_resolver._build_dataset_execution_descriptor(dataset)
             if not dataset_supports_structured_federation(
                 source_kind=descriptor.source_kind,
@@ -632,7 +721,7 @@ class SqlQueryService:
                 raise ExecutionValidationError(
                     f"Dataset '{dataset.name}' does not support federated structured execution."
                 )
-            sql_alias = str(getattr(dataset, "sql_alias", None) or selection.get("sql_alias") or "").strip().lower()
+            sql_alias = str(selection.sql_alias or "").strip().lower()
             if not sql_alias:
                 raise ExecutionValidationError(
                     f"Dataset '{dataset.name}' is missing a SQL alias."
@@ -646,23 +735,6 @@ class SqlQueryService:
             )
             binding = self._with_dataset_logical_alias(binding=binding, dataset_alias=sql_alias)
             table_bindings[binding.table_key] = binding
-
-            legacy_alias = str(selection.get("legacy_alias") or "").strip()
-            if legacy_alias and legacy_alias.lower() != sql_alias and dataset.table_name:
-                legacy_key = ".".join(
-                    part for part in (legacy_alias, dataset.schema_name, dataset.table_name) if part
-                )
-                legacy_binding, _dialect = self._dataset_execution_resolver._build_binding_from_dataset_record(
-                    dataset=dataset,
-                    table_key=legacy_key,
-                    logical_schema=dataset.schema_name,
-                    logical_table_name=dataset.table_name,
-                    catalog_name=legacy_alias,
-                )
-                table_bindings[legacy_binding.table_key] = self._with_dataset_logical_alias(
-                    binding=legacy_binding,
-                    dataset_alias=sql_alias,
-                )
 
         return table_bindings
 
@@ -699,6 +771,18 @@ class SqlQueryService:
         }
 
     @staticmethod
+    def _selected_datasets_payload(request: CreateSqlJobRequest) -> list[dict[str, Any]]:
+        if request.federated_datasets:
+            return [
+                dataset.model_dump(mode="json") if hasattr(dataset, "model_dump") else dict(dataset)
+                for dataset in request.federated_datasets
+            ]
+        return [
+            {"dataset_id": str(dataset_id)}
+            for dataset_id in request.selected_datasets
+        ]
+
+    @staticmethod
     def _build_transient_job(request: CreateSqlJobRequest) -> SqlJob:
         now = datetime.now(timezone.utc)
         query_hash = hashlib.sha256(request.query.strip().encode("utf-8")).hexdigest()
@@ -712,10 +796,7 @@ class SqlQueryService:
                 if hasattr(request.workbench_mode, "value")
                 else str(request.workbench_mode)
             ),
-            selected_datasets_json=[
-                dataset.model_dump(mode="json") if hasattr(dataset, "model_dump") else dict(dataset)
-                for dataset in (request.selected_datasets or request.federated_datasets)
-            ],
+            selected_datasets_json=SqlQueryService._selected_datasets_payload(request),
             execution_mode=request.execution_mode,
             status="queued",
             query_text=request.query,
@@ -852,7 +933,7 @@ class SqlQueryService:
             {"section": "normalized_sql", "value": query_sql},
             {
                 "section": "source_alias_count",
-                "value": str(len(request.selected_datasets or request.federated_datasets)),
+                "value": str(len(request.federated_datasets or [])),
             },
             {"section": "table_count", "value": str(len(logical_tables) if isinstance(logical_tables, dict) else 0)},
             {"section": "join_count", "value": str(len(logical_joins) if isinstance(logical_joins, list) else 0)},

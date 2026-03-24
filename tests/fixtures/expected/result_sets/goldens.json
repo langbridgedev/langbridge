@@ -1,0 +1,88 @@
+{
+  "simple_dimension_select": [
+    {
+      "customers__region": "Europe"
+    },
+    {
+      "customers__region": "North America"
+    }
+  ],
+  "grouped_revenue_by_region": [
+    {
+      "customers__region": "Europe",
+      "orders__revenue": 230
+    },
+    {
+      "customers__region": "North America",
+      "orders__revenue": 320
+    }
+  ],
+  "filtered_revenue_by_region": [
+    {
+      "customers__region": "North America",
+      "orders__revenue": 320
+    }
+  ],
+  "net_revenue_by_month": [
+    {
+      "orders__net_revenue": 185,
+      "orders__order_ts_month": "2026-01-01"
+    },
+    {
+      "orders__net_revenue": 315,
+      "orders__order_ts_month": "2026-02-01"
+    }
+  ],
+  "net_revenue_by_country": [
+    {
+      "orders__country": "DE",
+      "orders__net_revenue": 135
+    },
+    {
+      "orders__country": "UK",
+      "orders__net_revenue": 75
+    },
+    {
+      "orders__country": "US",
+      "orders__net_revenue": 290
+    }
+  ],
+  "federated_customer_lookup": [
+    {
+      "name": "Acme Corp",
+      "order_id": 1
+    },
+    {
+      "name": "Globex",
+      "order_id": 2
+    },
+    {
+      "name": "Acme Corp",
+      "order_id": 3
+    },
+    {
+      "name": "Initech",
+      "order_id": 4
+    }
+  ],
+  "federated_three_dataset_smq": [
+    {
+      "Commerce__customers__region": "Europe",
+      "Commerce__orders__revenue": 150.0,
+      "Marketing__campaigns__channel": "partner",
+      "Marketing__campaigns__spend": 25.0
+    },
+    {
+      "Commerce__customers__region": "Europe",
+      "Commerce__orders__revenue": 80.0,
+      "Marketing__campaigns__channel": "email",
+      "Marketing__campaigns__spend": 20.0
+    },
+    {
+      "Commerce__customers__region": "North America",
+      "Commerce__orders__revenue": 320.0,
+      "Marketing__campaigns__channel": "paid_search",
+      "Marketing__campaigns__spend": 60.0
+    }
+  ]
+}

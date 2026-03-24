@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -65,10 +66,43 @@ llm_connections:
 agents:
   - name: analyst
     llm_connection: local_openai
-    semantic_model: commerce
-    dataset: orders
     default: true
-    instructions: Answer analytical questions.
+    definition:
+      prompt:
+        system_prompt: You are a local analytics agent.
+        user_instructions: Answer analytical questions.
+        style_guidance: Keep answers concise and clearly grounded in query results.
+      memory:
+        strategy: database
+      features:
+        bi_copilot_enabled: false
+        deep_research_enabled: false
+        visualization_enabled: true
+        mcp_enabled: false
+      tools:
+        - name: analyst_semantic_sql
+          tool_type: sql
+          description: Governed semantic analytics access.
+          config:
+            semantic_model_ids: [commerce]
+      access_policy:
+        allowed_connectors: [local_demo]
+        denied_connectors: []
+      execution:
+        mode: iterative
+        response_mode: analyst
+        max_iterations: 3
+        max_steps_per_iteration: 5
+        allow_parallel_tools: false
+      output:
+        format: markdown
+      guardrails:
+        moderation_enabled: true
+      observability:
+        log_level: info
+        emit_traces: false
+        capture_prompts: false
+        audit_fields: []
 """.strip(),
         encoding="utf-8",
     )
@@ -111,6 +145,235 @@ def test_configured_local_runtime_ask_agent_uses_agent_execution() -> None:
     assert request.agent_definition_id == next(iter(runtime._agents.values())).id
     assert len(runtime._thread_message_repository.items) == 1
     assert runtime._thread_message_repository.items[0].role == RuntimeMessageRole.user
+
+
+def test_configured_local_runtime_resolves_secret_backed_llm_connection_with_workspace_id(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    with TemporaryDirectory() as temp_dir:
+        config_path = Path(temp_dir) / "langbridge_config.yml"
+        config_path.write_text(
+            """
+version: 1
+
+connectors:
+  - name: local_demo
+    type: sqlite
+    connection:
+      location: ./example.db
+
+datasets:
+  - name: orders
+    connector: local_demo
+    semantic_model: commerce
+    source:
+      table: orders
+
+semantic_models:
+  - name: commerce
+    default: true
+    model:
+      version: "1"
+      name: commerce
+      datasets:
+        orders:
+          relation_name: orders
+          dimensions:
+            - name: country
+              expression: country
+              type: string
+          measures:
+            - name: revenue
+              expression: revenue
+              type: number
+              aggregation: sum
+
+llm_connections:
+  - name: local_openai
+    provider: openai
+    model: gpt-4o-mini
+    api_key_secret:
+      provider_type: env
+      identifier: OPENAI_API_KEY
+    default: true
+
+agents:
+  - name: analyst
+    llm_connection: local_openai
+    semantic_model: commerce
+    default: true
+""".strip(),
+            encoding="utf-8",
+        )
+        runtime = build_configured_local_runtime(config_path=config_path)
+
+    agent_record = runtime._resolve_agent(None)
+    llm_connection = asyncio.run(
+        runtime.services.agent_execution._llm_repository.get_by_id(  # type: ignore[union-attr]
+            agent_record.agent_definition.llm_connection_id
+        )
+    )
+
+    assert llm_connection is not None
+    assert llm_connection.api_key == "test-key"
+    assert llm_connection.workspace_id == runtime.context.workspace_id
+
+
+def test_configured_local_runtime_normalizes_canonical_agent_tools() -> None:
+    with TemporaryDirectory() as temp_dir:
+        config_path = Path(temp_dir) / "langbridge_config.yml"
+        config_path.write_text(
+            """
+version: 1
+
+connectors:
+  - name: local_demo
+    type: sqlite
+    connection:
+      location: ./example.db
+
+datasets:
+  - name: orders
+    connector: local_demo
+    semantic_model: commerce
+    source:
+      table: orders
+
+  - name: customers
+    connector: local_demo
+    semantic_model: customers_model
+    source:
+      table: customers
+
+semantic_models:
+  - name: commerce
+    default: true
+    model:
+      version: "1"
+      name: commerce
+      datasets:
+        orders:
+          relation_name: orders
+          dimensions:
+            - name: country
+              expression: country
+              type: string
+          measures:
+            - name: revenue
+              expression: revenue
+              type: number
+              aggregation: sum
+
+  - name: customers_model
+    model:
+      version: "1"
+      name: customers_model
+      datasets:
+        customers:
+          relation_name: customers
+          dimensions:
+            - name: segment
+              expression: segment
+              type: string
+          measures:
+            - name: customer_count
+              expression: customer_id
+              type: number
+              aggregation: count
+
+llm_connections:
+  - name: local_openai
+    provider: openai
+    model: gpt-4o-mini
+    api_key: test-key
+    default: true
+
+agents:
+  - name: analyst
+    llm_connection: local_openai
+    default: true
+    definition:
+      prompt:
+        system_prompt: You are a local analytics agent.
+        style_guidance: Keep answers concise and clearly grounded in query results.
+      memory:
+        strategy: database
+      features:
+        bi_copilot_enabled: false
+        deep_research_enabled: false
+        visualization_enabled: true
+        mcp_enabled: false
+      tools:
+        - name: governed_sql
+          tool_type: sql
+          description: Governed semantic analytics access.
+          config:
+            semantic_model_ids: [commerce, customers_model]
+        - name: dataset_sql
+          tool_type: sql
+          description: Dataset analytics access.
+          config:
+            dataset_ids: [orders, customers]
+      access_policy:
+        allowed_connectors: [local_demo]
+        denied_connectors: []
+      execution:
+        mode: iterative
+        response_mode: analyst
+        max_iterations: 3
+        max_steps_per_iteration: 5
+        allow_parallel_tools: false
+      output:
+        format: markdown
+      guardrails:
+        moderation_enabled: true
+      observability:
+        log_level: info
+        emit_traces: false
+        capture_prompts: false
+        audit_fields: []
+""".strip(),
+            encoding="utf-8",
+        )
+        runtime = build_configured_local_runtime(config_path=config_path)
+
+    definition = runtime._agents["analyst"].agent_definition.definition
+    semantic_models = runtime._semantic_models
+    datasets = runtime._datasets
+    connector_id = str(runtime._connectors["local_demo"].id)
+
+    assert definition["tools"] == [
+        {
+            "name": "governed_sql",
+            "tool_type": "sql",
+            "description": "Governed semantic analytics access.",
+            "config": {
+                "dataset_ids": [],
+                "semantic_model_ids": [
+                    str(semantic_models["commerce"].id),
+                    str(semantic_models["customers_model"].id),
+                ],
+            },
+        },
+        {
+            "name": "dataset_sql",
+            "tool_type": "sql",
+            "description": "Dataset analytics access.",
+            "config": {
+                "dataset_ids": [
+                    str(datasets["orders"].id),
+                    str(datasets["customers"].id),
+                ],
+                "semantic_model_ids": [],
+            },
+        },
+    ]
+    assert definition["access_policy"] == {
+        "allowed_connectors": [connector_id],
+        "denied_connectors": [],
+    }
 
 
 def test_build_configured_local_runtime_supports_file_backed_datasets() -> None:
@@ -209,6 +472,20 @@ semantic_models:
                 "campaign_channel": "sms",
                 "engagement_score": 77,
             },
+        ]
+
+        connectors = asyncio.run(runtime.list_connectors())
+        assert connectors == [
+            {
+                "id": runtime._connectors["campaign_file"].id,
+                "name": "campaign_file",
+                "description": None,
+                "connector_type": "FILE",
+                "supports_sync": False,
+                "supported_resources": [],
+                "sync_strategy": None,
+                "managed": False,
+            }
         ]
 
 

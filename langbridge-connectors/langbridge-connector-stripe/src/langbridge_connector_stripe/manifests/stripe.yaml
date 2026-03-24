@@ -1,0 +1,62 @@
+schema_version: "0.1.0"
+kind: declarative_http_connector
+id: stripe
+display_name: Stripe
+connector_type: STRIPE
+connector_family: API
+description: Declarative Stripe SaaS connector example for sync-oriented dataset materialization.
+base_url: https://api.stripe.com
+test_connection_path: /v1/account
+
+auth:
+  strategy: bearer_token
+  token_field: api_key
+  token_label: API Key
+  header_name: Authorization
+  header_template: "Bearer {api_key}"
+  optional_headers:
+    - header_name: Stripe-Account
+      field: account_id
+      required: false
+      description: Optional connected account identifier for Stripe Connect.
+
+pagination:
+  strategy: cursor
+  response_items_field: data
+  limit_param: limit
+  cursor_param: starting_after
+  response_has_more_field: has_more
+  next_cursor_field: id
+  default_page_size: 100
+  max_page_size: 100
+
+incremental:
+  strategy: request_param
+  request_param: created[gte]
+  cursor_field: created
+  cursor_type: unix_timestamp
+
+resources:
+  - key: customers
+    label: Customers
+    path: /v1/customers
+    primary_key: id
+    supports_incremental: true
+    default_sync_mode: INCREMENTAL
+    description: Stripe customer records.
+
+  - key: charges
+    label: Charges
+    path: /v1/charges
+    primary_key: id
+    supports_incremental: true
+    default_sync_mode: INCREMENTAL
+    description: Stripe charge records.
+
+  - key: invoices
+    label: Invoices
+    path: /v1/invoices
+    primary_key: id
+    supports_incremental: true
+    default_sync_mode: INCREMENTAL
+    description: Stripe invoice records.

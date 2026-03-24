@@ -1,60 +1,71 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug LangBridge API (Linux/Mac)",
+            "name": "Debug Langbridge Runtime Host",
             "type": "debugpy",
             "request": "launch",
-            "python": "${workspaceFolder}/langbridge/venv/bin/python",
-            "module": "uvicorn",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "module": "langbridge.cli.main",
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env",
             "args": [
-                "langbridge.apps.api.langbridge_api.main:app",
-                "--host", "0.0.0.0",
-                "--port", "8000"
+                "serve",
+                "--config",
+                "examples/runtime_host/langbridge_config.yml",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8000"
             ],
-            "jinja": true,
-            "console": "integratedTerminal"
+            "console": "integratedTerminal",
+            "justMyCode": false
         },
         {
-            "name": "Debug LangBridge Worker (Linux/Mac)",
+            "name": "Debug Langbridge Runtime Host (MCP)",
             "type": "debugpy",
             "request": "launch",
-            "python": "${workspaceFolder}/langbridge/venv/bin/python",
-            "module": "langbridge.apps.worker.langbridge_worker.main",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "module": "langbridge.cli.main",
             "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/langbridge/.env-worker",
-            "console": "integratedTerminal"
+            "envFile": "${workspaceFolder}/.env",
+            "args": [
+                "serve",
+                "--config",
+                "examples/runtime_host/langbridge_config.yml",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8000",
+                "--features",
+                "mcp",
+                "--debug"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false
         },
         {
-            "name": "Attach LangBridge Worker (Docker)",
+            "name": "Debug Langbridge Runtime Host (UI + MCP)",
             "type": "debugpy",
-            "request": "attach",
-            "connect": {
-                "host": "localhost",
-                "port": 5678
-            },
-            "pathMappings": [
-                {
-                    "localRoot": "${workspaceFolder}",
-                    "remoteRoot": "/app"
-                }
+            "request": "launch",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "module": "langbridge.cli.main",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env",
+            "args": [
+                "serve",
+                "--config",
+                "examples/runtime_host/langbridge_config.yml",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8000",
+                "--features",
+                "ui,mcp",
+                "--debug"
             ],
+            "console": "integratedTerminal",
             "justMyCode": false
-        }
-    ],
-    "compounds": [
-        {
-            "name": "Debug API + Worker",
-            "configurations": [
-                "Debug LangBridge API",
-                "Debug LangBridge Worker"
-            ],
-            "stopAll": true
         }
     ]
 }

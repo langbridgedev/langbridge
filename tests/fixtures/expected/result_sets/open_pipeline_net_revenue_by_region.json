@@ -1,0 +1,10 @@
+[
+  {
+    "customers__region": "Europe",
+    "open_pipeline_net_revenue": 0
+  },
+  {
+    "customers__region": "North America",
+    "open_pipeline_net_revenue": 180
+  }
+]

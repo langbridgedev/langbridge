@@ -118,15 +118,30 @@ class CreateSqlJobRequest(RuntimeJobRequestModel):
     allowed_schemas: list[str] = Field(default_factory=list)
     allowed_tables: list[str] = Field(default_factory=list)
     redaction_rules: dict[str, str] = Field(default_factory=dict)
-    selected_datasets: list[SqlSelectedDataset] = Field(default_factory=list)
+    selected_datasets: list[uuid.UUID] = Field(default_factory=list)
     federated_datasets: list[SqlSelectedDataset] = Field(default_factory=list)
     explain: bool = False
     correlation_id: str | None = None
 
     @model_validator(mode="after")
     def _validate_request(self) -> "CreateSqlJobRequest":
+        normalized_selected: list[uuid.UUID] = []
+        for dataset_id in self.selected_datasets:
+            if dataset_id not in normalized_selected:
+                normalized_selected.append(dataset_id)
+        self.selected_datasets = normalized_selected
+
+        normalized_federated: list[SqlSelectedDataset] = []
+        seen_federated_ids: set[uuid.UUID] = set()
+        for dataset in self.federated_datasets:
+            if dataset.dataset_id in seen_federated_ids:
+                continue
+            normalized_federated.append(dataset)
+            seen_federated_ids.add(dataset.dataset_id)
+        self.federated_datasets = normalized_federated
+
         if not self.selected_datasets and self.federated_datasets:
-            self.selected_datasets = list(self.federated_datasets)
+            self.selected_datasets = [dataset.dataset_id for dataset in self.federated_datasets]
 
         if "workbench_mode" not in self.model_fields_set:
             self.workbench_mode = (
@@ -142,6 +157,8 @@ class CreateSqlJobRequest(RuntimeJobRequestModel):
                 raise ValueError("connection_id is required for direct SQL jobs.")
             if self.selected_datasets:
                 raise ValueError("selected_datasets must be omitted for direct SQL jobs.")
+            if self.federated_datasets:
+                raise ValueError("federated_datasets must be omitted for direct SQL jobs.")
         else:
             if self.execution_mode != "federated":
                 raise ValueError("Dataset SQL jobs must use federated execution mode.")
@@ -149,8 +166,6 @@ class CreateSqlJobRequest(RuntimeJobRequestModel):
                 raise ValueError("connection_id must be omitted for dataset SQL jobs.")
             if not self.allow_federation:
                 raise ValueError("Dataset SQL execution is not enabled for this workspace.")
-            if not self.selected_datasets:
-                raise ValueError("Dataset SQL jobs require at least one selected dataset.")
 
         if not self.query.strip():
             raise ValueError("query is required.")

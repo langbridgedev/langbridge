@@ -1,0 +1,6 @@
+dimensions:
+  - customers.region
+measures:
+  - open_pipeline_net_revenue
+order:
+  - open_pipeline_net_revenue: desc

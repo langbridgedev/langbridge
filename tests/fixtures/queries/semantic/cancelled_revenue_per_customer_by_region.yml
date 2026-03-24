@@ -1,0 +1,6 @@
+dimensions:
+  - customers.region
+measures:
+  - cancelled_revenue_per_customer
+order:
+  - customers.region: asc

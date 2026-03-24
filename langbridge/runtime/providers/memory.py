@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import uuid
 from typing import Any
 
@@ -10,12 +8,14 @@ from langbridge.runtime.models import (
     DatasetMetadata,
     DatasetPolicyMetadata,
     SemanticModelMetadata,
+    SemanticVectorIndexMetadata,
     SqlJobResultArtifact,
 )
 from langbridge.runtime.providers.protocols import (
     ConnectorMetadataProvider,
     DatasetMetadataProvider,
     SemanticModelMetadataProvider,
+    SemanticVectorIndexMetadataProvider,
     SqlJobResultArtifactProvider,
     SyncStateProvider,
 )
@@ -70,6 +70,22 @@ class MemoryConnectorProvider(ConnectorMetadataProvider):
             return connector
         return None
 
+    async def get_connector_by_name(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        connector_name: str,
+    ) -> ConnectorMetadata | None:
+        normalized_name = str(connector_name or "").strip()
+        if not normalized_name:
+            return None
+        for connector in self._connectors.values():
+            if connector.name != normalized_name:
+                continue
+            if connector.workspace_id is None or connector.workspace_id == workspace_id:
+                return connector
+        return None
+
     def upsert(self, connector: ConnectorMetadata) -> None:
         self._connectors[connector.id] = connector
 
@@ -89,8 +105,123 @@ class MemorySemanticModelProvider(SemanticModelMetadataProvider):
     ) -> SemanticModelMetadata | None:
         return self._semantic_models.get((workspace_id, semantic_model_id))
 
+    async def get_semantic_models(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_model_ids: list[uuid.UUID] | None = None,
+    ) -> list[SemanticModelMetadata]:
+        items = [
+            model
+            for (ws_id, _), model in self._semantic_models.items()
+            if ws_id == workspace_id
+        ]
+        if semantic_model_ids is not None:
+            items = [model for model in items if model.id in semantic_model_ids]
+        return items
+
     def upsert(self, semantic_model: SemanticModelMetadata) -> None:
         self._semantic_models[(semantic_model.workspace_id, semantic_model.id)] = semantic_model
+
+
+class MemorySemanticVectorIndexProvider(SemanticVectorIndexMetadataProvider):
+    def __init__(
+        self,
+        indexes: dict[tuple[uuid.UUID, uuid.UUID], SemanticVectorIndexMetadata] | None = None,
+    ) -> None:
+        self._indexes = dict(indexes or {})
+
+    async def get_semantic_vector_index(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_vector_index_id: uuid.UUID,
+    ) -> SemanticVectorIndexMetadata | None:
+        return self._indexes.get((workspace_id, semantic_vector_index_id))
+
+    async def get_semantic_vector_index_for_dimension(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_model_id: uuid.UUID,
+        dataset_key: str,
+        dimension_name: str,
+    ) -> SemanticVectorIndexMetadata | None:
+        normalized_dataset = str(dataset_key or "").strip()
+        normalized_dimension = str(dimension_name or "").strip()
+        for (ws_id, _), index in self._indexes.items():
+            if ws_id != workspace_id:
+                continue
+            if index.semantic_model_id != semantic_model_id:
+                continue
+            if index.dataset_key != normalized_dataset:
+                continue
+            if index.dimension_name != normalized_dimension:
+                continue
+            return index
+        return None
+
+    async def get_by_id(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_vector_index_id: uuid.UUID,
+    ) -> SemanticVectorIndexMetadata | None:
+        return await self.get_semantic_vector_index(
+            workspace_id=workspace_id,
+            semantic_vector_index_id=semantic_vector_index_id,
+        )
+
+    async def get_for_dimension(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_model_id: uuid.UUID,
+        dataset_key: str,
+        dimension_name: str,
+    ) -> SemanticVectorIndexMetadata | None:
+        return await self.get_semantic_vector_index_for_dimension(
+            workspace_id=workspace_id,
+            semantic_model_id=semantic_model_id,
+            dataset_key=dataset_key,
+            dimension_name=dimension_name,
+        )
+
+    async def list_semantic_vector_indexes(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_model_id: uuid.UUID | None = None,
+    ) -> list[SemanticVectorIndexMetadata]:
+        items = [
+            index
+            for (ws_id, _), index in self._indexes.items()
+            if ws_id == workspace_id
+        ]
+        if semantic_model_id is not None:
+            items = [index for index in items if index.semantic_model_id == semantic_model_id]
+        return items
+
+    async def list_for_workspace(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        semantic_model_id: uuid.UUID | None = None,
+    ) -> list[SemanticVectorIndexMetadata]:
+        return await self.list_semantic_vector_indexes(
+            workspace_id=workspace_id,
+            semantic_model_id=semantic_model_id,
+        )
+
+    def upsert(self, index: SemanticVectorIndexMetadata) -> None:
+        self._indexes[(index.workspace_id, index.id)] = index
+
+    async def save(self, index: SemanticVectorIndexMetadata) -> SemanticVectorIndexMetadata:
+        self.upsert(index)
+        return index
+
+    async def delete(self, *, workspace_id: uuid.UUID, semantic_vector_index_id: uuid.UUID) -> None:
+        self._indexes.pop((workspace_id, semantic_vector_index_id), None)
 
 
 class MemorySyncStateProvider(SyncStateProvider):

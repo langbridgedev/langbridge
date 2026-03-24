@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import ssl
+import sys
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -36,12 +38,18 @@ from langbridge.connectors.saas.shopify.config import (
 from langbridge.connectors.saas.shopify.connector import (
     ShopifyApiConnector,
 )
-from langbridge.connectors.saas.stripe.config import (
-    StripeConnectorConfig,
+
+STRIPE_PACKAGE_SRC = (
+    Path(__file__).resolve().parents[2]
+    / "langbridge-connectors"
+    / "langbridge-connector-stripe"
+    / "src"
 )
-from langbridge.connectors.saas.stripe.connector import (
-    StripeApiConnector,
-)
+if str(STRIPE_PACKAGE_SRC) not in sys.path:
+    sys.path.insert(0, str(STRIPE_PACKAGE_SRC))
+
+from langbridge_connector_stripe.config import StripeDeclarativeConnectorConfig
+from langbridge_connector_stripe.connector import StripeDeclarativeApiConnector
 
 
 @pytest.fixture
@@ -139,8 +147,8 @@ async def test_stripe_connector_handles_bearer_auth_and_has_more_pagination() ->
             )
         raise AssertionError(f"Unexpected Stripe request: {request.method} {request.url}")
 
-    connector = StripeApiConnector(
-        StripeConnectorConfig(
+    connector = StripeDeclarativeApiConnector(
+        StripeDeclarativeConnectorConfig(
             api_key="sk_test_123",
             account_id="acct_456",
         ),

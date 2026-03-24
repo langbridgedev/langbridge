@@ -1,0 +1,9 @@
+dimensions:
+  - Commerce__customers.region
+  - Marketing__campaigns.channel
+measures:
+  - Commerce__orders.revenue
+  - Marketing__campaigns.spend
+order:
+  - Commerce__orders.revenue: desc
+

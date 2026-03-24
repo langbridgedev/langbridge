@@ -5,12 +5,11 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from langbridge.connectors.base import (
-    ConnectorRuntimeTypeSqlDialectMap,
     SqlConnectorFactory,
     get_connector_config_factory,
 )
 from langbridge.connectors.base.config import ConnectorRuntimeType
-from langbridge.connectors.base.connector import SqlConnector, SqlDialetcs
+from langbridge.connectors.base.connector import SqlConnector
 from langbridge.federation.connectors import DuckDbFileRemoteSource, RemoteSource, SqlConnectorRemoteSource
 from langbridge.federation.executor import ArtifactStore
 from langbridge.federation.models import FederationWorkflow, SMQQuery
@@ -24,20 +23,6 @@ from langbridge.runtime.models import ConnectorMetadata
 from langbridge.runtime.security.secrets import SecretProviderRegistry
 from langbridge.runtime.settings import runtime_settings as settings
 from langbridge.semantic.loader import load_semantic_model
-
-
-_DIALECT_MAP: dict[SqlDialetcs, str] = {
-    SqlDialetcs.POSTGRES: "postgres",
-    SqlDialetcs.MYSQL: "mysql",
-    SqlDialetcs.MARIADB: "mysql",
-    SqlDialetcs.SNOWFLAKE: "snowflake",
-    SqlDialetcs.REDSHIFT: "redshift",
-    SqlDialetcs.BIGQUERY: "bigquery",
-    SqlDialetcs.SQLSERVER: "tsql",
-    SqlDialetcs.ORACLE: "oracle",
-    SqlDialetcs.SQLITE: "sqlite",
-}
-
 
 class FederatedQueryToolRequest(BaseModel):
     workspace_id: str
@@ -173,7 +158,7 @@ class FederatedQueryTool:
                 connector_type=runtime_type,
                 connector_config=resolved_config,
             )
-            source_dialect = _DIALECT_MAP.get(sql_connector.DIALECT, "tsql")
+            source_dialect = sql_connector.SQLGLOT_DIALECT
             sources[source_id] = SqlConnectorRemoteSource(
                 source_id=source_id,
                 connector=sql_connector,
@@ -201,10 +186,12 @@ class FederatedQueryTool:
                 f"Connector '{connector.id}' for source '{source_id}' has unsupported connector type "
                 f"'{connector.connector_type}'."
             ) from exc
-        if ConnectorRuntimeTypeSqlDialectMap.get(runtime_type) is None:
+        try:
+            self._sql_connector_factory.get_sql_connector_class_reference(runtime_type)
+        except ValueError as exc:
             raise ValueError(
                 f"Connector '{connector.id}' for source '{source_id}' does not support SQL federation."
-            )
+            ) from exc
         return runtime_type
 
     async def _create_sql_connector(
@@ -213,15 +200,16 @@ class FederatedQueryTool:
         connector_type: ConnectorRuntimeType,
         connector_config: dict[str, Any],
     ) -> SqlConnector:
-        dialect = ConnectorRuntimeTypeSqlDialectMap.get(connector_type)
-        if dialect is None:
+        try:
+            self._sql_connector_factory.get_sql_connector_class_reference(connector_type)
+        except ValueError as exc:
             raise ValueError(
                 f"Connector type {connector_type.value} does not support SQL operations for federation."
-            )
+            ) from exc
         config_factory = get_connector_config_factory(connector_type)
         config_instance = config_factory.create(connector_config.get("config", {}))
         sql_connector = self._sql_connector_factory.create_sql_connector(
-            dialect,
+            connector_type,
             config_instance,
             logger=self._logger,
         )

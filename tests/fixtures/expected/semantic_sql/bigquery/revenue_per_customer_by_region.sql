@@ -1,0 +1,1 @@
+SELECT t0.`region` AS `customers__region`, SUM(t1.amount) / NULLIF(COUNT(DISTINCT t1.customer_id), 0) AS `revenue_per_customer` FROM analytics.customers AS t0 LEFT JOIN analytics.orders AS t1 ON t1.customer_id = t0.customer_id GROUP BY `customers__region` ORDER BY `revenue_per_customer` DESC

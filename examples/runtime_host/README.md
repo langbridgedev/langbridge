@@ -100,6 +100,10 @@ curl -X POST http://localhost:8000/api/runtime/v1/agents/ask \
   }'
 ```
 
+The agent in [`examples/runtime_host/langbridge_config.yml`](/home/callumwhi/langbridgedev/langbridge/examples/runtime_host/langbridge_config.yml)
+is configured through `agents[].definition.tools`, which is the canonical local
+runtime authoring model for SQL and semantic tool bindings.
+
 ## Runtime Identity And Auth
 
 By default this example runs without host auth. If you enable host auth, send a

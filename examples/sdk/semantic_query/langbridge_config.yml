@@ -67,6 +67,9 @@ semantic_models:
               expression: country
               type: string
               synonyms: [countries, market, region]
+              vector:
+                enabled: true
+                refresh_interval: 1d
             - name: order_date
               expression: order_date
               type: time
@@ -184,8 +187,46 @@ agents:
   - name: commerce_analyst
     description: Default local analytics agent for the SDK notebook and async examples.
     llm_connection: local_openai
-    semantic_model: commerce_performance
-    dataset: shopify_orders
     default: true
-    instructions: |
-      Focus on net sales, margin, country, channel, and loyalty questions.
+    definition:
+      prompt:
+        system_prompt: You are a Langbridge analytics agent.
+        user_instructions: |
+          Focus on net sales, margin, country, channel, and loyalty questions.
+        style_guidance: Keep answers concise and clearly grounded in query results.
+      memory:
+        strategy: database
+      features:
+        bi_copilot_enabled: false
+        deep_research_enabled: false
+        visualization_enabled: true
+        mcp_enabled: false
+      tools:
+        - name: governed_commerce_sql
+          tool_type: sql
+          description: Governed semantic analytics access for the commerce model.
+          config:
+            semantic_model_ids: [commerce_performance]
+        - name: dataset_context_sql
+          tool_type: sql
+          description: Dataset-level federated access across the local runtime datasets.
+          config:
+            dataset_ids: [shopify_orders, customers, support_tickets]
+      access_policy:
+        allowed_connectors: [commerce_demo]
+        denied_connectors: []
+      execution:
+        mode: iterative
+        response_mode: analyst
+        max_iterations: 3
+        max_steps_per_iteration: 5
+        allow_parallel_tools: false
+      output:
+        format: markdown
+      guardrails:
+        moderation_enabled: true
+      observability:
+        log_level: info
+        emit_traces: false
+        capture_prompts: false
+        audit_fields: []

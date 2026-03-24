@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from langbridge.connectors.base import SqlDialetcs
+from langbridge.connectors.base.config import ConnectorRuntimeType
 from langbridge.connectors.base.connector import SqlConnector
 from langbridge.connectors.base.metadata import ColumnMetadata, ForeignKeyMetadata, TableMetadata
 from langbridge.connectors.base.errors import ConnectorError
@@ -21,7 +21,8 @@ class PostgresConnector(SqlConnector):
     PostgreSQL connector implementation.
     """
 
-    DIALECT = SqlDialetcs.POSTGRES
+    RUNTIME_TYPE = ConnectorRuntimeType.POSTGRES
+    SQLGLOT_DIALECT = "postgres"
     EXPRESSION_REWRITE = True
 
     def __init__(

@@ -1,3 +1,6 @@
+from pydantic import Field
+
+from langbridge.config import settings
 from langbridge.connectors.base.config import (
     BaseConnectorConfig,
     BaseConnectorConfigFactory,
@@ -20,12 +23,28 @@ SHOPIFY_AUTH_SCHEMA = (
         type="string",
         required=True,
     ),
+    ConnectorAuthFieldSchema(
+        field="shopify_app_client_id",
+        label="Shopify App Client ID",
+        description="Client ID of the Shopify app used for authentication. This app must have the necessary permissions to access the desired resources.",
+        type="string",
+        required=True,
+    ),
+    ConnectorAuthFieldSchema(
+        field="shopify_app_client_secret",
+        label="Shopify App Client Secret",
+        description="Client Secret of the Shopify app used for authentication.",
+        type="string",
+        required=True,
+    ),
 )
 SHOPIFY_SYNC_STRATEGY = ConnectorSyncStrategy.INCREMENTAL
 
 
 class ShopifyConnectorConfig(BaseConnectorConfig):
     shop_domain: str
+    shopify_app_client_id: str = Field(default_factory=lambda: settings.SHOPIFY_APP_CLIENT_ID)
+    shopify_app_client_secret: str = Field(default_factory=lambda: settings.SHOPIFY_APP_CLIENT_SECRET)
 
 
 class ShopifyConnectorConfigFactory(BaseConnectorConfigFactory):
@@ -50,6 +69,20 @@ class ShopifyConnectorConfigSchemaFactory(BaseConnectorConfigSchemaFactory):
                     field="shop_domain",
                     label="Shop Domain",
                     description="Shopify shop domain, for example `acme.myshopify.com`.",
+                    type="string",
+                    required=True,
+                ),
+                ConnectorConfigEntrySchema(
+                    field="shopify_app_client_id",
+                    label="Shopify App Client ID",
+                    description="Client ID of the Shopify app used for authentication. This app must have the necessary permissions to access the desired resources.",
+                    type="string",
+                    required=True,
+                ),
+                ConnectorConfigEntrySchema(
+                    field="shopify_app_client_secret",
+                    label="Shopify App Client Secret",
+                    description="Client Secret of the Shopify app used for authentication.",
                     type="string",
                     required=True,
                 ),

@@ -1,0 +1,11 @@
+dimensions:
+  - customers.region
+measures:
+  - orders.revenue
+filters:
+  - measure: orders.revenue
+    operator: gt
+    values:
+      - "250"
+order:
+  - orders.revenue: desc

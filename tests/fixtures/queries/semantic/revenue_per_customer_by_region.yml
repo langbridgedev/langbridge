@@ -1,0 +1,6 @@
+dimensions:
+  - customers.region
+measures:
+  - revenue_per_customer
+order:
+  - revenue_per_customer: desc

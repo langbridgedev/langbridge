@@ -1,0 +1,24 @@
+connector:
+  name: stripe
+  type: STRIPE
+  package: langbridge-connector-stripe
+  note: Declarative connector package provides manifest-driven runtime execution for built-in Stripe resources.
+
+examples:
+  - name: stripe_customers
+    description: Materialize the built-in customers resource by key.
+    connector: stripe
+    connector_sync:
+      resource_key: customers
+      sync_mode: INCREMENTAL
+      params:
+        limit: 100
+
+  - name: stripe_invoices
+    description: Materialize another manifest-defined Stripe resource through the same declarative runtime.
+    connector: stripe
+    connector_sync:
+      resource_key: invoices
+      sync_mode: INCREMENTAL
+      params:
+        limit: 100

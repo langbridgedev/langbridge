@@ -1,0 +1,70 @@
+postgres:
+  simple_dimension_select: >
+    SELECT t0."region" AS "customers__region" FROM analytics.customers AS t0 GROUP BY
+    t0."region" ORDER BY "customers__region" ASC LIMIT 10 OFFSET 0
+  grouped_revenue_by_region: >
+    SELECT t1."region" AS "customers__region", SUM(t0."amount") AS "orders__revenue"
+    FROM analytics.orders AS t0 LEFT JOIN analytics.customers AS t1 ON t0.customer_id =
+    t1.customer_id GROUP BY t1."region" ORDER BY "orders__revenue" DESC NULLS LAST
+  filtered_revenue_by_region: >
+    SELECT t1."region" AS "customers__region", SUM(t0."amount") AS "orders__revenue"
+    FROM analytics.orders AS t0 LEFT JOIN analytics.customers AS t1 ON t0.customer_id =
+    t1.customer_id GROUP BY t1."region" HAVING SUM(t0."amount") > '250' ORDER BY
+    "orders__revenue" DESC NULLS LAST
+  net_revenue_by_month: >
+    SELECT DATE_TRUNC('MONTH', CAST(t0."order_ts" AS TIMESTAMP)) AS
+    "orders__order_ts_month", SUM(amount - discount) AS "orders__net_revenue" FROM
+    analytics.orders AS t0 WHERE CAST(t0."order_ts" AS TIMESTAMP) >= '2026-01-01' AND
+    CAST(t0."order_ts" AS TIMESTAMP) < CAST('2026-02-28' AS DATE) + INTERVAL '1 DAY'
+    GROUP BY DATE_TRUNC('MONTH', CAST(t0."order_ts" AS TIMESTAMP)) ORDER BY
+    "orders__order_ts_month" ASC
+  top_regions_by_order_count: >
+    SELECT t1."region" AS "customers__region", COUNT(t0."order_id") AS
+    "orders__order_count" FROM analytics.orders AS t0 LEFT JOIN analytics.customers AS
+    t1 ON t0.customer_id = t1.customer_id GROUP BY t1."region" ORDER BY
+    "orders__order_count" DESC NULLS LAST, "customers__region" ASC LIMIT 2 OFFSET 0
+  net_revenue_by_country: >
+    SELECT t0."country" AS "orders__country", SUM(amount - discount) AS
+    "orders__net_revenue" FROM analytics.orders AS t0 GROUP BY t0."country" ORDER BY
+    "orders__net_revenue" DESC NULLS LAST
+  unified_revenue_by_campaign: >
+    SELECT t1."campaign_name" AS "Marketing__campaigns__campaign_name", SUM(t0."amount")
+    AS "Commerce__orders__revenue" FROM analytics.orders AS t0 LEFT JOIN
+    marketing.campaigns AS t1 ON t0.customer_id = t1.customer_id GROUP BY
+    t1."campaign_name" ORDER BY "Commerce__orders__revenue" DESC NULLS LAST
+snowflake:
+  grouped_revenue_by_region: >
+    SELECT t1."region" AS "customers__region", SUM(t0."amount") AS "orders__revenue"
+    FROM analytics.orders AS t0 LEFT JOIN analytics.customers AS t1 ON t0.customer_id =
+    t1.customer_id GROUP BY t1."region" ORDER BY "orders__revenue" DESC NULLS LAST
+  net_revenue_by_month: >
+    SELECT DATEADD(MONTH, DATEDIFF(MONTH, 0, CAST(t0."order_ts" AS TIMESTAMP)), 0) AS
+    "orders__order_ts_month", SUM(amount - discount) AS "orders__net_revenue" FROM
+    analytics.orders AS t0 WHERE CAST(t0."order_ts" AS TIMESTAMP) >= '2026-01-01' AND
+    CAST(t0."order_ts" AS TIMESTAMP) < DATEADD(DAY, 1, CAST('2026-02-28' AS DATE))
+    GROUP BY DATEADD(MONTH, DATEDIFF(MONTH, 0, CAST(t0."order_ts" AS TIMESTAMP)), 0)
+    ORDER BY "orders__order_ts_month" ASC
+bigquery:
+  grouped_revenue_by_region: >
+    SELECT t1.`region` AS `customers__region`, SUM(t0.`amount`) AS `orders__revenue`
+    FROM analytics.orders AS t0 LEFT JOIN analytics.customers AS t1 ON t0.customer_id =
+    t1.customer_id GROUP BY `customers__region` ORDER BY `orders__revenue` DESC
+  net_revenue_by_month: >
+    SELECT DATE_ADD(0, INTERVAL (DATE_DIFF(CAST(t0.`order_ts` AS TIMESTAMP), 0, MONTH))
+    MONTH) AS `orders__order_ts_month`, SUM(amount - discount) AS
+    `orders__net_revenue` FROM analytics.orders AS t0 WHERE CAST(t0.`order_ts` AS
+    TIMESTAMP) >= '2026-01-01' AND CAST(t0.`order_ts` AS TIMESTAMP) <
+    DATE_ADD(CAST('2026-02-28' AS DATE), INTERVAL '1' DAY) GROUP BY
+    `orders__order_ts_month` ORDER BY `orders__order_ts_month` ASC NULLS LAST
+duckdb:
+  grouped_revenue_by_region: >
+    SELECT t1."region" AS "customers__region", SUM(t0."amount") AS "orders__revenue"
+    FROM analytics.orders AS t0 LEFT JOIN analytics.customers AS t1 ON t0.customer_id =
+    t1.customer_id GROUP BY t1."region" ORDER BY "orders__revenue" DESC
+  net_revenue_by_month: >
+    SELECT DATE_TRUNC('MONTH', CAST(t0."order_ts" AS TIMESTAMP)) AS
+    "orders__order_ts_month", SUM(amount - discount) AS "orders__net_revenue" FROM
+    analytics.orders AS t0 WHERE CAST(t0."order_ts" AS TIMESTAMP) >= '2026-01-01' AND
+    CAST(t0."order_ts" AS TIMESTAMP) < CAST('2026-02-28' AS DATE) + INTERVAL '1' DAY
+    GROUP BY DATE_TRUNC('MONTH', CAST(t0."order_ts" AS TIMESTAMP)) ORDER BY
+    "orders__order_ts_month" ASC

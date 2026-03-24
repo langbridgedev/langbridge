@@ -6,7 +6,7 @@ datasets.
 ## Runtime Scope
 
 - direct SQL execution for SQL-capable connectors
-- federated SQL over selected datasets
+- federated SQL over workspace datasets
 - parameter handling
 - read-only guardrails by default
 - preview limits, timeouts, and redaction
@@ -14,10 +14,11 @@ datasets.
 ## Execution Model
 
 1. A SQL request enters the runtime.
-2. The runtime determines whether it is direct connector SQL or dataset-backed federated SQL.
-3. The SQL service resolves workspace-scoped datasets, connectors, and limits.
-4. Federation is used when the workload spans runtime datasets or requires local compute.
-5. The runtime returns rows and execution metadata.
+2. An explicit `connection_name` or `connection_id` uses direct connector SQL.
+3. Otherwise the runtime uses dataset-backed federated SQL.
+4. `selected_datasets` is an optional subset selector that narrows planner scope by dataset id.
+5. The SQL service resolves workspace-scoped datasets, derives SQL-safe aliases from dataset metadata, and applies limits.
+6. The runtime returns rows and execution metadata.
 
 ## Guardrails
 

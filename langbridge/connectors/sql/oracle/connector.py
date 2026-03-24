@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
-from langbridge.connectors.base import SqlDialetcs
+from langbridge.connectors.base.config import ConnectorRuntimeType
 from langbridge.connectors.base.connector import SqlConnector
 from langbridge.connectors.base.metadata import ColumnMetadata, ForeignKeyMetadata, TableMetadata
 from langbridge.connectors.base.errors import ConnectorError
@@ -25,7 +25,8 @@ class OracleConnector(SqlConnector):
     Oracle Database connector implementation.
     """
 
-    DIALECT = SqlDialetcs.ORACLE
+    RUNTIME_TYPE = ConnectorRuntimeType.ORACLE
+    SQLGLOT_DIALECT = "oracle"
 
     def __init__(
         self,

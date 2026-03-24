@@ -79,9 +79,40 @@ llm_connections:
 agents:
   - name: commerce_analyst
     llm_connection: local_openai
-    semantic_model: commerce_performance
-    dataset: shopify_orders
     default: true
+    definition:
+      prompt:
+        system_prompt: You are a commerce analytics agent.
+      memory:
+        strategy: database
+      features:
+        bi_copilot_enabled: false
+        deep_research_enabled: false
+        visualization_enabled: true
+        mcp_enabled: false
+      tools:
+        - name: commerce_semantic_sql
+          tool_type: sql
+          config:
+            semantic_model_ids: [commerce_performance]
+      access_policy:
+        allowed_connectors: [commerce_demo]
+        denied_connectors: []
+      execution:
+        mode: iterative
+        response_mode: analyst
+        max_iterations: 3
+        max_steps_per_iteration: 5
+        allow_parallel_tools: false
+      output:
+        format: markdown
+      guardrails:
+        moderation_enabled: true
+      observability:
+        log_level: info
+        emit_traces: false
+        capture_prompts: false
+        audit_fields: []
 """.strip(),
         encoding="utf-8",
     )
@@ -103,11 +134,12 @@ def test_cli_serve_delegates_to_runtime_api(tmp_path: Path, monkeypatch) -> None
     config_path = _write_config(tmp_path)
     captured: dict[str, object] = {}
 
-    def fake_run_runtime_api(*, config_path, host, port, features, reload):
+    def fake_run_runtime_api(*, config_path, host, port, features, debug, reload):
         captured["config_path"] = config_path
         captured["host"] = host
         captured["port"] = port
         captured["features"] = features
+        captured["debug"] = debug
         captured["reload"] = reload
 
     monkeypatch.setattr("langbridge.cli.main.run_runtime_api", fake_run_runtime_api)
@@ -123,6 +155,7 @@ def test_cli_serve_delegates_to_runtime_api(tmp_path: Path, monkeypatch) -> None
             "9100",
             "--features",
             "ui,mcp",
+            "--debug",
             "--reload",
         ]
     )
@@ -133,6 +166,7 @@ def test_cli_serve_delegates_to_runtime_api(tmp_path: Path, monkeypatch) -> None
         "host": "0.0.0.0",
         "port": 9100,
         "features": ["ui", "mcp"],
+        "debug": True,
         "reload": True,
     }
 

@@ -1,0 +1,6 @@
+dimensions:
+  - customers.region
+measures:
+  - completed_net_revenue
+order:
+  - completed_net_revenue: desc

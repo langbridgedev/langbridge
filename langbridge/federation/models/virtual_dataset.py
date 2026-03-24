@@ -27,7 +27,12 @@ class VirtualTableBinding(BaseModel):
     table_key: str
     source_id: str
     connector_id: UUID | None = None
-    schema_name: str | None = Field(default=None, alias="schema")
+    schema_name: str | None = Field(
+        default=None,
+        alias="schema",
+        validation_alias="schema",
+        serialization_alias="schema",
+    )
     table: str
     catalog: str | None = None
     stats: TableStatistics | None = None

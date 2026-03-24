@@ -1,7 +1,7 @@
 from typing import Dict, List
 
 from langbridge.connectors.base.config import BaseConnectorConfig, ConnectorRuntimeType
-from connectors.base.errors import ConnectorError
+from langbridge.connectors.base.errors import ConnectorError
 from langbridge.connectors.base.metadata import (
     BaseMetadataExtractor,
     ColumnMetadata,
