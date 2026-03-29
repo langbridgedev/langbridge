@@ -19,7 +19,6 @@ The current execution plane should be read as single-node first. There are dispa
 
 - host API: `langbridge/runtime/hosting/app.py`
 - host auth: `langbridge/runtime/hosting/auth.py`
-- configured local runtime builder: `langbridge/runtime/local_config.py`
 - runtime host facade: `langbridge/runtime/services/runtime_host.py`
 - dataset query service: `langbridge/runtime/services/dataset_query_service.py`
 - SQL query service: `langbridge/runtime/services/sql_query_service.py`

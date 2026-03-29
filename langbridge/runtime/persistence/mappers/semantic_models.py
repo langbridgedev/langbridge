@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import json
 from enum import Enum
@@ -8,6 +7,8 @@ from langbridge.runtime.models import (
     SemanticModelMetadata,
     SemanticVectorIndexMetadata,
 )
+from langbridge.runtime.models.metadata import LifecycleState, ManagementMode
+from langbridge.runtime.persistence.db.semantic import SemanticModelEntry
 from langbridge.runtime.persistence.db.semantic import SemanticVectorIndexEntry
 
 
@@ -41,6 +42,31 @@ def from_semantic_model_record(value: Any | None) -> SemanticModelMetadata | Non
         content_json=content_json,
         created_at=getattr(value, "created_at", None),
         updated_at=getattr(value, "updated_at", None),
+        management_mode=ManagementMode(str(getattr(value, "management_mode", "runtime_managed")).lower()),
+        lifecycle_state=LifecycleState(str(getattr(value, "lifecycle_state", "active")).lower())
+    )
+    
+def to_semantic_model_record(
+    value: SemanticModelMetadata | Any,
+) -> Any:
+    if isinstance(value, SemanticModelEntry):
+        return value
+    if hasattr(value, "content_json") and not isinstance(value.content_json, str):
+        content_json = json.dumps(value.content_json)
+    else:
+        content_json = getattr(value, "content_json", None)
+    return SemanticModelEntry(
+        id=value.id,
+        connector_id=getattr(value, "connector_id", None),
+        workspace_id=getattr(value, "workspace_id"),
+        name=value.name,
+        description=value.description,
+        content_yaml=str(getattr(value, "content_yaml")),
+        content_json=content_json,
+        created_at=getattr(value, "created_at", None),
+        updated_at=getattr(value, "updated_at", None),
+        management_mode=str(value.management_mode.value or "runtime_managed"),
+        lifecycle_state=str(value.lifecycle_state.value or "active"),
     )
 
 
@@ -107,4 +133,5 @@ __all__ = [
     "from_semantic_model_record",
     "from_semantic_vector_index_record",
     "to_semantic_vector_index_record",
+    "to_semantic_model_record",
 ]

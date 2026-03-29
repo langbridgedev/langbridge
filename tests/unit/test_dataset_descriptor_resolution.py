@@ -1,8 +1,8 @@
-from __future__ import annotations
 
 import uuid
 
 from langbridge.runtime.models.metadata import (
+    DatasetMaterializationMode,
     DatasetSourceKind,
     DatasetStorageKind,
 )
@@ -10,13 +10,14 @@ from langbridge.runtime.utils.datasets import (
     build_dataset_execution_capabilities,
     build_dataset_relation_identity,
     dataset_supports_structured_federation,
+    resolve_dataset_materialization_mode,
     resolve_dataset_connector_kind,
     resolve_dataset_source_kind,
     resolve_dataset_storage_kind,
 )
 
 
-def test_shopify_parquet_dataset_resolves_to_structured_saas_dataset() -> None:
+def test_shopify_parquet_dataset_resolves_to_structured_api_dataset() -> None:
     file_config = {
         "format": "parquet",
         "connector_sync": {
@@ -60,7 +61,7 @@ def test_shopify_parquet_dataset_resolves_to_structured_saas_dataset() -> None:
     )
 
     assert connector_kind == "shopify"
-    assert source_kind == DatasetSourceKind.SAAS
+    assert source_kind == DatasetSourceKind.API
     assert storage_kind == DatasetStorageKind.PARQUET
     assert relation_identity.schema_name is None
     assert relation_identity.qualified_name == "shopify_orders"
@@ -95,3 +96,34 @@ def test_legacy_table_dataset_defaults_to_database_table_capabilities() -> None:
     assert storage_kind == DatasetStorageKind.TABLE
     assert capabilities.supports_structured_scan is True
     assert capabilities.supports_sql_federation is True
+
+
+def test_resolve_dataset_materialization_mode_prefers_explicit_value() -> None:
+    resolved = resolve_dataset_materialization_mode(
+        explicit_materialization_mode=DatasetMaterializationMode.LIVE,
+        file_config={
+            "managed_dataset": True,
+            "connector_sync": {
+                "connector_type": "shopify",
+                "resource_name": "orders",
+            },
+        },
+    )
+
+    assert resolved == DatasetMaterializationMode.LIVE
+
+
+def test_resolve_dataset_materialization_mode_marks_connector_synced_files_as_synced() -> None:
+    resolved = resolve_dataset_materialization_mode(
+        explicit_materialization_mode=None,
+        file_config={
+            "format": "parquet",
+            "managed_dataset": True,
+            "connector_sync": {
+                "connector_type": "shopify",
+                "resource_name": "orders",
+            },
+        },
+    )
+
+    assert resolved == DatasetMaterializationMode.SYNCED

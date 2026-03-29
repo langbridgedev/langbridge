@@ -6,7 +6,6 @@ import os
 import tempfile
 from logging.handlers import RotatingFileHandler
 from typing import Optional
-from langbridge.config import settings
 
 try:
     from opentelemetry import _logs, trace
@@ -108,15 +107,6 @@ def _ensure_handlers(logger: logging.Logger, handlers: list[logging.Handler]) ->
         if handler not in existing:
             logger.addHandler(handler)
 
-
-def _bool_env(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _otel_disabled() -> bool:
-    return settings.OTEL_SDK_DISABLED or not OTEL_AVAILABLE
-
-
 def _exporter_enabled(env_key: str, default: str = "otlp") -> bool:
     return os.getenv(env_key, default).strip().lower() not in {"none", "disabled"}
 
@@ -146,7 +136,7 @@ def _build_span_exporter() -> Optional[object]:
     return GrpcOTLPSpanExporter()
 
 
-def _build_resource(service_name: Optional[str]) -> Resource:
+def _build_resource(service_name: Optional[str]) -> Resource: # type: ignore
     if Resource is None:  # pragma: no cover - guarded by _otel_disabled
         raise RuntimeError("OpenTelemetry resource support is unavailable")
     name = service_name or DEFAULT_SERVICE_NAME
@@ -183,19 +173,17 @@ def setup_logging(
         console.setFormatter(formatter)
         handlers.append(console)
 
-    print(f"Logging initialized. Level={level}, OTEL_SDK_DISABLED={_otel_disabled()}")
-    if _otel_disabled():
-        handlers.insert(
-            0,
-            _build_file_handler(
-                log_dir,
-                log_file,
-                truncate=truncate,
-                formatter=formatter,
-            ),
-        )
-        _ensure_handlers(root, handlers)
-        return root
+    handlers.insert(
+        0,
+        _build_file_handler(
+            log_dir,
+            log_file,
+            truncate=truncate,
+            formatter=formatter,
+        ),
+    )
+    _ensure_handlers(root, handlers)
+    return root
 
     resource = _build_resource(service_name)
 

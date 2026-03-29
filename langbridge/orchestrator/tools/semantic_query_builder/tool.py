@@ -1,6 +1,5 @@
 """LLM-powered copilot for the semantic query builder experience."""
 
-from __future__ import annotations
 
 import asyncio
 import json

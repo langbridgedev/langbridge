@@ -11,7 +11,7 @@ from sqlalchemy import (
     Index, 
     Integer, 
     String, 
-    UUID, 
+    Uuid as UUID, 
     func
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship

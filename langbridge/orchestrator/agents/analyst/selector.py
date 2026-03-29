@@ -2,7 +2,6 @@
 Analytical context selection strategy for dataset-first federated analysis.
 """
 
-from __future__ import annotations
 
 import json
 import re

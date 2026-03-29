@@ -1,6 +1,6 @@
-from __future__ import annotations
 
 from langbridge.connectors.base.config import (
+    ConnectorCapabilities,
     ConnectorFamily,
     ConnectorRuntimeType,
 )
@@ -19,6 +19,10 @@ PLUGIN = register_connector_plugin(
     ConnectorPlugin(
         connector_type=ConnectorRuntimeType.STRIPE,
         connector_family=ConnectorFamily.API,
+        capabilities=ConnectorCapabilities(
+            supports_synced_datasets=True,
+            supports_incremental_sync=True,
+        ),
         supported_resources=STRIPE_SUPPORTED_RESOURCES,
         auth_schema=STRIPE_AUTH_SCHEMA,
         sync_strategy=STRIPE_SYNC_STRATEGY,

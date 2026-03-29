@@ -1,5 +1,5 @@
-from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import uuid
@@ -17,6 +17,7 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from langbridge import LangbridgeClient
 from langbridge.runtime import build_configured_local_runtime
+from langbridge.runtime.bootstrap import ConfiguredLocalRuntimeHost
 from langbridge.runtime.context import RuntimeContext
 from langbridge.runtime.hosting import create_runtime_api_app
 from langbridge.runtime.hosting.auth import RuntimeAuthConfig, RuntimeAuthMode
@@ -33,7 +34,7 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def _build_runtime(tmp_path: Path):
+def _build_runtime(tmp_path: Path, *, metadata_store_block: str | None = None):
     db_path = tmp_path / "example.db"
     connection = sqlite3.connect(db_path)
     cursor = connection.cursor()
@@ -60,9 +61,10 @@ def _build_runtime(tmp_path: Path):
     connection.close()
 
     config_path = tmp_path / "langbridge.yml"
+    runtime_block = f"\nruntime:\n{metadata_store_block.rstrip()}" if metadata_store_block else ""
     config_path.write_text(
         f"""
-version: 1
+version: 1{runtime_block}
 connectors:
   - name: commerce_demo
     type: sqlite
@@ -175,6 +177,79 @@ agents:
 
     runtime._runtime_host.services.agent_execution.execute = fake_agent_execute  # type: ignore[assignment]
     return runtime
+
+
+def _create_runtime_app(runtime_host, **kwargs):
+    auth_config = kwargs.pop("auth_config", RuntimeAuthConfig(mode=RuntimeAuthMode.none))
+    return create_runtime_api_app(runtime_host=runtime_host, auth_config=auth_config, **kwargs)
+
+
+def _create_runtime_managed_resources(client: TestClient, tmp_path: Path) -> dict[str, dict[str, object]]:
+    connector = client.post(
+        "/api/runtime/v1/connectors",
+        json={
+            "name": "runtime_demo",
+            "type": "sqlite",
+            "description": "Runtime-managed sqlite connector",
+            "connection": {"path": str((tmp_path / "example.db").resolve())},
+        },
+    )
+    assert connector.status_code == 201
+
+    dataset = client.post(
+        "/api/runtime/v1/datasets",
+        json={
+            "name": "runtime_orders",
+            "description": "Runtime-managed orders dataset",
+            "connector": "commerce_demo",
+            "materialization_mode": "live",
+            "source": {"table": "orders_enriched"},
+        },
+    )
+    assert dataset.status_code == 201
+
+    semantic_model = client.post(
+        "/api/runtime/v1/semantic-models",
+        json={
+            "name": "runtime_orders_model",
+            "description": "Runtime-managed semantic model",
+            "model": {
+                "version": "1",
+                "name": "runtime_orders_model",
+                "datasets": {
+                    "runtime_orders": {
+                        "relation_name": "orders_enriched",
+                        "dimensions": [
+                            {"name": "country", "expression": "country", "type": "string"},
+                            {"name": "order_date", "expression": "order_date", "type": "time"},
+                        ],
+                        "measures": [
+                            {
+                                "name": "net_sales",
+                                "expression": "net_revenue",
+                                "type": "number",
+                                "aggregation": "sum",
+                            }
+                        ],
+                    }
+                },
+            },
+        },
+    )
+    assert semantic_model.status_code == 201
+
+    return {
+        "connector": connector.json(),
+        "dataset": dataset.json(),
+        "semantic_model": semantic_model.json(),
+    }
+
+
+async def _get_runtime_actor(runtime, actor_id: uuid.UUID):
+    controller = runtime.persistence_controller
+    assert controller is not None
+    async with controller.unit_of_work() as uow:
+        return await uow.repository("actor_repository").get_by_id(actor_id)
 
 
 def _build_runtime_with_relational_semantic_models(tmp_path: Path):
@@ -357,20 +432,27 @@ def _extract_sse_payload(response_text: str) -> dict[str, object]:
 
 def test_runtime_host_api_exposes_runtime_features(tmp_path: Path) -> None:
     runtime = _build_runtime(tmp_path)
-    app = create_runtime_api_app(runtime_host=runtime)
+    app = _create_runtime_app(runtime)
     client = TestClient(app)
 
     info = client.get("/api/runtime/v1/info")
     assert info.status_code == 200
-    assert info.json()["runtime_mode"] == "configured_local"
-    assert info.json()["workspace_id"] == str(runtime.context.workspace_id)
-    assert info.json()["actor_id"] == str(runtime.context.actor_id)
-    assert info.json()["roles"] == list(runtime.context.roles)
+    info_payload = info.json()
+    assert info_payload["runtime_mode"] == "configured_local"
+    assert info_payload["workspace_id"] == str(runtime.context.workspace_id)
+    assert info_payload["actor_id"] == str(runtime.context.actor_id)
+    assert info_payload["roles"] == list(runtime.context.roles)
+    assert "connectors.create" in info_payload["capabilities"]
+    assert "datasets.create" in info_payload["capabilities"]
+    assert "semantic_models.create" in info_payload["capabilities"]
 
     datasets = client.get("/api/runtime/v1/datasets")
     assert datasets.status_code == 200
-    dataset_id = datasets.json()["items"][0]["id"]
-    dataset_name = datasets.json()["items"][0]["name"]
+    dataset_payload = datasets.json()["items"][0]
+    assert dataset_payload["management_mode"] == "config_managed"
+    assert dataset_payload["managed"] is True
+    dataset_id = dataset_payload["id"]
+    dataset_name = dataset_payload["name"]
 
     preview = client.post(f"/api/runtime/v1/datasets/{dataset_id}/preview", json={"limit": 2})
     assert preview.status_code == 200
@@ -439,9 +521,34 @@ def test_runtime_host_api_exposes_runtime_features(tmp_path: Path) -> None:
     assert "commerce_analyst" in agent.json()["summary"]
 
 
+def test_runtime_host_api_returns_500_for_unexpected_agent_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _build_runtime(tmp_path)
+    app = _create_runtime_app(runtime)
+    client = TestClient(app)
+
+    async def _boom(self, *, prompt: str, agent_name: str | None = None, thread_id=None, title=None):  # type: ignore[no-untyped-def]
+        raise RuntimeError("'NoneType' object is not callable")
+
+    monkeypatch.setattr(ConfiguredLocalRuntimeHost, "ask_agent", _boom)
+
+    response = client.post(
+        "/api/runtime/v1/agents/ask",
+        json={
+            "message": "Summarize revenue",
+            "agent_name": "commerce_analyst",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "'NoneType' object is not callable"
+
+
 def test_runtime_host_api_executes_joined_semantic_query_with_runtime_response_shape(tmp_path: Path) -> None:
     runtime = _build_runtime_with_relational_semantic_models(tmp_path)
-    app = create_runtime_api_app(runtime_host=runtime)
+    app = _create_runtime_app(runtime)
     client = TestClient(app)
 
     semantic = client.post(
@@ -482,7 +589,7 @@ def test_runtime_host_api_executes_joined_semantic_query_with_runtime_response_s
 
 def test_runtime_host_api_executes_federated_sql_join_across_runtime_datasets(tmp_path: Path) -> None:
     runtime = _build_runtime_with_relational_semantic_models(tmp_path)
-    app = create_runtime_api_app(runtime_host=runtime)
+    app = _create_runtime_app(runtime)
     client = TestClient(app)
 
     response = client.post(
@@ -510,7 +617,7 @@ def test_runtime_host_api_executes_federated_sql_join_across_runtime_datasets(tm
 
 def test_runtime_host_api_serves_ui_when_feature_enabled(tmp_path: Path) -> None:
     runtime = _build_runtime(tmp_path)
-    app = create_runtime_api_app(runtime_host=runtime, features=["ui"])
+    app = _create_runtime_app(runtime, features=["ui"])
     client = TestClient(app)
 
     shell = client.get("/")
@@ -535,7 +642,9 @@ def test_runtime_host_api_serves_ui_when_feature_enabled(tmp_path: Path) -> None
     assert payload["counts"]["semantic_models"] == 1
     assert payload["counts"]["agents"] == 1
     assert payload["datasets"][0]["name"] == "shopify_orders"
+    assert payload["datasets"][0]["management_mode"] == "config_managed"
     assert payload["connectors"][0]["name"] == "commerce_demo"
+    assert payload["connectors"][0]["management_mode"] == "config_managed"
 
     info = client.get("/api/runtime/v1/info")
     assert info.status_code == 200
@@ -545,7 +654,7 @@ def test_runtime_host_api_serves_ui_when_feature_enabled(tmp_path: Path) -> None
 @pytest.mark.anyio
 async def test_runtime_host_api_serves_mcp_when_feature_enabled(tmp_path: Path) -> None:
     runtime = _build_runtime(tmp_path)
-    app = create_runtime_api_app(runtime_host=runtime, features=["mcp"])
+    app = _create_runtime_app(runtime, features=["mcp"])
 
     @asynccontextmanager
     async def httpx_client_factory(**kwargs):
@@ -633,7 +742,7 @@ async def test_runtime_host_api_requires_auth_for_mcp_requests(tmp_path: Path) -
 @pytest.mark.anyio
 async def test_runtime_host_api_logs_mcp_debug_details_for_bad_requests(tmp_path: Path, caplog) -> None:
     runtime = _build_runtime(tmp_path)
-    app = create_runtime_api_app(runtime_host=runtime, features=["mcp"], debug=True)
+    app = _create_runtime_app(runtime, features=["mcp"], debug=True)
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
@@ -658,7 +767,7 @@ async def test_runtime_host_api_logs_mcp_debug_details_for_bad_requests(tmp_path
 @pytest.mark.anyio
 async def test_runtime_host_api_accepts_mcp_requests_without_trailing_slash(tmp_path: Path) -> None:
     runtime = _build_runtime(tmp_path)
-    app = create_runtime_api_app(runtime_host=runtime, features=["mcp"])
+    app = _create_runtime_app(runtime, features=["mcp"])
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
@@ -700,7 +809,7 @@ async def test_runtime_host_api_omits_unavailable_mcp_tools_from_runtime_info(tm
     runtime._agents = {}
     runtime._default_agent = None
     runtime._runtime_host.services.agent_execution = None  # type: ignore[assignment]
-    app = create_runtime_api_app(runtime_host=runtime, features=["mcp"])
+    app = _create_runtime_app(runtime, features=["mcp"])
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
@@ -755,7 +864,7 @@ async def test_runtime_host_api_omits_unavailable_mcp_tools_from_runtime_info(tm
 
 def test_runtime_host_api_does_not_serve_ui_by_default(tmp_path: Path) -> None:
     runtime = _build_runtime(tmp_path)
-    app = create_runtime_api_app(runtime_host=runtime)
+    app = _create_runtime_app(runtime)
     client = TestClient(app)
 
     shell = client.get("/")
@@ -767,7 +876,7 @@ def test_runtime_host_api_does_not_serve_ui_by_default(tmp_path: Path) -> None:
 
 def test_remote_sdk_can_use_runtime_host_api(tmp_path: Path) -> None:
     runtime = _build_runtime(tmp_path)
-    app = create_runtime_api_app(runtime_host=runtime)
+    app = _create_runtime_app(runtime)
 
     with TestClient(app) as http_client:
         client = LangbridgeClient.remote(
@@ -809,11 +918,25 @@ def test_remote_sdk_can_use_runtime_host_api(tmp_path: Path) -> None:
             client.close()
 
 
+def test_runtime_host_api_lifespan_closes_runtime_host(tmp_path: Path) -> None:
+    runtime = _build_runtime(tmp_path)
+    controller = runtime.persistence_controller
+
+    assert controller is not None
+    assert controller.closed is False
+
+    with TestClient(_create_runtime_app(runtime)) as client:
+        response = client.get("/api/runtime/v1/health")
+        assert response.status_code == 200
+
+    assert controller.closed is True
+
+
 def test_runtime_host_api_supports_connector_sync(tmp_path: Path) -> None:
     with mock_stripe_api() as api_base_url, runtime_storage_dirs(tmp_path):
         config_path = write_sync_runtime_config(tmp_path, api_base_url=api_base_url)
         runtime = build_configured_local_runtime(config_path=str(config_path))
-        app = create_runtime_api_app(runtime_host=runtime)
+        app = _create_runtime_app(runtime)
         client = TestClient(app)
 
         info = client.get("/api/runtime/v1/info")
@@ -827,6 +950,8 @@ def test_runtime_host_api_supports_connector_sync(tmp_path: Path) -> None:
         assert connector_payload["total"] == 1
         assert connector_payload["items"][0]["name"] == "billing_demo"
         assert connector_payload["items"][0]["supports_sync"] is True
+        assert connector_payload["items"][0]["management_mode"] == "config_managed"
+        assert connector_payload["items"][0]["managed"] is True
 
         resources = client.get("/api/runtime/v1/connectors/billing_demo/sync/resources")
         assert resources.status_code == 200
@@ -851,6 +976,8 @@ def test_runtime_host_api_supports_connector_sync(tmp_path: Path) -> None:
         assert datasets.status_code == 200
         assert datasets.json()["total"] == 1
         synced_dataset_name = datasets.json()["items"][0]["name"]
+        assert datasets.json()["items"][0]["management_mode"] == "runtime_managed"
+        assert datasets.json()["items"][0]["managed"] is False
 
         preview = client.post(
             f"/api/runtime/v1/datasets/{synced_dataset_name}/preview",
@@ -867,6 +994,264 @@ def test_runtime_host_api_supports_connector_sync(tmp_path: Path) -> None:
         assert states.json()["items"][0]["resource_name"] == "customers"
         assert states.json()["items"][0]["status"] == "succeeded"
         assert states.json()["items"][0]["dataset_names"] == [synced_dataset_name]
+
+
+def test_runtime_host_api_supports_declared_synced_datasets_before_and_after_sync(tmp_path: Path) -> None:
+    with mock_stripe_api() as api_base_url, runtime_storage_dirs(tmp_path):
+        config_path = write_sync_runtime_config(
+            tmp_path,
+            api_base_url=api_base_url,
+            declared_synced_datasets=[{"name": "billing_customers", "resource": "customers"}],
+        )
+        runtime = build_configured_local_runtime(config_path=str(config_path))
+        app = _create_runtime_app(runtime)
+        client = TestClient(app)
+
+        datasets_before = client.get("/api/runtime/v1/datasets")
+        assert datasets_before.status_code == 200
+        assert datasets_before.json()["items"] == [
+                {
+                    "id": str(runtime._datasets["billing_customers"].id),
+                    "name": "billing_customers",
+                    "label": runtime._datasets["billing_customers"].label,
+                    "description": "Configured synced dataset awaiting connector sync for resource 'customers'.",
+                "connector": "billing_demo",
+                "semantic_model": None,
+                "materialization_mode": "synced",
+                "status": "pending_sync",
+                "sync_resource": "customers",
+                "sync_status": "never_synced",
+                "last_sync_at": None,
+                "management_mode": "config_managed",
+                "managed": True,
+            }
+        ]
+
+        dataset_detail_before = client.get("/api/runtime/v1/datasets/billing_customers")
+        assert dataset_detail_before.status_code == 200
+        assert dataset_detail_before.json()["sync_state"]["status"] == "never_synced"
+
+        preview_before = client.post(
+            "/api/runtime/v1/datasets/billing_customers/preview",
+            json={"limit": 5},
+        )
+        assert preview_before.status_code == 400
+        assert preview_before.json()["detail"] == (
+            "Synced dataset 'billing_customers' has not been populated yet. "
+            "Run connector sync for stripe resource 'customers' before querying it."
+        )
+
+        resources = client.get("/api/runtime/v1/connectors/billing_demo/sync/resources")
+        assert resources.status_code == 200
+        customers = next(item for item in resources.json()["items"] if item["name"] == "customers")
+        assert customers["dataset_names"] == ["billing_customers"]
+
+        sync = client.post(
+            "/api/runtime/v1/connectors/billing_demo/sync",
+            json={
+                "resource_names": ["customers"],
+                "sync_mode": "INCREMENTAL",
+            },
+        )
+        assert sync.status_code == 200
+        assert sync.json()["resources"][0]["dataset_names"] == ["billing_customers"]
+
+        datasets_after = client.get("/api/runtime/v1/datasets")
+        assert datasets_after.status_code == 200
+        assert datasets_after.json()["items"][0]["name"] == "billing_customers"
+        assert datasets_after.json()["items"][0]["status"] == "published"
+        assert datasets_after.json()["items"][0]["sync_status"] == "succeeded"
+        assert datasets_after.json()["items"][0]["management_mode"] == "config_managed"
+        assert datasets_after.json()["items"][0]["managed"] is True
+
+        preview_after = client.post(
+            "/api/runtime/v1/datasets/billing_customers/preview",
+            json={"limit": 5},
+        )
+        assert preview_after.status_code == 200
+        assert preview_after.json()["status"] == "succeeded"
+        assert preview_after.json()["row_count_preview"] == 2
+
+
+def test_runtime_host_api_creates_runtime_managed_resources_and_exposes_management_mode(
+    tmp_path: Path,
+) -> None:
+    runtime = _build_runtime(tmp_path)
+    client = TestClient(_create_runtime_app(runtime))
+
+    created = _create_runtime_managed_resources(client, tmp_path)
+
+    connector_payload = created["connector"]
+    assert connector_payload["name"] == "runtime_demo"
+    assert connector_payload["management_mode"] == "runtime_managed"
+    assert connector_payload["managed"] is False
+
+    connector_sql = client.post(
+        "/api/runtime/v1/sql/query",
+        json={
+            "query": "SELECT COUNT(*) AS row_count FROM orders_enriched",
+            "connection_name": "runtime_demo",
+        },
+    )
+    assert connector_sql.status_code == 200
+    assert connector_sql.json()["status"] == "succeeded"
+    assert connector_sql.json()["rows"][0]["row_count"] == 3
+
+    dataset_payload = created["dataset"]
+    assert dataset_payload["name"] == "runtime_orders"
+    assert dataset_payload["connector"] == "commerce_demo"
+    assert dataset_payload["management_mode"] == "runtime_managed"
+    assert dataset_payload["managed"] is False
+
+    dataset_preview = client.post(
+        "/api/runtime/v1/datasets/runtime_orders/preview",
+        json={"limit": 2},
+    )
+    assert dataset_preview.status_code == 200
+    assert dataset_preview.json()["status"] == "succeeded"
+    assert dataset_preview.json()["row_count_preview"] == 2
+
+    semantic_payload = created["semantic_model"]
+    assert semantic_payload["name"] == "runtime_orders_model"
+    assert semantic_payload["management_mode"] == "runtime_managed"
+    assert semantic_payload["managed"] is False
+
+    semantic_query = client.post(
+        "/api/runtime/v1/semantic/query",
+        json={
+            "semantic_models": ["runtime_orders_model"],
+            "measures": ["runtime_orders.net_sales"],
+            "dimensions": ["runtime_orders.country"],
+            "order": {"runtime_orders.net_sales": "desc"},
+            "limit": 5,
+        },
+    )
+    assert semantic_query.status_code == 200
+    assert semantic_query.json()["status"] == "succeeded"
+
+    connectors = {
+        item["name"]: item
+        for item in client.get("/api/runtime/v1/connectors").json()["items"]
+    }
+    assert connectors["commerce_demo"]["management_mode"] == "config_managed"
+    assert connectors["runtime_demo"]["management_mode"] == "runtime_managed"
+
+    datasets = {
+        item["name"]: item
+        for item in client.get("/api/runtime/v1/datasets").json()["items"]
+    }
+    assert datasets["shopify_orders"]["management_mode"] == "config_managed"
+    assert datasets["runtime_orders"]["management_mode"] == "runtime_managed"
+
+    semantic_models = {
+        item["name"]: item
+        for item in client.get("/api/runtime/v1/semantic-models").json()["items"]
+    }
+    assert semantic_models["commerce_performance"]["management_mode"] == "config_managed"
+    assert semantic_models["runtime_orders_model"]["management_mode"] == "runtime_managed"
+
+
+def test_runtime_host_api_create_endpoints_do_not_override_config_managed_resources(
+    tmp_path: Path,
+) -> None:
+    runtime = _build_runtime(tmp_path)
+    client = TestClient(_create_runtime_app(runtime))
+
+    duplicate_connector = client.post(
+        "/api/runtime/v1/connectors",
+        json={
+            "name": "commerce_demo",
+            "type": "sqlite",
+            "connection": {"path": str((tmp_path / "example.db").resolve())},
+        },
+    )
+    assert duplicate_connector.status_code == 409
+
+    duplicate_dataset = client.post(
+        "/api/runtime/v1/datasets",
+        json={
+            "name": "shopify_orders",
+            "connector": "commerce_demo",
+            "materialization_mode": "live",
+            "source": {"table": "orders_enriched"},
+        },
+    )
+    assert duplicate_dataset.status_code == 409
+
+    duplicate_semantic_model = client.post(
+        "/api/runtime/v1/semantic-models",
+        json={
+            "name": "commerce_performance",
+            "datasets": ["shopify_orders"],
+        },
+    )
+    assert duplicate_semantic_model.status_code == 409
+
+    connectors = {
+        item["name"]: item
+        for item in client.get("/api/runtime/v1/connectors").json()["items"]
+    }
+    assert connectors["commerce_demo"]["management_mode"] == "config_managed"
+    assert connectors["commerce_demo"]["managed"] is True
+
+    dataset_detail = client.get("/api/runtime/v1/datasets/shopify_orders")
+    assert dataset_detail.status_code == 200
+    assert dataset_detail.json()["management_mode"] == "config_managed"
+    assert dataset_detail.json()["managed"] is True
+
+    semantic_detail = client.get("/api/runtime/v1/semantic-models/commerce_performance")
+    assert semantic_detail.status_code == 200
+    assert semantic_detail.json()["management_mode"] == "config_managed"
+    assert semantic_detail.json()["managed"] is True
+
+
+def test_runtime_host_api_sqlite_persists_runtime_managed_resources_across_restart(
+    tmp_path: Path,
+) -> None:
+    runtime = _build_runtime(tmp_path)
+    with TestClient(_create_runtime_app(runtime)) as client:
+        _create_runtime_managed_resources(client, tmp_path)
+
+    restarted_runtime = build_configured_local_runtime(config_path=str(runtime._config_path))
+    with TestClient(_create_runtime_app(restarted_runtime)) as restarted_client:
+        connectors = {
+            item["name"]: item
+            for item in restarted_client.get("/api/runtime/v1/connectors").json()["items"]
+        }
+        assert connectors["runtime_demo"]["management_mode"] == "runtime_managed"
+        assert connectors["runtime_demo"]["managed"] is False
+
+        datasets = {
+            item["name"]: item
+            for item in restarted_client.get("/api/runtime/v1/datasets").json()["items"]
+        }
+        assert datasets["runtime_orders"]["management_mode"] == "runtime_managed"
+        assert datasets["runtime_orders"]["managed"] is False
+
+        semantic_models = {
+            item["name"]: item
+            for item in restarted_client.get("/api/runtime/v1/semantic-models").json()["items"]
+        }
+        assert semantic_models["runtime_orders_model"]["management_mode"] == "runtime_managed"
+        assert semantic_models["runtime_orders_model"]["managed"] is False
+
+        connector_sql = restarted_client.post(
+            "/api/runtime/v1/sql/query",
+            json={
+                "query": "SELECT COUNT(*) AS row_count FROM orders_enriched",
+                "connection_name": "runtime_demo",
+            },
+        )
+        assert connector_sql.status_code == 200
+        assert connector_sql.json()["status"] == "succeeded"
+        assert connector_sql.json()["rows"][0]["row_count"] == 3
+
+        dataset_preview = restarted_client.post(
+            "/api/runtime/v1/datasets/runtime_orders/preview",
+            json={"limit": 1},
+        )
+        assert dataset_preview.status_code == 200
+        assert dataset_preview.json()["status"] == "succeeded"
 
 
 def test_runtime_host_api_static_token_auth_scopes_runtime_requests(tmp_path: Path) -> None:
@@ -928,14 +1313,18 @@ def test_runtime_host_api_static_token_auth_scopes_runtime_requests(tmp_path: Pa
     }
 
 
-def test_runtime_host_api_local_auth_bootstrap_login_and_logout(tmp_path: Path) -> None:
+def test_runtime_host_api_static_token_auth_supports_local_operator_bootstrap_login_and_logout(
+    tmp_path: Path,
+) -> None:
     runtime = _build_runtime(tmp_path)
-    auth_store_path = tmp_path / ".langbridge" / "auth.json"
     app = create_runtime_api_app(
         runtime_host=runtime,
         auth_config=RuntimeAuthConfig(
-            mode=RuntimeAuthMode.local,
-            local_store_path=str(auth_store_path),
+            mode=RuntimeAuthMode.static_token,
+            static_token="runtime-token",
+            static_workspace_id=runtime.context.workspace_id,
+            static_roles=("runtime:viewer",),
+            local_auth_enabled=True,
             local_session_secret="runtime-local-auth-secret",
         ),
     )
@@ -943,17 +1332,22 @@ def test_runtime_host_api_local_auth_bootstrap_login_and_logout(tmp_path: Path) 
 
     bootstrap_status = client.get("/api/runtime/v1/auth/bootstrap")
     assert bootstrap_status.status_code == 200
-    assert bootstrap_status.json() == {
-        "auth_enabled": True,
-        "auth_mode": "local",
-        "bootstrap_required": True,
-        "has_admin": False,
-        "login_allowed": True,
-        "session_cookie_name": "langbridge_runtime_session",
-    }
+    bootstrap_payload = bootstrap_status.json()
+    assert bootstrap_payload["auth_enabled"] is True
+    assert bootstrap_payload["auth_mode"] == "static_token"
+    assert bootstrap_payload["bootstrap_required"] is True
+    assert bootstrap_payload["has_admin"] is False
+    assert bootstrap_payload["login_allowed"] is True
+    assert bootstrap_payload["session_cookie_name"] == "langbridge_runtime_session"
 
     unauthorized_info = client.get("/api/runtime/v1/info")
     assert unauthorized_info.status_code == 401
+
+    bearer_info = client.get(
+        "/api/runtime/v1/info",
+        headers={"Authorization": "Bearer runtime-token"},
+    )
+    assert bearer_info.status_code == 200
 
     bootstrap = client.post(
         "/api/runtime/v1/auth/bootstrap",
@@ -966,12 +1360,43 @@ def test_runtime_host_api_local_auth_bootstrap_login_and_logout(tmp_path: Path) 
     assert bootstrap.status_code == 200
     assert bootstrap.json()["user"]["username"] == "runtime-admin"
     assert bootstrap.json()["user"]["email"] == "admin@example.com"
+    assert bootstrap.json()["user"]["provider"] == "runtime_local_session"
+
+    metadata_db_path = tmp_path / ".langbridge" / "metadata.db"
+    assert metadata_db_path.exists()
+    assert not (tmp_path / ".langbridge" / "auth.json").exists()
+    connection = sqlite3.connect(metadata_db_path)
+    try:
+        cursor = connection.cursor()
+        credential_row = cursor.execute(
+            """
+            SELECT c.password_hash, a.subject, a.email
+            FROM runtime_local_auth_credentials AS c
+            JOIN runtime_actors AS a ON a.id = c.actor_id
+            """
+        ).fetchone()
+        assert credential_row is not None
+        assert credential_row[0].startswith("pbkdf2_sha256$")
+        assert credential_row[0] != "Password123!"
+        assert "Password123!" not in credential_row[0]
+        assert credential_row[1] == "runtime-admin"
+        assert credential_row[2] == "admin@example.com"
+    finally:
+        connection.close()
 
     me = client.get("/api/runtime/v1/auth/me")
     assert me.status_code == 200
-    assert me.json()["auth_mode"] == "local"
+    assert me.json()["auth_mode"] == "static_token"
     assert me.json()["user"]["username"] == "runtime-admin"
     assert me.json()["user"]["roles"] == ["runtime:admin"]
+    assert me.json()["user"]["provider"] == "runtime_local_session"
+
+    actor = asyncio.run(_get_runtime_actor(runtime, uuid.UUID(me.json()["user"]["id"])))
+    assert actor is not None
+    assert actor.subject == "runtime-admin"
+    assert actor.email == "admin@example.com"
+    assert actor.roles_json == ["runtime:admin"]
+    assert actor.metadata_json["runtime_operator"] is True
 
     authenticated_info = client.get("/api/runtime/v1/info")
     assert authenticated_info.status_code == 200
@@ -998,6 +1423,17 @@ def test_runtime_host_api_local_auth_bootstrap_login_and_logout(tmp_path: Path) 
     client.cookies.clear()
     unauthorized_me = client.get("/api/runtime/v1/auth/me")
     assert unauthorized_me.status_code == 401
+    unauthorized_info_after_logout = client.get("/api/runtime/v1/info")
+    assert unauthorized_info_after_logout.status_code == 401
+
+    invalid_login = client.post(
+        "/api/runtime/v1/auth/login",
+        json={
+            "identifier": "runtime-admin",
+            "password": "bad-password",
+        },
+    )
+    assert invalid_login.status_code == 401
 
     login = client.post(
         "/api/runtime/v1/auth/login",
@@ -1012,15 +1448,113 @@ def test_runtime_host_api_local_auth_bootstrap_login_and_logout(tmp_path: Path) 
     authenticated_again = client.get("/api/runtime/v1/info")
     assert authenticated_again.status_code == 200
 
+    bearer_info_after_bootstrap = client.get(
+        "/api/runtime/v1/info",
+        headers={"Authorization": "Bearer runtime-token"},
+    )
+    assert bearer_info_after_bootstrap.status_code == 200
+
+
+def test_runtime_host_api_sqlite_local_auth_persists_across_runtime_restart(tmp_path: Path) -> None:
+    runtime = _build_runtime(tmp_path)
+    auth_config = RuntimeAuthConfig(
+        mode=RuntimeAuthMode.static_token,
+        static_token="runtime-token",
+        static_workspace_id=runtime.context.workspace_id,
+        static_roles=("runtime:viewer",),
+        local_auth_enabled=True,
+        local_session_secret="runtime-local-auth-secret",
+    )
+    first_client = TestClient(_create_runtime_app(runtime, auth_config=auth_config))
+
+    bootstrap = first_client.post(
+        "/api/runtime/v1/auth/bootstrap",
+        json={
+            "username": "runtime-admin",
+            "email": "admin@example.com",
+            "password": "Password123!",
+        },
+    )
+    assert bootstrap.status_code == 200
+
+    restarted_runtime = build_configured_local_runtime(config_path=str(runtime._config_path))
+    restarted_client = TestClient(_create_runtime_app(restarted_runtime, auth_config=auth_config))
+
+    bootstrap_status = restarted_client.get("/api/runtime/v1/auth/bootstrap")
+    assert bootstrap_status.status_code == 200
+    assert bootstrap_status.json()["bootstrap_required"] is False
+    assert bootstrap_status.json()["has_admin"] is True
+
+    second_bootstrap = restarted_client.post(
+        "/api/runtime/v1/auth/bootstrap",
+        json={
+            "username": "ignored",
+            "email": "ignored@example.com",
+            "password": "Password123!",
+        },
+    )
+    assert second_bootstrap.status_code == 409
+
+    login = restarted_client.post(
+        "/api/runtime/v1/auth/login",
+        json={
+            "identifier": "admin@example.com",
+            "password": "Password123!",
+        },
+    )
+    assert login.status_code == 200
+    assert login.json()["user"]["username"] == "runtime-admin"
+
+
+def test_runtime_host_api_in_memory_local_auth_is_ephemeral(tmp_path: Path) -> None:
+    runtime = _build_runtime(
+        tmp_path,
+        metadata_store_block="""
+  metadata_store:
+    type: in_memory
+""",
+    )
+    auth_config = RuntimeAuthConfig(
+        mode=RuntimeAuthMode.static_token,
+        static_token="runtime-token",
+        static_workspace_id=runtime.context.workspace_id,
+        static_roles=("runtime:viewer",),
+        local_auth_enabled=True,
+        local_session_secret="runtime-local-auth-secret",
+    )
+    first_client = TestClient(_create_runtime_app(runtime, auth_config=auth_config))
+
+    bootstrap = first_client.post(
+        "/api/runtime/v1/auth/bootstrap",
+        json={
+            "username": "runtime-admin",
+            "email": "admin@example.com",
+            "password": "Password123!",
+        },
+    )
+    assert bootstrap.status_code == 200
+    assert not (tmp_path / ".langbridge" / "metadata.db").exists()
+    assert not (tmp_path / ".langbridge" / "auth.json").exists()
+
+    restarted_runtime = build_configured_local_runtime(config_path=str(runtime._config_path))
+    restarted_client = TestClient(_create_runtime_app(restarted_runtime, auth_config=auth_config))
+    bootstrap_status = restarted_client.get("/api/runtime/v1/auth/bootstrap")
+
+    assert bootstrap_status.status_code == 200
+    assert bootstrap_status.json()["bootstrap_required"] is True
+    assert bootstrap_status.json()["has_admin"] is False
+
 
 def test_runtime_host_api_exposes_semantic_models_agents_and_threads(tmp_path: Path) -> None:
     runtime = _build_runtime(tmp_path)
-    app = create_runtime_api_app(runtime_host=runtime)
+    app = _create_runtime_app(runtime)
     client = TestClient(app)
 
     semantic_models = client.get("/api/runtime/v1/semantic-models")
     assert semantic_models.status_code == 200
     assert semantic_models.json()["total"] == 1
+    assert semantic_models.json()["items"][0]["management_mode"] == "config_managed"
+    assert semantic_models.json()["items"][0]["managed"] is True
     semantic_model_id = semantic_models.json()["items"][0]["id"]
 
     semantic_model = client.get(f"/api/runtime/v1/semantic-models/{semantic_model_id}")
@@ -1029,6 +1563,8 @@ def test_runtime_host_api_exposes_semantic_models_agents_and_threads(tmp_path: P
     assert semantic_payload["name"] == "commerce_performance"
     assert "content_yaml" in semantic_payload
     assert semantic_payload["dataset_count"] == 1
+    assert semantic_payload["management_mode"] == "config_managed"
+    assert semantic_payload["managed"] is True
 
     agents = client.get("/api/runtime/v1/agents")
     assert agents.status_code == 200
@@ -1084,7 +1620,7 @@ def test_runtime_host_api_exposes_semantic_models_agents_and_threads(tmp_path: P
 
 def test_runtime_host_api_supports_thread_crud(tmp_path: Path) -> None:
     runtime = _build_runtime(tmp_path)
-    app = create_runtime_api_app(runtime_host=runtime)
+    app = _create_runtime_app(runtime)
     client = TestClient(app)
 
     create_response = client.post(
@@ -1142,6 +1678,44 @@ async def test_configured_runtime_threads_use_fallback_actor_when_context_actor_
     assert len(threads) == 1
     assert threads[0]["id"] == created["id"]
     assert threads[0]["title"] == "Fallback actor thread"
+
+
+@pytest.mark.anyio
+async def test_configured_runtime_threads_remain_visible_across_actor_context_changes(
+    tmp_path: Path,
+) -> None:
+    base_runtime = _build_runtime(tmp_path)
+    first_turn = await base_runtime.ask_agent(
+        prompt="Summarize revenue",
+        agent_name="commerce_analyst",
+    )
+    thread_id = first_turn["thread_id"]
+
+    shifted_runtime = base_runtime.with_context(
+        RuntimeContext.build(
+            workspace_id=base_runtime.context.workspace_id,
+            actor_id=uuid.uuid4(),
+            request_id="shifted-actor-request",
+        )
+    )
+
+    threads = await shifted_runtime.list_threads()
+    assert any(thread["id"] == thread_id for thread in threads)
+
+    messages = await shifted_runtime.list_thread_messages(thread_id=thread_id)
+    assert len(messages) == 2
+    assert messages[0]["role"] == "user"
+    assert messages[1]["role"] == "assistant"
+
+    follow_up = await shifted_runtime.ask_agent(
+        prompt="Break that down by country",
+        agent_name="commerce_analyst",
+        thread_id=thread_id,
+    )
+    assert follow_up["thread_id"] == thread_id
+
+    updated_messages = await shifted_runtime.list_thread_messages(thread_id=thread_id)
+    assert len(updated_messages) == 4
 
 
 def test_runtime_host_api_jwt_auth_exposes_authenticated_identity(tmp_path: Path) -> None:

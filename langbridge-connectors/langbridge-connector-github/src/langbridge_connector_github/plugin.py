@@ -1,6 +1,5 @@
-from __future__ import annotations
 
-from langbridge.connectors.base.config import ConnectorFamily, ConnectorRuntimeType
+from langbridge.connectors.base.config import ConnectorCapabilities, ConnectorFamily, ConnectorRuntimeType
 from langbridge.plugins import ConnectorPlugin, register_connector_plugin
 
 from .config import (
@@ -16,6 +15,10 @@ PLUGIN = register_connector_plugin(
     ConnectorPlugin(
         connector_type=ConnectorRuntimeType.GITHUB,
         connector_family=ConnectorFamily.API,
+        capabilities=ConnectorCapabilities(
+            supports_synced_datasets=True,
+            supports_incremental_sync=True,
+        ),
         supported_resources=GITHUB_SUPPORTED_RESOURCES,
         auth_schema=GITHUB_AUTH_SCHEMA,
         sync_strategy=GITHUB_SYNC_STRATEGY,

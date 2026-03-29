@@ -2,6 +2,10 @@ version: 1
 
 runtime:
   mode: local
+  migrations:
+    auto_apply: true
+  # Configured runtimes default to sqlite metadata persistence; postgres is the
+  # production/self-managed hosted alternative when you need shared durability.
   metadata_store:
     type: sqlite
     path: .langbridge/metadata.db
@@ -43,8 +47,7 @@ datasets:
     label: Sales Orders
     description: Order-level sales facts enriched with the CRM contact key from the sales database.
     connector: sales_reporting
-    semantic_model: customer_revenue_federation
-    default_time_dimension: order_date
+    materialization_mode: live
     source:
       sql: |
         SELECT
@@ -65,7 +68,7 @@ datasets:
     label: CRM Contacts
     description: CRM contacts enriched with account segment and owner region from the CRM database.
     connector: crm_reporting
-    semantic_model: customer_revenue_federation
+    materialization_mode: live
     source:
       sql: |
         SELECT
@@ -85,8 +88,7 @@ datasets:
     label: Marketing Campaigns
     description: Campaign metadata loaded from a local CSV and joined to CRM contacts at runtime.
     connector: campaign_file
-    semantic_model: customer_revenue_federation
-    default_time_dimension: touch_date
+    materialization_mode: live
     source:
       path: ./marketing_campaign.csv
       format: csv

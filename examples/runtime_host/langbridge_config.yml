@@ -2,6 +2,11 @@ version: 1
 
 runtime:
   mode: local
+  migrations:
+    # Local/self-hosted defaults can auto-apply runtime metadata migrations on serve.
+    auto_apply: true
+  # Explicit runtime metadata persistence. If omitted, configured runtimes now
+  # default to sqlite at .langbridge/metadata.db relative to this config.
   metadata_store:
     type: sqlite
     path: .langbridge/metadata.db
@@ -23,12 +28,11 @@ datasets:
     label: Shopify Orders
     description: Order-level commerce performance data with revenue and customer attributes.
     connector: commerce_demo
+    materialization_mode: live
     semantic_model: commerce_performance
     default_time_dimension: order_date
     source:
       table: orders_enriched
-    sync:
-      enabled: false
 
 semantic_models:
   - name: commerce_performance

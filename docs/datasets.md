@@ -32,6 +32,7 @@ and centers on:
 - `name`
 - `sql_alias`
 - `dataset_type`
+- `materialization_mode`
 - `source_kind`
 - `connector_kind`
 - `storage_kind`
@@ -47,6 +48,26 @@ Important supporting records:
 - `DatasetPolicyMetadata`
 - `DatasetRelationIdentity`
 - `DatasetExecutionCapabilities`
+
+## Dataset Mode
+
+Dataset behavior is now dataset-owned through `materialization_mode`:
+
+- `live`
+- `synced`
+
+That field is part of the canonical runtime dataset model and the configured
+runtime config model.
+
+The runtime validates each dataset definition against connector capabilities
+instead of assuming behavior from connector family alone.
+
+Examples:
+
+- a SQLite or Postgres dataset can be `live`
+- a runtime-managed API sync dataset is `synced`
+- a config-defined synced connector resource can be declared in YAML and populated later by connector sync
+- a connector may eventually support both modes, but only if the runtime has a real execution path for each
 
 ## Workspace Scope
 
@@ -64,6 +85,24 @@ Datasets may represent:
 - sync-materialized datasets
 - federated or derived datasets
 
+## Connector Capabilities
+
+The runtime keeps connector kind separate from capability flags. Dataset mode
+validation currently relies on connector capability metadata such as:
+
+- `supports_live_datasets`
+- `supports_synced_datasets`
+- `supports_incremental_sync`
+- `supports_query_pushdown`
+- `supports_preview`
+- `supports_federated_execution`
+
+A dataset requesting `materialization_mode: live` must use a connector that
+supports live datasets. A dataset requesting `materialization_mode: synced`
+must use a connector that supports synced datasets. Config-defined synced
+datasets currently require a runtime sync-capable connector and use
+`source.resource` as the declared connector resource name to materialize.
+
 ## Policies And Guardrails
 
 Dataset policy is where the runtime applies:
@@ -80,5 +119,5 @@ execution.
 ## Current Direction
 
 Langbridge is moving toward a richer dataset-first execution model driven by
-relation identity and execution capabilities rather than coarse dataset types
-alone.
+relation identity, explicit materialization mode, and execution capabilities
+rather than coarse dataset types or connector families alone.

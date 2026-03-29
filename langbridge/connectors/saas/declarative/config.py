@@ -1,9 +1,9 @@
-from __future__ import annotations
 
 from typing import Mapping, Sequence
 
 from langbridge.connectors.base.config import (
     ConnectorAuthFieldSchema,
+    ConnectorCapabilities,
     ConnectorConfigEntrySchema,
     ConnectorConfigSchema,
     ConnectorFamily,
@@ -116,6 +116,14 @@ def build_declarative_plugin_metadata(
         supported_resources=list(manifest.resource_keys),
         auth_schema=list(resolved_auth_schema),
         sync_strategy=sync_strategy,
+        capabilities=ConnectorCapabilities(
+            supports_live_datasets=False,
+            supports_synced_datasets=True,
+            supports_incremental_sync=sync_strategy in {
+                ConnectorSyncStrategy.INCREMENTAL,
+                ConnectorSyncStrategy.WINDOWED_INCREMENTAL,
+            },
+        ),
     )
 
 

@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import uuid
 
@@ -71,6 +70,20 @@ class RuntimeActorRepository(AsyncBaseRepository[RuntimeActor]):
             select(RuntimeActor).where(
                 RuntimeActor.workspace_id == workspace_id,
                 RuntimeActor.subject == subject,
+            )
+        )
+        return result.one_or_none()
+
+    async def get_by_email(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        email: str,
+    ) -> RuntimeActor | None:
+        result = await self._session.scalars(
+            select(RuntimeActor).where(
+                RuntimeActor.workspace_id == workspace_id,
+                RuntimeActor.email == email,
             )
         )
         return result.one_or_none()

@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import json
 import logging
@@ -16,6 +15,10 @@ from langbridge.orchestrator.definitions import (
     ResponseMode,
 )
 from langbridge.orchestrator.llm.provider import LLMProvider
+from langbridge.orchestrator.runtime.analysis_grounding import (
+    build_analyst_grounding,
+    render_analyst_grounding_for_prompt,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -80,12 +83,16 @@ class ResponseFormatter:
         summary_intro, summary_tail = self._summary_prompt_parts(presentation.response_mode)
         preview = self._render_tabular_preview(response_payload.get("result"))
         viz_summary = self._summarise_visualization(response_payload.get("visualization"))
+        grounding = build_analyst_grounding(question, response_payload.get("result"))
+        grounding_text = render_analyst_grounding_for_prompt(grounding)
 
         prompt_sections = [
             summary_intro,
             f"Original question:\n{question.strip()}",
             f"Tabular result preview:\n{preview}",
         ]
+        if grounding_text:
+            prompt_sections.append(f"Key analytical facts:\n{grounding_text}")
         if viz_summary:
             prompt_sections.append(f"Visualization guidance:\n{viz_summary}")
         self._append_output_requirements(prompt_sections, presentation.output_schema)
@@ -182,8 +189,12 @@ class ResponseFormatter:
                 "Avoid jargon, define any terms, and mention if the dataset is empty.",
             )
         return (
-            "You are a senior analytics assistant. Summarize the findings for a business stakeholder in 2-3 sentences.",
-            "Highlight the most important metric, call out notable changes or trends, and mention if the dataset is empty.",
+            "You are a senior analytics assistant. Answer the user's question directly using only the provided analytical context.",
+            (
+                "Interpret the result instead of restating the table. Call out leaders, laggards, comparisons, "
+                "rank order, drivers, or trends only when the returned rows support them. Distinguish observed facts "
+                "from reasonable interpretation, avoid filler, and mention uncertainty or limits when the result is sparse."
+            ),
         )
 
     @staticmethod

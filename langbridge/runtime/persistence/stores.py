@@ -101,6 +101,28 @@ from langbridge.runtime.ports import (
 )
 
 
+def _find_tracked_record(session, record):
+    sync_session = getattr(session, "sync_session", session)
+    record_id = getattr(record, "id", None)
+    if record_id is None:
+        return None
+    for candidate in list(getattr(sync_session, "new", [])):
+        if type(candidate) is type(record) and getattr(candidate, "id", None) == record_id:
+            return candidate
+    for candidate in list(getattr(sync_session, "identity_map", {}).values()):
+        if type(candidate) is type(record) and getattr(candidate, "id", None) == record_id:
+            return candidate
+    return None
+
+
+def _copy_record_columns(target, source) -> None:
+    table = getattr(source, "__table__", None)
+    if table is None:
+        return
+    for column in table.columns:
+        setattr(target, column.key, getattr(source, column.key))
+
+
 class RepositoryAgentDefinitionStore(AgentDefinitionStore):
     def __init__(self, *, repository: AgentRepository) -> None:
         self._repository = repository
@@ -126,7 +148,12 @@ class RepositoryThreadStore(ThreadStore):
         return from_thread_record(record) or instance
 
     async def save(self, instance: RuntimeThread) -> RuntimeThread:
-        record = await self._repository.save(to_thread_record(instance))
+        next_record = to_thread_record(instance)
+        tracked = _find_tracked_record(self._repository._session, next_record)
+        if tracked is not None:
+            _copy_record_columns(tracked, next_record)
+            return from_thread_record(tracked) or instance
+        record = await self._repository.save(next_record)
         return from_thread_record(record) or instance
 
     async def get_by_id(self, id_: object) -> RuntimeThread | None:
@@ -147,6 +174,16 @@ class RepositoryThreadStore(ThreadStore):
             if (runtime_thread := from_thread_record(item)) is not None
         ]
 
+    async def list_for_workspace(self, workspace_id: uuid.UUID) -> list[RuntimeThread]:
+        return [
+            runtime_thread
+            for item in await self._repository.list_for_workspace(workspace_id)
+            if (runtime_thread := from_thread_record(item)) is not None
+        ]
+
+    async def flush(self) -> None:
+        await self._repository.flush()
+
 
 class RepositoryThreadMessageStore(ThreadMessageStore):
     def __init__(self, *, repository: ThreadMessageRepository) -> None:
@@ -166,6 +203,9 @@ class RepositoryThreadMessageStore(ThreadMessageStore):
     async def delete_for_thread(self, thread_id) -> None:
         for item in await self._repository.list_for_thread(thread_id):
             await self._repository.delete(item)
+
+    async def flush(self) -> None:
+        await self._repository.flush()
 
 
 class RepositorySemanticModelStore(SemanticModelStore):
@@ -228,7 +268,12 @@ class RepositorySemanticVectorIndexStore(SemanticVectorIndexStore):
         ]
 
     async def save(self, instance: SemanticVectorIndexMetadata) -> SemanticVectorIndexMetadata:
-        record = await self._repository.save(to_semantic_vector_index_record(instance))
+        next_record = to_semantic_vector_index_record(instance)
+        tracked = _find_tracked_record(self._repository._session, next_record)
+        if tracked is not None:
+            _copy_record_columns(tracked, next_record)
+            return from_semantic_vector_index_record(tracked) or instance
+        record = await self._repository.save(next_record)
         return from_semantic_vector_index_record(record) or instance
 
     async def delete(self, *, workspace_id, semantic_vector_index_id) -> None:
@@ -298,7 +343,12 @@ class RepositorySqlJobStore(SqlJobStore):
         )
 
     async def save(self, instance: SqlJob) -> SqlJob:
-        record = await self._repository.save(to_sql_job_record(instance))
+        next_record = to_sql_job_record(instance)
+        tracked = _find_tracked_record(self._repository._session, next_record)
+        if tracked is not None:
+            _copy_record_columns(tracked, next_record)
+            return from_sql_job_record(tracked) or instance
+        record = await self._repository.save(next_record)
         return from_sql_job_record(record) or instance
 
 
@@ -327,8 +377,21 @@ class RepositoryDatasetCatalogStore(DatasetCatalogStore):
         return from_dataset_record(record) or instance
 
     async def save(self, instance: DatasetMetadata) -> DatasetMetadata:
-        record = await self._repository.save(to_dataset_record(instance))
-        return from_dataset_record(record) or instance
+        next_record = to_dataset_record(instance)
+        tracked = _find_tracked_record(self._repository._session, next_record)
+        if tracked is not None:
+            _copy_record_columns(tracked, next_record)
+            return from_dataset_record(tracked) or instance
+        record = await self._repository.save(next_record)
+        reloaded = record
+        workspace_id = getattr(record, "workspace_id", None)
+        record_id = getattr(record, "id", None)
+        if workspace_id is not None and record_id is not None:
+            reloaded = await self._repository.get_for_workspace(
+                dataset_id=record_id,
+                workspace_id=workspace_id,
+            )
+        return from_dataset_record(reloaded) or instance
 
     async def get_by_id(self, id_: object) -> DatasetMetadata | None:
         return from_dataset_record(await self._repository.get_by_id(id_))
@@ -433,6 +496,9 @@ class RepositoryDatasetCatalogStore(DatasetCatalogStore):
             if (runtime_dataset := from_dataset_record(item)) is not None
         ]
 
+    async def flush(self) -> None:
+        await self._repository.flush()
+
 
 class RepositoryDatasetColumnStore(DatasetColumnStore):
     def __init__(self, *, repository: DatasetColumnRepository) -> None:
@@ -451,6 +517,9 @@ class RepositoryDatasetColumnStore(DatasetColumnStore):
     async def delete_for_dataset(self, *, dataset_id) -> None:
         await self._repository.delete_for_dataset(dataset_id=dataset_id)
 
+    async def flush(self) -> None:
+        await self._repository.flush()
+
 
 class RepositoryDatasetPolicyStore(DatasetPolicyStore):
     def __init__(self, *, repository: DatasetPolicyRepository) -> None:
@@ -461,13 +530,21 @@ class RepositoryDatasetPolicyStore(DatasetPolicyStore):
         return from_dataset_policy_record(record) or instance
 
     async def save(self, instance: DatasetPolicyMetadata) -> DatasetPolicyMetadata:
-        record = await self._repository.save(to_dataset_policy_record(instance))
+        next_record = to_dataset_policy_record(instance)
+        tracked = _find_tracked_record(self._repository._session, next_record)
+        if tracked is not None:
+            _copy_record_columns(tracked, next_record)
+            return from_dataset_policy_record(tracked) or instance
+        record = await self._repository.save(next_record)
         return from_dataset_policy_record(record) or instance
 
     async def get_for_dataset(self, *, dataset_id) -> DatasetPolicyMetadata | None:
         return from_dataset_policy_record(
             await self._repository.get_for_dataset(dataset_id=dataset_id)
         )
+
+    async def flush(self) -> None:
+        await self._repository.flush()
 
 
 class RepositoryDatasetRevisionStore(DatasetRevisionStore):
@@ -480,6 +557,9 @@ class RepositoryDatasetRevisionStore(DatasetRevisionStore):
 
     async def next_revision_number(self, *, dataset_id) -> int:
         return await self._repository.next_revision_number(dataset_id=dataset_id)
+
+    async def flush(self) -> None:
+        await self._repository.flush()
 
 
 class RepositoryLineageEdgeStore(LineageEdgeStore):
@@ -497,6 +577,9 @@ class RepositoryLineageEdgeStore(LineageEdgeStore):
             target_id=target_id,
         )
 
+    async def flush(self) -> None:
+        await self._repository.flush()
+
 
 class RepositoryConnectorSyncStateStore(ConnectorSyncStateStore):
     def __init__(self, *, repository: ConnectorSyncStateRepository) -> None:
@@ -507,7 +590,12 @@ class RepositoryConnectorSyncStateStore(ConnectorSyncStateStore):
         return from_connector_sync_state_record(record) or instance
 
     async def save(self, instance: ConnectorSyncState) -> ConnectorSyncState:
-        record = await self._repository.save(to_connector_sync_state_record(instance))
+        next_record = to_connector_sync_state_record(instance)
+        tracked = _find_tracked_record(self._repository._session, next_record)
+        if tracked is not None:
+            _copy_record_columns(tracked, next_record)
+            return from_connector_sync_state_record(tracked) or instance
+        record = await self._repository.save(next_record)
         return from_connector_sync_state_record(record) or instance
 
     async def list_for_connection(
@@ -539,6 +627,9 @@ class RepositoryConnectorSyncStateStore(ConnectorSyncStateStore):
                 resource_name=resource_name,
             )
         )
+
+    async def flush(self) -> None:
+        await self._repository.flush()
 
 
 __all__ = [

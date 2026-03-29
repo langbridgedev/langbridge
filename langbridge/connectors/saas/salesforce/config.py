@@ -3,6 +3,7 @@ from langbridge.connectors.base.config import (
     BaseConnectorConfigFactory,
     BaseConnectorConfigSchemaFactory,
     ConnectorAuthFieldSchema,
+    ConnectorCapabilities,
     ConnectorConfigEntrySchema,
     ConnectorConfigSchema,
     ConnectorFamily,
@@ -116,5 +117,9 @@ class SalesforceConnectorConfigSchemaFactory(BaseConnectorConfigSchemaFactory):
                 supported_resources=list(SALESFORCE_SUPPORTED_RESOURCES),
                 auth_schema=list(SALESFORCE_AUTH_SCHEMA),
                 sync_strategy=SALESFORCE_SYNC_STRATEGY,
+                capabilities=ConnectorCapabilities(
+                    supports_synced_datasets=True,
+                    supports_incremental_sync=True,
+                ),
             ),
         )

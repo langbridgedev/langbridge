@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 import uuid
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, JSON, String, UUID
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, JSON, String, Uuid as UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
@@ -46,3 +46,6 @@ class AgentDefinition(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    management_mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    lifecycle_state: Mapped[str] = mapped_column(String(50), nullable=False)

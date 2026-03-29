@@ -5,6 +5,7 @@ from langbridge.connectors.base.config import (
     BaseConnectorConfigFactory,
     BaseConnectorConfigSchemaFactory,
     ConnectorAuthFieldSchema,
+    ConnectorCapabilities,
     ConnectorConfigEntrySchema,
     ConnectorConfigSchema,
     ConnectorFamily,
@@ -91,5 +92,9 @@ class HubSpotConnectorConfigSchemaFactory(BaseConnectorConfigSchemaFactory):
                 supported_resources=list(HUBSPOT_SUPPORTED_RESOURCES),
                 auth_schema=list(HUBSPOT_AUTH_SCHEMA),
                 sync_strategy=HUBSPOT_SYNC_STRATEGY,
+                capabilities=ConnectorCapabilities(
+                    supports_synced_datasets=True,
+                    supports_incremental_sync=True,
+                ),
             ),
         )

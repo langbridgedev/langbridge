@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from .base import Base
+from .model_registry import register_runtime_metadata_models
 
 
 def _build_connect_args(database_url: str) -> dict[str, Any]:
@@ -127,5 +128,6 @@ async def async_session_scope(
 
 
 def initialize_database(engine: Engine) -> None:
-    """Create database tables if they do not exist."""
+    """Legacy/test helper for creating the current metadata schema without Alembic."""
+    register_runtime_metadata_models()
     Base.metadata.create_all(bind=engine)

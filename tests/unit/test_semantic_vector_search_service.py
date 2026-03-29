@@ -14,7 +14,10 @@ from langbridge.connectors.vector.faiss.config import FaissConnectorConfig
 from langbridge.connectors.vector.faiss.connector import FaissConnector
 from langbridge.runtime.models import (
     ConnectionMetadata,
+    ConnectorCapabilities,
     ConnectorMetadata,
+    LifecycleState,
+    ManagementMode,
     SecretReference,
     SemanticModelMetadata,
     SemanticVectorIndexStatus,
@@ -133,6 +136,8 @@ def test_semantic_vector_refresh_builds_default_faiss_index_and_searches_dimensi
                 "          store:\n"
                 "            type: managed_faiss\n"
             ),
+            management_mode=ManagementMode.RUNTIME_MANAGED,
+            lifecycle_state=LifecycleState.ACTIVE,
         )
         model_provider = MemorySemanticModelProvider(
             {(workspace_id, semantic_model_id): semantic_model}
@@ -229,6 +234,7 @@ def test_semantic_vector_explicit_connector_path_resolves_connector_scoped_store
                     workspace_id=workspace_id,
                     name="semantic-qdrant",
                     connector_type="qdrant",
+                    connector_family="vector",
                     config={"config": {"host": "qdrant.internal", "port": 6333}},
                     connection_metadata=ConnectionMetadata(extra={"https": False}),
                     secret_references={
@@ -237,6 +243,9 @@ def test_semantic_vector_explicit_connector_path_resolves_connector_scoped_store
                             identifier="QDRANT_API_KEY",
                         )
                     },
+                    capabilities=ConnectorCapabilities(),
+                    management_mode=ManagementMode.RUNTIME_MANAGED,
+                    lifecycle_state=LifecycleState.ACTIVE,
                 )
             }
         )

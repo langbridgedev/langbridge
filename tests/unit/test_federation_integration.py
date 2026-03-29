@@ -1,5 +1,4 @@
-﻿from __future__ import annotations
-
+﻿
 import uuid
 
 import pyarrow as pa

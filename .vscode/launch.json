@@ -55,7 +55,7 @@
             "args": [
                 "serve",
                 "--config",
-                "examples/runtime_host/langbridge_config.yml",
+                "examples/sdk/federated_query/langbridge_config.yml",
                 "--host",
                 "127.0.0.1",
                 "--port",

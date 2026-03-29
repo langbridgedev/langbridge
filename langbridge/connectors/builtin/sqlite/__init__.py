@@ -2,6 +2,7 @@ from importlib import import_module
 from typing import Any
 
 from langbridge.plugins import (
+    ConnectorCapabilities,
     ConnectorFamily,
     ConnectorPlugin,
     ConnectorRuntimeType,
@@ -18,6 +19,12 @@ register_connector_plugin(
     ConnectorPlugin(
         connector_type=ConnectorRuntimeType.SQLITE,
         connector_family=ConnectorFamily.DATABASE,
+        capabilities=ConnectorCapabilities(
+            supports_live_datasets=True,
+            supports_query_pushdown=True,
+            supports_preview=True,
+            supports_federated_execution=True,
+        ),
         config_factory=SqliteConnectorConfigFactory,
         config_schema_factory=SqliteConnectorConfigSchemaFactory,
     )

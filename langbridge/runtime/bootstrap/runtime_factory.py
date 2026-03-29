@@ -1,10 +1,10 @@
-from __future__ import annotations
 
 import logging
 
+from .configured_runtime import build_configured_local_runtime
+
 from langbridge.runtime.context import RuntimeContext
 from langbridge.runtime.execution import FederatedQueryTool
-from langbridge.runtime.local_config import build_configured_local_runtime
 from langbridge.runtime.persistence import (
     RepositoryAgentDefinitionStore,
     RepositoryConnectorSyncStateStore,
@@ -116,6 +116,7 @@ def build_local_runtime(
     semantic_model_store: SemanticModelStore | None = None,
     secret_provider_registry: SecretProviderRegistry | None = None,
     logger: logging.Logger | None = None,
+    cache_metadata: bool = True,
 ) -> RuntimeHost:
     dataset_store = RepositoryDatasetCatalogStore(repository=dataset_repository)
     dataset_column_store = (
@@ -179,19 +180,33 @@ def build_local_runtime(
         else None
     )
     credential_provider = SecretRegistryCredentialProvider(registry=secret_provider_registry)
-    dataset_provider = CachedDatasetMetadataProvider(
-        RepositoryDatasetMetadataProvider(
-            dataset_repository=dataset_store,
-            dataset_column_repository=dataset_column_store,
-            dataset_policy_repository=dataset_policy_store,
-        )
+    base_dataset_provider = RepositoryDatasetMetadataProvider(
+        dataset_repository=dataset_store,
+        dataset_column_repository=dataset_column_store,
+        dataset_policy_repository=dataset_policy_store,
     )
-    connector_provider = CachedConnectorMetadataProvider(
-        RepositoryConnectorMetadataProvider(connector_repository=connector_repository)
+    dataset_provider = (
+        CachedDatasetMetadataProvider(base_dataset_provider)
+        if cache_metadata
+        else base_dataset_provider
+    )
+    base_connector_provider = RepositoryConnectorMetadataProvider(
+        connector_repository=connector_repository
+    )
+    connector_provider = (
+        CachedConnectorMetadataProvider(base_connector_provider)
+        if cache_metadata
+        else base_connector_provider
     )
     semantic_provider = (
-        CachedSemanticModelMetadataProvider(
-            RepositorySemanticModelMetadataProvider(
+        (
+            CachedSemanticModelMetadataProvider(
+                RepositorySemanticModelMetadataProvider(
+                    semantic_model_repository=semantic_model_repository
+                )
+            )
+            if cache_metadata
+            else RepositorySemanticModelMetadataProvider(
                 semantic_model_repository=semantic_model_repository
             )
         )

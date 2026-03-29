@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import json
 from typing import Any
@@ -6,10 +5,12 @@ from typing import Any
 from langbridge.runtime.models import (
     ConnectionMetadata,
     ConnectionPolicy,
+    ConnectorCapabilities,
     ConnectorMetadata,
     ConnectorSyncState,
     SecretReference,
 )
+from langbridge.runtime.models.metadata import LifecycleState, ManagementMode
 from langbridge.runtime.persistence.db.connector import Connector
 from langbridge.runtime.persistence.db.connector_sync import ConnectorSyncStateRecord
 from langbridge.runtime.persistence.mappers.common import as_dict
@@ -58,6 +59,12 @@ def from_connector_record(value: Any | None) -> ConnectorMetadata | None:
         str(key): to_secret_reference(item)
         for key, item in dict(secret_refs_raw or {}).items()
     }
+    capabilities_raw = getattr(value, "capabilities", None)
+    if capabilities_raw is None:
+        capabilities_raw = getattr(value, "capabilities_json", None)
+    capabilities = None
+    if capabilities_raw:
+        capabilities = ConnectorCapabilities.model_validate(capabilities_raw)
     return ConnectorMetadata(
         id=getattr(value, "id"),
         name=str(getattr(value, "name")),
@@ -66,6 +73,7 @@ def from_connector_record(value: Any | None) -> ConnectorMetadata | None:
         label=getattr(value, "label", None) or getattr(value, "name", None),
         icon=getattr(value, "icon", None),
         connector_type=getattr(value, "connector_type", None),
+        connector_family=getattr(value, "connector_family", None),
         workspace_id=getattr(value, "workspace_id", None),
         config=config or None,
         connection_metadata=to_connection_metadata(
@@ -77,7 +85,16 @@ def from_connector_record(value: Any | None) -> ConnectorMetadata | None:
             getattr(value, "connection_policy", None)
             or getattr(value, "access_policy_json", None)
         ),
+        supported_resources=list(
+            getattr(value, "supported_resources", None)
+            or getattr(value, "supported_resources_json", None)
+            or []
+        ),
+        sync_strategy=getattr(value, "sync_strategy", None),
+        capabilities=capabilities,
         is_managed=bool(getattr(value, "is_managed", False)),
+        management_mode=ManagementMode(str(getattr(value, "management_mode", "runtime_managed")).lower()),
+        lifecycle_state=LifecycleState(str(getattr(value, "lifecycle_state", "active")).lower())
     )
 
 
@@ -90,7 +107,8 @@ def to_connector_record(value: ConnectorMetadata | Connector) -> Connector:
         name=value.name,
         description=value.description,
         connector_type=str(value.connector_type or ""),
-        type=str(value.connector_type or "connector"),
+        connector_family=str(value.connector_family or "") or None,
+        type="connector",
         config_json=json.dumps(value.config or {}),
         connection_metadata_json=(
             None
@@ -106,7 +124,12 @@ def to_connector_record(value: ConnectorMetadata | Connector) -> Connector:
             if value.connection_policy is None
             else value.connection_policy.model_dump(exclude_none=True)
         ),
+        supported_resources_json=list(value.supported_resources or []),
+        sync_strategy=value.sync_strategy,
+        capabilities_json=value.capabilities_json,
         is_managed=value.is_managed,
+        management_mode=str(value.management_mode.value or "runtime_managed"),
+        lifecycle_state=str(value.lifecycle_state.value or "active"),
     )
 
 

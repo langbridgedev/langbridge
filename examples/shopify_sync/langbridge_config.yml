@@ -1,0 +1,27 @@
+version: 1
+
+runtime:
+  mode: local
+  # Explicit runtime metadata persistence for the synced datasets and sync state.
+  metadata_store:
+    type: sqlite
+    path: .langbridge/metadata.db
+  execution:
+    engine: duckdb
+    duckdb:
+      path: .langbridge/duckdb/runtime.duckdb
+      temp_directory: .langbridge/tmp
+      threads: 4
+
+connectors:
+  - name: shopify_demo
+    type: shopify
+    description: Self-hosted Shopify sync example backed by a live Shopify Admin API store.
+    connection: {}
+    secrets:
+      shop_domain:
+        provider_type: env
+        identifier: SHOPIFY_SHOP_DOMAIN
+      access_token:
+        provider_type: env
+        identifier: SHOPIFY_ACCESS_TOKEN

@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 from typing import Any
 
@@ -11,7 +10,17 @@ def from_lineage_edge_record(value: Any | None) -> LineageEdge | None:
         return None
     if isinstance(value, LineageEdge):
         return value
-    return LineageEdge.model_validate(value)
+    return LineageEdge(
+        id=getattr(value, "id", None),
+        workspace_id=getattr(value, "workspace_id"),
+        source_type=str(getattr(value, "source_type")),
+        source_id=str(getattr(value, "source_id")),
+        target_type=str(getattr(value, "target_type")),
+        target_id=str(getattr(value, "target_id")),
+        edge_type=str(getattr(value, "edge_type")),
+        metadata=dict(getattr(value, "metadata_json", None) or {}),
+        created_at=getattr(value, "created_at", None),
+    )
 
 
 def to_lineage_edge_record(value: LineageEdge | LineageEdgeRecord) -> LineageEdgeRecord:

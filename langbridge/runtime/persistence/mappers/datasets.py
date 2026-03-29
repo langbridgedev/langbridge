@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 from typing import Any
 
@@ -8,6 +7,7 @@ from langbridge.runtime.models import (
     DatasetPolicyMetadata,
     DatasetRevision,
 )
+from langbridge.runtime.models.metadata import LifecycleState, ManagementMode
 from langbridge.runtime.persistence.db.dataset import (
     DatasetColumnRecord,
     DatasetPolicyRecord,
@@ -132,6 +132,7 @@ def from_dataset_record(value: Any | None) -> DatasetMetadata | None:
         description=getattr(value, "description", None),
         tags=list(getattr(value, "tags", None) or getattr(value, "tags_json", None) or []),
         dataset_type=str(getattr(value, "dataset_type")),
+        materialization_mode=getattr(value, "materialization_mode", None),
         source_kind=getattr(value, "source_kind", None),
         connector_kind=getattr(value, "connector_kind", None),
         storage_kind=getattr(value, "storage_kind", None),
@@ -169,6 +170,8 @@ def from_dataset_record(value: Any | None) -> DatasetMetadata | None:
         policy=from_dataset_policy_record(getattr(value, "policy", None)),
         created_at=getattr(value, "created_at", None),
         updated_at=getattr(value, "updated_at", None),
+        management_mode=ManagementMode(str(getattr(value, "management_mode", "runtime_managed")).lower()),
+        lifecycle_state=LifecycleState(str(getattr(value, "lifecycle_state", "active")).lower())
     )
 
 
@@ -186,6 +189,7 @@ def to_dataset_record(value: DatasetMetadata | DatasetRecord) -> DatasetRecord:
         description=value.description,
         tags_json=list(value.tags),
         dataset_type=value.dataset_type,
+        materialization_mode=value.materialization_mode_value,
         source_kind=value.source_kind,
         connector_kind=value.connector_kind,
         storage_kind=value.storage_kind,
@@ -207,6 +211,8 @@ def to_dataset_record(value: DatasetMetadata | DatasetRecord) -> DatasetRecord:
         last_profiled_at=value.last_profiled_at,
         created_at=value.created_at,
         updated_at=value.updated_at,
+        management_mode=str(value.management_mode.value or "runtime_managed"),
+        lifecycle_state=str(value.lifecycle_state.value or "active"),
     )
 
 

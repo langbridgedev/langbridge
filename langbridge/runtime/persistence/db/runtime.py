@@ -11,7 +11,7 @@ from sqlalchemy import (
     Integer,
     JSON,
     String,
-    UUID,
+    Uuid as UUID,
     UniqueConstraint,
     func,
 )

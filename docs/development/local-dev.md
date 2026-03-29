@@ -24,6 +24,13 @@ Run the self-hosted runtime host:
 langbridge serve --config examples/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
 ```
 
+If you want to exercise the explicit migration path instead of startup
+auto-apply:
+
+```bash
+langbridge migrate --config examples/runtime_host/langbridge_config.yml
+```
+
 The runtime docs will be available at `http://127.0.0.1:8000/api/runtime/docs`.
 
 ## Runtime UI Development
@@ -70,6 +77,8 @@ docker compose --profile host up --build runtime-host
 
 - `examples/runtime_host/`
 - `examples/runtime_host_sync/`
+- `examples/shopify_sync/`
+- `examples/hubspot_sync/`
 - `examples/sdk/semantic_query/`
 - `examples/sdk/federated_query/`
 

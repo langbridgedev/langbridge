@@ -2,6 +2,10 @@ version: 1
 
 runtime:
   mode: local
+  migrations:
+    auto_apply: true
+  # Explicit runtime metadata persistence. Switch this block to postgres for
+  # production/self-managed hosted runtime metadata.
   metadata_store:
     type: sqlite
     path: .langbridge/metadata.db
@@ -19,3 +23,11 @@ connectors:
     connection:
       api_key: sk_test_local_demo
       api_base_url: http://mock-stripe:12111
+
+datasets:
+  - name: billing_customers
+    description: Declared synced dataset for Stripe customers.
+    connector: billing_demo
+    materialization_mode: synced
+    source:
+      resource: customers

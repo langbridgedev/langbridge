@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import uuid
 from datetime import datetime
@@ -9,6 +8,13 @@ from pydantic import Field
 
 from langbridge.runtime.models.base import RuntimeModel
 
+class ManagementMode(str, Enum):
+      CONFIG_MANAGED = "config_managed"
+      RUNTIME_MANAGED = "runtime_managed"
+
+class LifecycleState(str, Enum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
 
 class SecretReference(RuntimeModel):
     provider_type: Literal[
@@ -42,6 +48,15 @@ class ConnectionMetadata(RuntimeModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
+class ConnectorCapabilities(RuntimeModel):
+    supports_live_datasets: bool = False
+    supports_synced_datasets: bool = False
+    supports_incremental_sync: bool = False
+    supports_query_pushdown: bool = False
+    supports_preview: bool = False
+    supports_federated_execution: bool = False
+
+
 class ConnectorMetadata(RuntimeModel):
     id: uuid.UUID
     name: str
@@ -50,12 +65,24 @@ class ConnectorMetadata(RuntimeModel):
     label: str | None = None
     icon: str | None = None
     connector_type: str | None = None
+    connector_family: str | None = None
     workspace_id: uuid.UUID | None = None
     config: dict[str, Any] | None = None
     connection_metadata: ConnectionMetadata | None = None
     secret_references: dict[str, SecretReference] = Field(default_factory=dict)
     connection_policy: ConnectionPolicy | None = None
+    supported_resources: list[str] = Field(default_factory=list)
+    sync_strategy: str | None = None
+    capabilities: ConnectorCapabilities | None = None
     is_managed: bool = False
+    management_mode: ManagementMode
+    lifecycle_state: LifecycleState
+
+    @property
+    def capabilities_json(self) -> dict[str, Any] | None:
+        if self.capabilities is None:
+            return None
+        return self.capabilities.model_dump(mode="json")
 
 
 class DatasetColumnMetadata(RuntimeModel):
@@ -112,6 +139,11 @@ class DatasetStorageKind(str, Enum):
     VIRTUAL = "virtual"
 
 
+class DatasetMaterializationMode(str, Enum):
+    LIVE = "live"
+    SYNCED = "synced"
+
+
 class DatasetExecutionCapabilities(RuntimeModel):
     supports_structured_scan: bool = False
     supports_sql_federation: bool = False
@@ -149,6 +181,7 @@ class DatasetMetadata(RuntimeModel):
     description: str | None = None
     tags: list[str] = Field(default_factory=list)
     dataset_type: str
+    materialization_mode: str | None = None
     source_kind: str | None = None
     connector_kind: str | None = None
     storage_kind: str | None = None
@@ -172,10 +205,17 @@ class DatasetMetadata(RuntimeModel):
     policy: DatasetPolicyMetadata | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    management_mode: ManagementMode
+    lifecycle_state: LifecycleState
 
     @property
     def tags_json(self) -> list[str]:
         return list(self.tags)
+
+    @property
+    def materialization_mode_value(self) -> str | None:
+        normalized = str(self.materialization_mode or "").strip().lower()
+        return normalized or None
 
     @property
     def relation_identity_json(self) -> dict[str, Any] | None:
@@ -212,6 +252,8 @@ class SemanticModelMetadata(RuntimeModel):
     content_json: dict[str, Any] | str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    management_mode: ManagementMode
+    lifecycle_state: LifecycleState
 
 class SemanticVectorIndexStatus(str, Enum):
     PENDING = "pending"

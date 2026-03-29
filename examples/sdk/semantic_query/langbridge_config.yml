@@ -2,6 +2,10 @@ version: 1
 
 runtime:
   mode: local
+  migrations:
+    auto_apply: true
+  # Notebook/local SDK runs can still choose in_memory explicitly, but sqlite is
+  # the configured-runtime default and recommended local metadata store.
   metadata_store:
     type: sqlite
     path: .langbridge/metadata.db
@@ -23,32 +27,29 @@ datasets:
     label: Shopify Orders
     description: Order-level commerce performance data with revenue, margin, and customer attributes.
     connector: commerce_demo
+    materialization_mode: live
     semantic_model: commerce_performance
     default_time_dimension: order_date
     source:
       table: orders_enriched
-    sync:
-      enabled: false
 
   - name: customers
     label: Customers
     description: Customer profile and segmentation data.
     connector: commerce_demo
+    materialization_mode: live
     semantic_model: commerce_performance
     source:
       table: customers
-    sync:
-      enabled: false
 
   - name: support_tickets
     label: Support Tickets
     description: Support cases tied to customer and order activity.
     connector: commerce_demo
+    materialization_mode: live
     semantic_model: commerce_performance
     source:
       table: support_tickets
-    sync:
-      enabled: false
 
 semantic_models:
   - name: commerce_performance

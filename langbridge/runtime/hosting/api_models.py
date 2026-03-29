@@ -5,6 +5,13 @@ from typing import Any
 from pydantic import Field, model_validator
 
 from langbridge.runtime.models.base import RuntimeModel, RuntimeRequestModel
+from langbridge.runtime.models.metadata import (
+    ConnectorCapabilities,
+    DatasetMaterializationMode,
+    ManagementMode,
+)
+
+
 class RuntimeInfoResponse(RuntimeModel):
     api_version: str = "v1"
     runtime_mode: str
@@ -24,6 +31,12 @@ class RuntimeDatasetSummary(RuntimeModel):
     description: str | None = None
     connector: str | None = None
     semantic_model: str | None = None
+    materialization_mode: str | None = None
+    status: str | None = None
+    sync_resource: str | None = None
+    sync_status: str | None = None
+    last_sync_at: datetime | None = None
+    management_mode: ManagementMode
     managed: bool = False
 
 
@@ -37,15 +50,133 @@ class RuntimeConnectorSummary(RuntimeModel):
     name: str
     description: str | None = None
     connector_type: str | None = None
+    connector_family: str | None = None
     supports_sync: bool = False
     supported_resources: list[str] = Field(default_factory=list)
     sync_strategy: str | None = None
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+    management_mode: ManagementMode
     managed: bool = False
 
 
 class RuntimeConnectorListResponse(RuntimeModel):
     items: list[RuntimeConnectorSummary] = Field(default_factory=list)
     total: int = 0
+
+
+class RuntimeSemanticModelSummary(RuntimeModel):
+    id: uuid.UUID | None = None
+    name: str
+    description: str | None = None
+    default: bool = False
+    dataset_count: int = 0
+    dataset_names: list[str] = Field(default_factory=list)
+    dimension_count: int = 0
+    measure_count: int = 0
+    management_mode: ManagementMode
+    managed: bool = False
+
+
+class RuntimeSemanticModelListResponse(RuntimeModel):
+    items: list[RuntimeSemanticModelSummary] = Field(default_factory=list)
+    total: int = 0
+
+
+class RuntimeConnectorCreateRequest(RuntimeRequestModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    type: str = Field(..., min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=1024)
+    connection: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    secrets: dict[str, Any] = Field(default_factory=dict)
+    policy: dict[str, Any] | None = None
+    capabilities: ConnectorCapabilities | dict[str, Any] | None = None
+
+
+class RuntimeDatasetSourceRequest(RuntimeRequestModel):
+    table: str | None = None
+    resource: str | None = None
+    sql: str | None = None
+    path: str | None = None
+    storage_uri: str | None = None
+    format: str | None = None
+    file_format: str | None = None
+    header: bool | None = None
+    delimiter: str | None = None
+    quote: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_source(self) -> "RuntimeDatasetSourceRequest":
+        has_table = bool(str(self.table or "").strip())
+        has_resource = bool(str(self.resource or "").strip())
+        has_sql = bool(str(self.sql or "").strip())
+        has_file = bool(str(self.path or "").strip() or str(self.storage_uri or "").strip())
+        configured_modes = sum((has_table, has_resource, has_sql, has_file))
+        if configured_modes != 1:
+            raise ValueError(
+                "Dataset source must define exactly one of table, resource, sql, or path/storage_uri."
+            )
+        return self
+
+
+class RuntimeDatasetPolicyRequest(RuntimeRequestModel):
+    max_rows_preview: int | None = Field(default=None, ge=1)
+    max_export_rows: int | None = Field(default=None, ge=1)
+    redaction_rules: dict[str, str] = Field(default_factory=dict)
+    row_filters: list[str] = Field(default_factory=list)
+    allow_dml: bool = False
+
+
+class RuntimeDatasetCreateRequest(RuntimeRequestModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=1024)
+    connector: str = Field(..., min_length=1, max_length=255)
+    materialization_mode: DatasetMaterializationMode = DatasetMaterializationMode.LIVE
+    source: RuntimeDatasetSourceRequest
+    tags: list[str] = Field(default_factory=list)
+    policy: RuntimeDatasetPolicyRequest | None = None
+
+    @model_validator(mode="after")
+    def _validate_materialization_mode_source(self) -> "RuntimeDatasetCreateRequest":
+        resource_name = str(self.source.resource or "").strip()
+        table_name = str(self.source.table or "").strip()
+        sql = str(self.source.sql or "").strip()
+        storage_uri = str(self.source.storage_uri or "").strip()
+        path = str(self.source.path or "").strip()
+
+        if self.materialization_mode == DatasetMaterializationMode.SYNCED:
+            if sql or storage_uri or path:
+                raise ValueError(
+                    "Synced datasets must declare source.resource with the connector resource name."
+                )
+            if resource_name:
+                return self
+            if table_name:
+                self.source.resource = table_name
+                self.source.table = None
+                return self
+            raise ValueError(
+                "Synced datasets must declare source.resource with the connector resource name."
+            )
+
+        if resource_name:
+            raise ValueError(
+                "Live datasets cannot use source.resource; use source.table, source.sql, or source.path/source.storage_uri."
+            )
+        return self
+
+
+class RuntimeSemanticModelCreateRequest(RuntimeRequestModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=1024)
+    model: dict[str, Any] | None = None
+    datasets: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "RuntimeSemanticModelCreateRequest":
+        if not self.model and not self.datasets:
+            raise ValueError("Semantic model creation requires model or datasets.")
+        return self
 
 
 class RuntimeDatasetPreviewRequest(RuntimeRequestModel):

@@ -21,8 +21,10 @@ This app is the source for the runtime-owned UI shell.
 ## Auth flow
 
 - If runtime auth is disabled, the UI opens directly.
-- If runtime auth is `local` and no admin exists yet, the UI shows a bootstrap form for the first admin account.
-- If runtime auth is `local` and an admin already exists, the UI shows a login form.
+- If runtime auth is enabled and local operator sessions are enabled with no admin yet, the UI shows a bootstrap form for the first admin account.
+- Local operator auth follows the runtime metadata store: `in_memory` stays ephemeral, while `sqlite` and `postgres` persist auth/session state in the runtime metadata DB.
+- If runtime auth is enabled and local operator sessions are enabled with an existing admin, the UI shows a login form.
+- If runtime auth is enabled but local operator sessions are disabled, the UI reports bearer-only auth instead of showing signup or cloud auth flows.
 - Cloud signup, SSO landing flows, and org/project selectors are intentionally not part of this app.
 
 ## Commands

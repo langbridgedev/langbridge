@@ -1,8 +1,10 @@
-from __future__ import annotations
 
 import json
 from typing import Any, Callable
 
+from langbridge.connectors.base.config import ConnectorCapabilities as PluginConnectorCapabilities
+from langbridge.plugins.connectors import ConnectorPlugin
+from langbridge.runtime.models import ConnectorCapabilities
 from langbridge.runtime.models import SecretReference
 
 SecretResolver = Callable[[SecretReference], str]
@@ -57,3 +59,51 @@ def build_connector_runtime_payload(
 
     resolved_payload["config"] = runtime_config
     return resolved_payload
+
+
+def resolve_connector_capabilities(
+    *,
+    configured_capabilities: Any | None,
+    connector_type: str | None,
+    plugin: ConnectorPlugin | None,
+) -> ConnectorCapabilities:
+    base = _default_connector_capabilities(
+        connector_type=connector_type,
+        plugin=plugin,
+    )
+    if configured_capabilities is None:
+        return base
+
+    configured = _coerce_connector_capabilities(configured_capabilities)
+    return base.model_copy(
+        update=configured.model_dump(mode="json", exclude_unset=True)
+    )
+
+
+def _default_connector_capabilities(
+    *,
+    connector_type: str | None,
+    plugin: ConnectorPlugin | None,
+) -> ConnectorCapabilities:
+    if plugin is not None:
+        return _coerce_connector_capabilities(plugin.capabilities)
+
+    normalized_type = str(connector_type or "").strip().upper()
+    if normalized_type == "FILE":
+        return ConnectorCapabilities(
+            supports_live_datasets=True,
+            supports_synced_datasets=False,
+            supports_incremental_sync=False,
+            supports_query_pushdown=False,
+            supports_preview=True,
+            supports_federated_execution=True,
+        )
+    return ConnectorCapabilities()
+
+
+def _coerce_connector_capabilities(value: Any) -> ConnectorCapabilities:
+    if isinstance(value, ConnectorCapabilities):
+        return value
+    if isinstance(value, PluginConnectorCapabilities):
+        return ConnectorCapabilities.model_validate(value.model_dump(mode="json"))
+    return ConnectorCapabilities.model_validate(value or {})

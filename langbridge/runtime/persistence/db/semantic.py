@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UUID, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, String, Text, Uuid as UUID, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -26,6 +26,9 @@ class SemanticModelEntry(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    
+    management_mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    lifecycle_state: Mapped[str] = mapped_column(String(50), nullable=False)
 
     workspace = relationship("Workspace", back_populates="semantic_models")
     vector_indexes: Mapped[list["SemanticVectorIndexEntry"]] = relationship(

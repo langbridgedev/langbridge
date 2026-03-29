@@ -24,7 +24,7 @@ def __getattr__(name: str) -> Any:
 
         return build_local_runtime
     if name == "build_configured_local_runtime":
-        from langbridge.runtime.local_config import build_configured_local_runtime
+        from langbridge.runtime.bootstrap import build_configured_local_runtime
 
         return build_configured_local_runtime
     if name in {"create_runtime_api_app", "run_runtime_api"}:

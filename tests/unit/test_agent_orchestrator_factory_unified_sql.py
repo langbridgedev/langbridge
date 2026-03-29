@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
@@ -7,7 +6,7 @@ from typing import Any
 import pytest
 
 from langbridge.runtime.persistence.db.dataset import DatasetColumnRecord, DatasetRecord
-from langbridge.runtime.models import SemanticModelMetadata
+from langbridge.runtime.models import LifecycleState, ManagementMode, SemanticModelMetadata
 from langbridge.orchestrator.runtime.agent_orchestrator_factory import (
     AgentOrchestratorFactory,
     AgentToolConfig,
@@ -191,6 +190,8 @@ def _build_semantic_entry(
         created_at=now,
         updated_at=now,
         connector_id=dataset.connection_id,
+        management_mode=ManagementMode.CONFIG_MANAGED,
+        lifecycle_state=LifecycleState.ACTIVE,
     )
 
 

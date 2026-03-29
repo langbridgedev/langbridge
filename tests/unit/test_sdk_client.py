@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import asyncio
 import json
@@ -34,6 +33,7 @@ class _FakeRuntimeHost:
         self.execute_sql_text_calls: list[dict[str, object]] = []
         self.query_semantic_calls: list[dict[str, object]] = []
         self.sync_calls: list[dict[str, object]] = []
+        self.close_calls = 0
 
     async def query_dataset(self, *, request):
         return {
@@ -136,9 +136,18 @@ class _FakeRuntimeHost:
                 "id": uuid.uuid4(),
                 "name": "billing_demo",
                 "connector_type": "STRIPE",
+                "connector_family": "api",
                 "supports_sync": True,
                 "supported_resources": ["customers"],
                 "sync_strategy": "INCREMENTAL",
+                "capabilities": {
+                    "supports_live_datasets": False,
+                    "supports_synced_datasets": True,
+                    "supports_incremental_sync": True,
+                    "supports_query_pushdown": False,
+                    "supports_preview": False,
+                    "supports_federated_execution": False,
+                },
                 "managed": False,
             }
         ]
@@ -202,6 +211,9 @@ class _FakeRuntimeHost:
             ],
             "summary": f"Connector sync completed for {len(resources)} resource(s).",
         }
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
 
 def test_remote_sdk_dataset_query_polls_preview_job() -> None:
     workspace_id = uuid.uuid4()
@@ -268,6 +280,8 @@ def test_remote_sdk_list_datasets() -> None:
                     "description": "Orders dataset",
                     "status": "published",
                     "dataset_type": "TABLE",
+                    "materialization_mode": "live",
+                    "management_mode": "runtime_managed",
                     "source_kind": "database",
                     "storage_kind": "table",
                     "relation_identity": {
@@ -311,6 +325,7 @@ def test_remote_sdk_list_datasets() -> None:
 
     assert result.total == 1
     assert result.items[0].name == "orders"
+    assert result.items[0].materialization_mode == "live"
 
 
 def test_remote_sdk_sql_query_polls_job_and_fetches_results() -> None:
@@ -561,6 +576,21 @@ def test_local_sdk_agents_ask_uses_runtime_host() -> None:
     assert result.job_id is not None
 
 
+def test_local_sdk_close_closes_runtime_host() -> None:
+    actor_id = uuid.uuid4()
+    runtime_host = _FakeRuntimeHost(actor_id=actor_id)
+    client = LangbridgeClient.for_local_runtime(
+        runtime_host=runtime_host,
+        default_workspace_id=runtime_host.context.workspace_id,
+        default_actor_id=actor_id,
+    )
+
+    client.close()
+    client.close()
+
+    assert runtime_host.close_calls == 2
+
+
 def test_remote_sdk_runtime_host_requests_use_runtime_payload_shapes() -> None:
     workspace_id = uuid.uuid4()
     actor_id = uuid.uuid4()
@@ -764,6 +794,8 @@ def test_local_sdk_sync_clients_use_runtime_host() -> None:
 
     assert connectors.total == 1
     assert connectors.items[0].name == "billing_demo"
+    assert connectors.items[0].connector_family == "api"
+    assert connectors.items[0].capabilities["supports_synced_datasets"] is True
     assert resources.total == 1
     assert resources.items[0].name == "customers"
     assert states.total == 1

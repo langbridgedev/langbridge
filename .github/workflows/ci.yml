@@ -16,16 +16,6 @@ jobs:
     name: Backend Tests
     runs-on: ubuntu-latest
     env:
-      ENVIRONMENT: local
-      LOCAL_DB: .cache/ci/local.db
-      JWT_SECRET: ci-jwt-secret
-      GITHUB_CLIENT_ID: ci-github-client-id
-      GITHUB_CLIENT_SECRET: ci-github-client-secret
-      GOOGLE_CLIENT_ID: ci-google-client-id
-      GOOGLE_CLIENT_SECRET: ci-google-client-secret
-      SERVICE_USER_SECRET: ci-service-secret
-      BACKEND_URL: http://127.0.0.1:8000
-      FRONTEND_URL: http://127.0.0.1:3000
       PYTHONPATH: .
     steps:
       - name: Checkout

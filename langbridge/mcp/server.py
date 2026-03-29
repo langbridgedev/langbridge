@@ -12,7 +12,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from langbridge.runtime.hosting.auth import RuntimeAuthPrincipal, RuntimeAuthResolver
-from langbridge.runtime.local_config import ConfiguredLocalRuntimeHost
+from langbridge.runtime.bootstrap import ConfiguredLocalRuntimeHost
 from langbridge.runtime.models.jobs import (
     CreateDatasetPreviewJobRequest,
     CreateSqlJobRequest,

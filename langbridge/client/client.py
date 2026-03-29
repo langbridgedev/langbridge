@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import asyncio
 import inspect
@@ -174,6 +173,7 @@ class DatasetSummary(_AwaitableModel):
     description: str | None = None
     connector: str | None = None
     semantic_model: str | None = None
+    materialization_mode: str | None = None
     managed: bool = False
 
 
@@ -234,9 +234,11 @@ class ConnectorSummary(_AwaitableModel):
     name: str
     description: str | None = None
     connector_type: str | None = None
+    connector_family: str | None = None
     supports_sync: bool = False
     supported_resources: list[str] = Field(default_factory=list)
     sync_strategy: str | None = None
+    capabilities: dict[str, Any] = Field(default_factory=dict)
     managed: bool = False
 
 
@@ -824,8 +826,12 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
                 DatasetSummary(
                     id=item.id,
                     name=item.name,
-                    label=item.name,
+                    label=item.label or item.name,
                     description=item.description,
+                    connector=item.connector,
+                    semantic_model=item.semantic_model,
+                    materialization_mode=item.materialization_mode,
+                    managed=item.managed,
                 )
                 for item in payload.items
             ],
@@ -1085,7 +1091,13 @@ class LocalRuntimeAdapter(_SdkAdapter):
         self._runtime_host = runtime_host
 
     def close(self) -> None:
-        return None
+        aclose = getattr(self._runtime_host, "aclose", None)
+        if callable(aclose):
+            _run_awaitable(aclose())
+            return
+        close = getattr(self._runtime_host, "close", None)
+        if callable(close):
+            close()
 
     def list_datasets(
         self,
@@ -1740,7 +1752,7 @@ class LangbridgeClient:
         request_id: str | None = None,
         roles: list[str] | tuple[str, ...] | None = None,
     ) -> "LangbridgeClient":
-        from langbridge.runtime.local_config import build_configured_local_runtime
+        from langbridge.runtime.bootstrap import build_configured_local_runtime
 
         runtime_host = build_configured_local_runtime(
             config_path=config_path,

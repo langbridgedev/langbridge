@@ -63,6 +63,13 @@ DatasetExecutionRequest = (
 )
 
 
+async def _flush_stores(*stores: Any) -> None:
+    for store in stores:
+        flush = getattr(store, "flush", None)
+        if callable(flush):
+            await flush()
+
+
 class DatasetQueryService:
     def __init__(
         self,
@@ -374,6 +381,7 @@ class DatasetQueryService:
             "source_storage_uri": storage_uri,
         }
         dataset.status = "published"
+        dataset.materialization_mode = "synced"
         dataset.table_name = dataset.table_name or dataset.name
         dataset.schema_name = dataset.schema_name or None
         dataset.row_count_estimate = int(count_rows[0][0]) if count_rows else None
@@ -600,6 +608,8 @@ class DatasetQueryService:
             last_profiled_at=None,
             created_at=now,
             updated_at=now,
+            management_mode="runtime_managed",
+            lifecycle_state="active",
         )
         self._dataset_repository.add(dataset)
 
@@ -803,6 +813,11 @@ class DatasetQueryService:
     ) -> None:
         if self._dataset_revision_repository is None:
             return
+        await _flush_stores(
+            self._dataset_repository,
+            self._dataset_column_repository,
+            self._dataset_policy_repository,
+        )
 
         columns = await self._dataset_column_repository.list_for_dataset(dataset_id=dataset.id)
         next_revision = await self._dataset_revision_repository.next_revision_number(dataset_id=dataset.id)
@@ -875,6 +890,7 @@ class DatasetQueryService:
             "description": dataset.description,
             "tags": list(dataset.tags_json or []),
             "dataset_type": dataset.dataset_type,
+            "materialization_mode": dataset.materialization_mode_value,
             "dialect": dataset.dialect,
             "storage_uri": dataset.storage_uri,
             "catalog_name": dataset.catalog_name,
@@ -894,10 +910,12 @@ class DatasetQueryService:
                 {
                     "source_type": "connection",
                     "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
+                    "materialization_mode": dataset.materialization_mode_value,
                 },
                 {
                     "source_type": "source_table",
                     "connection_id": str(dataset.connection_id) if dataset.connection_id else None,
+                    "materialization_mode": dataset.materialization_mode_value,
                     "catalog_name": dataset.catalog_name,
                     "schema_name": dataset.schema_name,
                     "table_name": dataset.table_name,
@@ -912,6 +930,7 @@ class DatasetQueryService:
             return [
                 {
                     "source_type": "file_resource",
+                    "materialization_mode": dataset.materialization_mode_value,
                     "storage_uri": storage_uri,
                     "file_config": dict(dataset.file_config_json or {}),
                 }
@@ -924,7 +943,13 @@ class DatasetQueryService:
                 if not value or value in seen:
                     continue
                 seen.add(value)
-                bindings.append({"source_type": "dataset", "dataset_id": value})
+                bindings.append(
+                    {
+                        "source_type": "dataset",
+                        "dataset_id": value,
+                        "materialization_mode": dataset.materialization_mode_value,
+                    }
+                )
             plan = dataset.federated_plan_json if isinstance(dataset.federated_plan_json, dict) else {}
             tables_payload = plan.get("tables")
             iterable = tables_payload.values() if isinstance(tables_payload, dict) else tables_payload or []
@@ -938,7 +963,13 @@ class DatasetQueryService:
                 if not value or value in seen:
                     continue
                 seen.add(value)
-                bindings.append({"source_type": "dataset", "dataset_id": value})
+                bindings.append(
+                    {
+                        "source_type": "dataset",
+                        "dataset_id": value,
+                        "materialization_mode": dataset.materialization_mode_value,
+                    }
+                )
             return bindings
         return []
 

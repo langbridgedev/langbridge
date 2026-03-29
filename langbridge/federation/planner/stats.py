@@ -1,5 +1,4 @@
-﻿from __future__ import annotations
-
+﻿
 from collections import defaultdict
 
 from langbridge.federation.models.virtual_dataset import TableStatistics

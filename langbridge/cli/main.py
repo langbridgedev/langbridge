@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import argparse
 import json
@@ -12,6 +11,7 @@ from typing import Any
 import httpx
 
 from langbridge.client import LangbridgeClient
+from langbridge.runtime.persistence.migrations import migrate_runtime_metadata_for_config
 from langbridge.runtime import run_runtime_api
 
 
@@ -51,6 +51,10 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--debug", action="store_true", help="Enable verbose runtime and MCP debug logging")
     serve.add_argument("--reload", action="store_true", help="Enable auto reload")
     serve.set_defaults(handler=_handle_serve)
+
+    migrate = subparsers.add_parser("migrate", help="Apply runtime metadata database migrations.")
+    migrate.add_argument("--config", required=True, help="Path to langbridge_config.yml")
+    migrate.set_defaults(handler=_handle_migrate)
 
     info = subparsers.add_parser("info", help="Show runtime host information.")
     _add_client_source_args(info)
@@ -172,6 +176,20 @@ def _handle_serve(args: argparse.Namespace) -> int:
         features=_parse_feature_flags(args.features),
         debug=bool(args.debug),
         reload=bool(args.reload),
+    )
+    return 0
+
+
+def _handle_migrate(args: argparse.Namespace) -> int:
+    result = migrate_runtime_metadata_for_config(args.config)
+    _print_json(
+        {
+            "ok": True,
+            "current_revision": result.current_revision,
+            "head_revision": result.head_revision,
+            "upgraded": result.upgraded,
+            "stamped_legacy_schema": result.stamped_legacy_schema,
+        }
     )
     return 0
 

@@ -21,8 +21,19 @@ class ThreadRepository(AsyncBaseRepository[Thread]):
             .order_by(Thread.created_at.desc())
         )
 
+    def _select_for_workspace(self, workspace_id: uuid.UUID):
+        return (
+            select(Thread)
+            .filter(Thread.workspace_id == workspace_id)
+            .order_by(Thread.created_at.desc())
+        )
+
     async def list_for_actor(self, actor_id: uuid.UUID) -> list[Thread]:
         result = await self._session.scalars(self._select_for_actor(actor_id))
+        return list(result.all())
+
+    async def list_for_workspace(self, workspace_id: uuid.UUID) -> list[Thread]:
+        result = await self._session.scalars(self._select_for_workspace(workspace_id))
         return list(result.all())
 
     async def get_for_actor(self, thread_id: uuid.UUID, actor_id: uuid.UUID) -> Thread | None:

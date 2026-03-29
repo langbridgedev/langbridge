@@ -1,0 +1,24 @@
+version: 1
+
+runtime:
+  mode: local
+  # Explicit runtime metadata persistence for the synced datasets and sync state.
+  metadata_store:
+    type: sqlite
+    path: .langbridge/metadata.db
+  execution:
+    engine: duckdb
+    duckdb:
+      path: .langbridge/duckdb/runtime.duckdb
+      temp_directory: .langbridge/tmp
+      threads: 4
+
+connectors:
+  - name: hubspot_demo
+    type: hubspot
+    description: Self-hosted HubSpot sync example backed by a live HubSpot private app token.
+    connection: {}
+    secrets:
+      access_token:
+        provider_type: env
+        identifier: HUBSPOT_ACCESS_TOKEN

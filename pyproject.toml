@@ -9,6 +9,7 @@ description = "Langbridge orchestration platform"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "alembic==1.14.1",
   "fastapi[standard]==0.117.1",
   "uvicorn[standard]==0.32.0",
   "opentelemetry-api==1.39.1",

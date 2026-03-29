@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[2]))
 
 from langbridge.runtime.models import (
+    LifecycleState,
+    ManagementMode,
     SemanticVectorIndexMetadata,
     SemanticVectorIndexStatus,
     SemanticVectorStoreTarget,
@@ -53,6 +55,8 @@ def test_semantic_vector_index_store_round_trips_dimension_metadata() -> None:
                     name="orders_semantic",
                     content_yaml="version: '1.0'\ndatasets: {}",
                     content_json="{}",
+                    management_mode=ManagementMode.RUNTIME_MANAGED.value,
+                    lifecycle_state=LifecycleState.ACTIVE.value,
                 )
             )
             await session.commit()

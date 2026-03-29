@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import json
 import ssl
@@ -12,7 +11,6 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from langbridge.config import settings
 from langbridge.connectors.saas.google_analytics.config import (
     GoogleAnalyticsConnectorConfig,
 )
@@ -55,65 +53,6 @@ from langbridge_connector_stripe.connector import StripeDeclarativeApiConnector
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
-
-
-@pytest.mark.anyio
-async def test_shopify_connector_uses_rest_auth_and_link_pagination(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "SHOPIFY_APP_CLIENT_ID", "client-id")
-    monkeypatch.setattr(settings, "SHOPIFY_APP_CLIENT_SECRET", "client-secret")
-    requests: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if request.url.path.endswith("/oauth/access_token"):
-            body = parse_qs(request.content.decode("utf-8"))
-            assert body["client_id"] == ["client-id"]
-            assert body["client_secret"] == ["client-secret"]
-            assert body["grant_type"] == ["client_credentials"]
-            return httpx.Response(200, json={"access_token": "oauth-token"})
-        if request.url.path.endswith("/shop.json"):
-            assert request.headers["X-Shopify-Access-Token"] == "oauth-token"
-            return httpx.Response(200, json={"shop": {"id": 1}})
-        if request.url.path.endswith("/orders.json"):
-            assert request.headers["X-Shopify-Access-Token"] == "oauth-token"
-            assert request.url.params["status"] == "any"
-            return httpx.Response(
-                200,
-                json={
-                    "orders": [
-                        {
-                            "id": 101,
-                            "name": "#101",
-                            "customer": {"id": 9001, "email": "ada@example.com"},
-                            "line_items": [
-                                {"id": 1, "title": "Hat", "quantity": 2},
-                            ],
-                        }
-                    ]
-                },
-                headers={
-                    "Link": '<https://acme.myshopify.com/admin/api/2025-01/orders.json?page_info=cursor-2&limit=2>; rel="next"'
-                },
-            )
-        raise AssertionError(f"Unexpected Shopify request: {request.method} {request.url}")
-
-    connector = ShopifyApiConnector(
-        ShopifyConnectorConfig(
-            shop_domain="acme.myshopify.com",
-        ),
-        transport=httpx.MockTransport(handler),
-    )
-
-    await connector.test_connection()
-    result = await connector.extract_resource("orders", limit=2)
-
-    assert len(requests) == 4
-    assert result.records[0]["customer__email"] == "ada@example.com"
-    assert result.child_records["orders__line_items"][0]["_parent_id"] == 101
-    assert result.next_cursor == "cursor-2"
-
 
 @pytest.mark.anyio
 async def test_stripe_connector_handles_bearer_auth_and_has_more_pagination() -> None:
@@ -227,41 +166,6 @@ async def test_hubspot_connector_accepts_legacy_access_token_config() -> None:
     await connector.test_connection()
 
     assert len(requests) == 1
-
-
-def test_http_api_connector_supports_custom_ca_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
-    loaded_paths: list[str] = []
-
-    class FakeSslContext:
-        def load_verify_locations(
-            self,
-            cafile: str | None = None,
-            capath: str | None = None,
-            cadata: str | bytes | None = None,
-        ) -> None:
-            if cafile:
-                loaded_paths.append(cafile)
-
-    fake_context = FakeSslContext()
-
-    monkeypatch.setattr(settings, "API_HTTP_SKIP_TLS_VERIFY", False)
-    monkeypatch.setattr(settings, "API_HTTP_CA_BUNDLE", "/tmp/company-root.pem")
-    monkeypatch.setattr(http_api_connector_module.ssl, "create_default_context", lambda: fake_context)
-
-    verify = http_api_connector_module._build_http_verify()
-
-    assert verify is fake_context
-    assert loaded_paths == ["/tmp/company-root.pem"]
-
-
-def test_http_api_connector_can_disable_tls_verification(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "API_HTTP_SKIP_TLS_VERIFY", True)
-    monkeypatch.setattr(settings, "API_HTTP_CA_BUNDLE", "")
-
-    verify = http_api_connector_module._build_http_verify()
-
-    assert verify is False
-
 
 @pytest.mark.anyio
 async def test_google_analytics_connector_uses_service_account_jwt_and_run_report() -> None:

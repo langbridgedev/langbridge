@@ -30,18 +30,14 @@ from langbridge.runtime.ports import (
     ThreadMessageStore,
     ThreadStore,
 )
-from langbridge.orchestrator.agents.supervisor import (
-    MemoryManager,
-)
+from langbridge.orchestrator.agents.supervisor.memory_manager import MemoryManager
 from langbridge.orchestrator.definitions import (
     AgentDefinitionModel,
 )
 from langbridge.orchestrator.llm.provider import (
     create_provider,
 )
-from langbridge.orchestrator.runtime import (
-    AgentOrchestratorFactory,
-)
+from langbridge.orchestrator.runtime.agent_orchestrator_factory import AgentOrchestratorFactory
 from ..execution.federated_query_tool import FederatedQueryTool
 from .semantic_vector_search_service import SemanticVectorSearchService
 

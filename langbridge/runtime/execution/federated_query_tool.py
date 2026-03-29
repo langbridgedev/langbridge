@@ -120,10 +120,17 @@ class FederatedQueryTool:
             metadata = binding.metadata if isinstance(binding.metadata, dict) else {}
             descriptor_source_kind = str(descriptor_payload.get("source_kind") or "").strip().lower()
             descriptor_storage_kind = str(descriptor_payload.get("storage_kind") or "").strip().lower()
+            descriptor_materialization_mode = str(
+                descriptor_payload.get("materialization_mode") or ""
+            ).strip().lower()
             source_kind = str(metadata.get("source_kind") or descriptor_source_kind or "connector").strip().lower()
-            is_file_like_source = source_kind == "file" or (
-                descriptor_source_kind in {"file", "saas", "api"}
-                and descriptor_storage_kind in {"csv", "parquet"}
+            is_file_like_source = (
+                source_kind == "file"
+                or descriptor_storage_kind in {"csv", "parquet", "json"}
+                or (
+                    descriptor_materialization_mode == "synced"
+                    and descriptor_storage_kind in {"csv", "parquet", "json"}
+                )
             )
             if is_file_like_source:
                 sources[source_id] = DuckDbFileRemoteSource(

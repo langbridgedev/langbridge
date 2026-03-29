@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 from typing import Any
 
@@ -32,8 +31,8 @@ def from_thread_record(value: Any | None) -> RuntimeThread | None:
         title=getattr(value, "title", None),
         state=str(getattr(state, "value", state)),
         metadata=dict(
-            getattr(value, "metadata", None)
-            or getattr(value, "metadata_json", None)
+            getattr(value, "metadata_json", None)
+            or getattr(value, "metadata", None)
             or {}
         ),
         created_at=getattr(value, "created_at", None),
@@ -120,8 +119,8 @@ def from_conversation_memory_record(
         category=str(getattr(category, "value", category)),
         content=str(getattr(value, "content", "") or ""),
         metadata=dict(
-            getattr(value, "metadata", None)
-            or getattr(value, "metadata_json", None)
+            getattr(value, "metadata_json", None)
+            or getattr(value, "metadata", None)
             or {}
         ),
         created_at=getattr(value, "created_at", None),

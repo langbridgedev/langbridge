@@ -2,6 +2,7 @@ from importlib import import_module
 from typing import Any
 
 from langbridge.plugins import (
+    ConnectorCapabilities,
     ConnectorFamily,
     ConnectorPlugin,
     ConnectorRuntimeType,
@@ -18,6 +19,7 @@ register_connector_plugin(
     ConnectorPlugin(
         connector_type=ConnectorRuntimeType.MONGODB,
         connector_family=ConnectorFamily.DATABASE,
+        capabilities=ConnectorCapabilities(),
         config_factory=MongoDBConnectorConfigFactory,
         config_schema_factory=MongoDBConnectorConfigSchemaFactory,
     )

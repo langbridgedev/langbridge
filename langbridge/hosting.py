@@ -1,6 +1,5 @@
 """Public hosting namespace for the Langbridge monolith."""
 
-from __future__ import annotations
 
 from typing import Any
 

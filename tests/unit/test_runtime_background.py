@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import asyncio
 import uuid
@@ -14,6 +13,7 @@ from langbridge.runtime.hosting import (
     build_semantic_vector_refresh_default_task,
     create_runtime_api_app,
 )
+from langbridge.runtime.hosting.auth import RuntimeAuthConfig, RuntimeAuthMode
 from langbridge.runtime.services.runtime_host import RuntimeHost, RuntimeProviders, RuntimeServices
 
 
@@ -56,6 +56,11 @@ def _build_runtime_host(
             semantic_vector_search=semantic_vector_search,  # type: ignore[arg-type]
         ),
     )
+
+
+def _create_runtime_app(runtime_host: RuntimeHost, **kwargs):
+    auth_config = kwargs.pop("auth_config", RuntimeAuthConfig(mode=RuntimeAuthMode.none))
+    return create_runtime_api_app(runtime_host=runtime_host, auth_config=auth_config, **kwargs)
 
 
 @pytest.mark.anyio
@@ -150,7 +155,7 @@ def test_runtime_api_app_starts_registered_default_background_tasks() -> None:
     async def _record(context):
         observed.append((context.task_name, context.kind))
 
-    app = create_runtime_api_app(
+    app = _create_runtime_app(
         runtime_host=runtime_host,  # type: ignore[arg-type]
         default_background_tasks=[
             RuntimeBackgroundTaskDefinition.default(
@@ -177,7 +182,7 @@ def test_runtime_api_app_registers_semantic_vector_refresh_task_when_service_exi
         semantic_vector_search=RecordingSemanticVectorSearchService(),
     )
 
-    app = create_runtime_api_app(runtime_host=runtime_host)
+    app = _create_runtime_app(runtime_host)
 
     task_names = [task.name for task in app.state.runtime_background_tasks.default_tasks]
     assert "semantic-vector-refresh" in task_names
@@ -194,7 +199,7 @@ def test_runtime_api_app_skips_semantic_vector_refresh_task_when_service_cannot_
         semantic_vector_search=RecordingSemanticVectorSearchService(can_refresh=False),
     )
 
-    app = create_runtime_api_app(runtime_host=runtime_host)
+    app = _create_runtime_app(runtime_host)
 
     task_names = [task.name for task in app.state.runtime_background_tasks.default_tasks]
     assert "semantic-vector-refresh" not in task_names

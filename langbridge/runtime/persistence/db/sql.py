@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
@@ -14,7 +13,7 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
-    UUID,
+    Uuid as UUID,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 

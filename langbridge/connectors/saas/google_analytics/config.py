@@ -5,6 +5,7 @@ from langbridge.connectors.base.config import (
     BaseConnectorConfigFactory,
     BaseConnectorConfigSchemaFactory,
     ConnectorAuthFieldSchema,
+    ConnectorCapabilities,
     ConnectorConfigEntrySchema,
     ConnectorConfigSchema,
     ConnectorFamily,
@@ -92,5 +93,9 @@ class GoogleAnalyticsConnectorConfigSchemaFactory(BaseConnectorConfigSchemaFacto
                 supported_resources=list(GOOGLE_ANALYTICS_SUPPORTED_RESOURCES),
                 auth_schema=list(GOOGLE_ANALYTICS_AUTH_SCHEMA),
                 sync_strategy=GOOGLE_ANALYTICS_SYNC_STRATEGY,
+                capabilities=ConnectorCapabilities(
+                    supports_synced_datasets=True,
+                    supports_incremental_sync=False,
+                ),
             ),
         )

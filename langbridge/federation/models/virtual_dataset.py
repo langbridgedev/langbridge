@@ -14,6 +14,7 @@ class DatasetExecutionDescriptor(BaseModel):
     dataset_id: UUID | None = None
     connector_id: UUID | None = None
     name: str | None = None
+    materialization_mode: str | None = None
     source_kind: str
     connector_kind: str | None = None
     storage_kind: str

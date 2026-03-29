@@ -1,8 +1,10 @@
 # Runtime Host Sync Example
 
 This example runs a self-hosted Langbridge runtime host next to a local
-Stripe-like mock API and syncs the `customers` resource into a runtime-managed
-dataset.
+Stripe-like mock API and syncs the declared `billing_customers` dataset from the
+`customers` resource.
+The declared synced dataset uses `materialization_mode: synced` with
+`source.resource: customers`.
 
 It is fully runtime-scoped and does not depend on `langbridge-cloud`.
 
@@ -10,6 +12,12 @@ It is fully runtime-scoped and does not depend on `langbridge-cloud`.
 
 - `runtime-host`: self-hosted runtime host
 - `mock-stripe`: local HTTP API exposing `/v1/account` and `/v1/customers`
+
+The runtime host metadata store is configured explicitly in
+`langbridge_config.yml`. This example uses SQLite for local durability under
+`.langbridge/metadata.db`; move that block to `postgres` for production-style
+deployments. It also leaves `runtime.migrations.auto_apply: true`, so the host
+upgrades runtime metadata schema on startup by default.
 
 ## Start The Stack
 
@@ -39,13 +47,17 @@ List configured connectors:
 curl http://localhost:8000/api/runtime/v1/connectors
 ```
 
+The connector payload now includes explicit capability flags. In this example
+`billing_demo` supports synced datasets, not live datasets.
+
 List syncable resources:
 
 ```bash
 curl http://localhost:8000/api/runtime/v1/connectors/billing_demo/sync/resources
 ```
 
-You should see `customers` with `status` set to `never_synced`.
+You should see `customers` with `status` set to `never_synced` and
+`dataset_names` including `billing_customers`.
 
 ## Run A Sync
 
@@ -60,8 +72,7 @@ SYNC_RESPONSE=$(curl -s -X POST http://localhost:8000/api/runtime/v1/connectors/
 printf '%s\n' "$SYNC_RESPONSE"
 ```
 
-The sync response returns the runtime-managed dataset name in
-`resources[0].dataset_names[0]`.
+The sync response returns the declared dataset name in `resources[0].dataset_names[0]`.
 
 ## Inspect Sync State
 
@@ -75,8 +86,12 @@ curl http://localhost:8000/api/runtime/v1/connectors/billing_demo/sync/states
 curl http://localhost:8000/api/runtime/v1/datasets
 ```
 
+The synced dataset returned by this example will report `materialization_mode`
+as `synced`, and before the first sync it will appear with `status:
+pending_sync`.
+
 ```bash
-DATASET_NAME=$(printf '%s' "$SYNC_RESPONSE" | python -c "import json,sys; print(json.load(sys.stdin)['resources'][0]['dataset_names'][0])")
+DATASET_NAME=billing_customers
 
 curl -X POST "http://localhost:8000/api/runtime/v1/datasets/${DATASET_NAME}/preview" \
   -H "Content-Type: application/json" \
@@ -98,5 +113,7 @@ langbridge datasets preview --url http://localhost:8000 --dataset "$DATASET_NAME
 
 - runtime sync state is workspace-scoped inside the runtime
 - the resulting synced dataset is owned by the runtime, not by a cloud control plane
+- this example shows a config-defined synced dataset that is materialized and refreshed by connector sync
+- preview/query will fail honestly until the first sync populates the dataset
 - if you later enable host auth, send a bearer token and see `docs/deployment/self-hosted.md`
 - remove all persisted example state with `docker compose down -v`

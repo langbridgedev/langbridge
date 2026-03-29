@@ -1,4 +1,5 @@
 from langbridge.plugins import (
+    ConnectorCapabilities,
     ConnectorPlugin,
     ConnectorFamily,
     ConnectorRuntimeType,
@@ -19,6 +20,10 @@ register_connector_plugin(
     ConnectorPlugin(
         connector_type=ConnectorRuntimeType.HUBSPOT,
         connector_family=ConnectorFamily.API,
+        capabilities=ConnectorCapabilities(
+            supports_synced_datasets=True,
+            supports_incremental_sync=True,
+        ),
         supported_resources=HUBSPOT_SUPPORTED_RESOURCES,
         auth_schema=HUBSPOT_AUTH_SCHEMA,
         sync_strategy=HUBSPOT_SYNC_STRATEGY,

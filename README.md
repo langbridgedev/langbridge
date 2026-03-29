@@ -42,6 +42,12 @@ Start the runtime host:
 langbridge serve --config examples/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
 ```
 
+Apply runtime metadata migrations explicitly when you need a controlled rollout:
+
+```bash
+langbridge migrate --config examples/runtime_host/langbridge_config.yml
+```
+
 Open the runtime API docs at `http://127.0.0.1:8000/api/runtime/docs`.
 
 Enable the runtime UI:
@@ -61,6 +67,12 @@ Enable both:
 ```bash
 langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui,mcp
 ```
+
+SQLite metadata stores auto-apply Alembic migrations by default on startup. For
+managed/self-hosted production deployments, switch `runtime.metadata_store` to
+Postgres, run `langbridge migrate --config ...`, and set
+`runtime.migrations.auto_apply: false` if you want startup to fail until the DB
+is upgraded explicitly.
 
 ## Runtime UI
 
@@ -114,6 +126,8 @@ The runtime host supports thin auth modes:
 
 - `examples/runtime_host/`: self-hosted runtime host over a local config
 - `examples/runtime_host_sync/`: connector sync example
+- `examples/shopify_sync/`: live Shopify declarative connector sync example
+- `examples/hubspot_sync/`: live HubSpot declarative connector sync example
 - `examples/sdk/semantic_query/`: local SDK + semantic query walkthrough
 - `examples/sdk/federated_query/`: local SDK + federated query walkthrough
 

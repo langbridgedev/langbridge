@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import uuid
 from datetime import datetime
@@ -10,7 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     JSON,
     String,
-    UUID,
+    Uuid as UUID,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship

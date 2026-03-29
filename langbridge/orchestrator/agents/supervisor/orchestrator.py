@@ -13,6 +13,7 @@ from langbridge.runtime.events import (
     AgentEventVisibility,
     AgentEventEmitter,
 )
+from langbridge.orchestrator.definitions import ResponseMode
 from langbridge.orchestrator.agents.models import PlanExecutionArtifacts
 from langbridge.orchestrator.agents.reasoning.agent import ReasoningAgent, ReasoningDecision
 from langbridge.orchestrator.agents.analyst import AnalystAgent
@@ -48,6 +49,10 @@ from langbridge.orchestrator.agents.web_search import WebSearchAgent, WebSearchR
 from langbridge.orchestrator.tools.semantic_query_builder import (
     QueryBuilderCopilotRequest,
     QueryBuilderCopilotResponse,
+)
+from langbridge.orchestrator.runtime.analysis_grounding import (
+    build_analyst_grounding,
+    compose_analyst_summary,
 )
 from langbridge.orchestrator.tools.sql_analyst.interfaces import AnalystQueryResponse
 
@@ -87,6 +92,7 @@ class SupervisorOrchestrator:
         question_classifier: Optional[QuestionClassifier] = None,
         entity_resolver: Optional[EntityResolver] = None,
         clarification_manager: Optional[ClarificationManager] = None,
+        response_mode: ResponseMode = ResponseMode.analyst,
     ) -> None:
         self.analyst_agent = analyst_agent
         self.visual_agent = visual_agent
@@ -100,6 +106,7 @@ class SupervisorOrchestrator:
         self.question_classifier = question_classifier or QuestionClassifier(llm=llm, logger=self.logger)
         self.entity_resolver = entity_resolver or EntityResolver(llm=llm, logger=self.logger)
         self.clarification_manager = clarification_manager or ClarificationManager(default_max_turns=2)
+        self.response_mode = response_mode
 
     async def run_copilot(
         self,
@@ -316,6 +323,7 @@ class SupervisorOrchestrator:
             data_payload=data_payload,
             visualization=visualization,
         )
+        analyst_grounding = build_analyst_grounding(user_query, data_payload)
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 
@@ -337,6 +345,8 @@ class SupervisorOrchestrator:
             "resolved_entities": resolved_entities.model_dump(),
             "clarification_state": clarification_state.model_dump(),
             "assumptions_applied": assumptions_applied,
+            "response_mode": getattr(self.response_mode, "value", None) or str(self.response_mode or "analyst"),
+            "analyst_grounding": analyst_grounding,
         }
         if artifacts.research_result:
             diagnostics["research"] = artifacts.research_result.to_dict()
@@ -358,6 +368,8 @@ class SupervisorOrchestrator:
             web_search_result=web_search_result,
             research_result=artifacts.research_result or combined_artifacts.research_result,
             assumptions_applied=assumptions_applied,
+            response_mode=self.response_mode,
+            analyst_grounding=analyst_grounding,
         )
 
         self.logger.info(
@@ -564,7 +576,11 @@ class SupervisorOrchestrator:
                     {
                         "tool_name": AgentName.ANALYST.value,
                         "arguments": tool_args,
-                        "result": self._summarize_analyst_result(analyst_result, data_payload),
+                        "result": self._summarize_analyst_result(
+                            analyst_result,
+                            data_payload,
+                            question=str(tool_args.get("query") or user_query),
+                        ),
                         "duration_ms": duration_ms,
                         "error": self._coerce_tool_error(analyst_result.error),
                     }
@@ -572,10 +588,15 @@ class SupervisorOrchestrator:
                 artifacts.analyst_result = analyst_result
                 if data_payload:
                     artifacts.data_payload = data_payload
+                analyst_grounding = build_analyst_grounding(
+                    str(tool_args.get("query") or user_query),
+                    data_payload,
+                )
                 step_outputs[step.id] = {
                     "agent": AgentName.ANALYST.value,
                     "analyst_result": analyst_result,
                     "data_payload": data_payload,
+                    "analyst_grounding": analyst_grounding,
                 }
                 await self._emit_event(
                     event_type="AgentStepCompleted",
@@ -963,10 +984,12 @@ class SupervisorOrchestrator:
             summary["row_count"] = len(rows)
         return summary
 
+    @staticmethod
     def _summarize_analyst_result(
-        self,
         analyst_result: AnalystQueryResponse,
         data_payload: Dict[str, Any],
+        *,
+        question: str | None = None,
     ) -> Dict[str, Any]:
         summary: Dict[str, Any] = {
             "analysis_path": analyst_result.analysis_path,
@@ -993,7 +1016,9 @@ class SupervisorOrchestrator:
             if query_result.source_sql:
                 summary["source_sql"] = query_result.source_sql
         elif data_payload:
-            summary.update(self._summarize_tabular_payload(data_payload))
+            summary.update(SupervisorOrchestrator._summarize_tabular_payload(data_payload))
+        if not analyst_result.error and data_payload:
+            summary["analyst_grounding"] = build_analyst_grounding(str(question or ""), data_payload)
         return summary
 
     @staticmethod
@@ -1007,6 +1032,8 @@ class SupervisorOrchestrator:
         web_search_result: WebSearchResult | None = None,
         research_result: DeepResearchResult | None = None,
         assumptions_applied: Sequence[str] | None = None,
+        response_mode: ResponseMode = ResponseMode.analyst,
+        analyst_grounding: Dict[str, Any] | None = None,
     ) -> str:
         if clarifying_question:
             return f"I need one clarification before continuing: {clarifying_question}"
@@ -1041,6 +1068,20 @@ class SupervisorOrchestrator:
         columns = data_payload.get("columns") if isinstance(data_payload, dict) else None
         row_count = len(rows) if isinstance(rows, list) else 0
         col_count = len(columns) if isinstance(columns, list) else 0
+
+        if response_mode == ResponseMode.analyst:
+            grounding = analyst_grounding if isinstance(analyst_grounding, dict) else build_analyst_grounding(
+                user_query,
+                data_payload,
+            )
+            return compose_analyst_summary(
+                grounding,
+                assumptions=assumptions,
+                extra_note=SupervisorOrchestrator._build_visualization_note(
+                    user_query=user_query,
+                    visualization=visualization,
+                ),
+            )
 
         if row_count == 0:
             summary = "Completed, but no tabular rows were returned."
@@ -1100,6 +1141,32 @@ class SupervisorOrchestrator:
         if assumptions:
             summary = summary + " Assumptions: " + "; ".join(assumptions)
         return summary
+
+    @staticmethod
+    def _build_visualization_note(
+        *,
+        user_query: str,
+        visualization: Dict[str, Any] | None,
+    ) -> str | None:
+        requested_chart = SupervisorOrchestrator._detect_requested_chart_type(user_query)
+        if not isinstance(visualization, dict) or not visualization:
+            if requested_chart:
+                return f"I could not prepare the requested {requested_chart} chart from this dataset."
+            return None
+
+        chart_type_raw = visualization.get("chart_type") or visualization.get("chartType")
+        chart_type = chart_type_raw.lower() if isinstance(chart_type_raw, str) else None
+        options = visualization.get("options") if isinstance(visualization.get("options"), dict) else {}
+        warning = options.get("visualization_warning") if isinstance(options, dict) else None
+        if isinstance(warning, str) and warning.strip():
+            return warning.strip()
+        if requested_chart and chart_type and chart_type != requested_chart:
+            return f"I could not prepare the requested {requested_chart} chart from this dataset."
+        if requested_chart and chart_type == "table":
+            return f"I could not prepare the requested {requested_chart} chart from this dataset."
+        if chart_type and chart_type != "table":
+            return f"I also prepared a {chart_type} visualization."
+        return None
 
     @staticmethod
     def _format_research_summary(result: DeepResearchResult, *, user_query: str) -> str:
@@ -1343,6 +1410,21 @@ class SupervisorOrchestrator:
                     samples = self._extract_sample_values(columns, rows)
                     if samples:
                         parts.extend(samples)
+
+        analyst_grounding = referenced.get("analyst_grounding")
+        if isinstance(analyst_grounding, dict):
+            observed_facts = analyst_grounding.get("observed_facts")
+            if isinstance(observed_facts, list) and observed_facts:
+                facts = "; ".join(self._trim_text(str(item), 180) for item in observed_facts[:2])
+                parts.append(f"Analyst findings: {facts}")
+            interpretations = analyst_grounding.get("interpretations")
+            if isinstance(interpretations, list) and interpretations:
+                insights = "; ".join(self._trim_text(str(item), 180) for item in interpretations[:2])
+                parts.append(f"Analyst interpretation: {insights}")
+            caveats = analyst_grounding.get("caveats")
+            if isinstance(caveats, list) and caveats:
+                notes = "; ".join(self._trim_text(str(item), 160) for item in caveats[:1])
+                parts.append(f"Analyst caveats: {notes}")
 
         if not parts:
             return None

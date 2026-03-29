@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import sqlite3
 import uuid
@@ -8,7 +7,8 @@ from fastapi.testclient import TestClient
 
 from langbridge.runtime import build_configured_local_runtime
 from langbridge.runtime.hosting import create_runtime_api_app
-from langbridge.runtime.local_config import _stable_uuid
+from langbridge.runtime.hosting.auth import RuntimeAuthConfig, RuntimeAuthMode
+from langbridge.runtime.bootstrap.configured_runtime import _stable_uuid
 
 
 def _build_runtime_with_configured_unified_semantic_models(
@@ -222,9 +222,16 @@ semantic_models:
     )
 
 
+def _create_runtime_app(runtime):
+    return create_runtime_api_app(
+        runtime_host=runtime,
+        auth_config=RuntimeAuthConfig(mode=RuntimeAuthMode.none),
+    )
+
+
 def test_runtime_unified_semantic_query_executes_joined_dimension_query(tmp_path: Path) -> None:
     runtime = _build_runtime_with_configured_unified_semantic_models(tmp_path)
-    client = TestClient(create_runtime_api_app(runtime_host=runtime))
+    client = TestClient(_create_runtime_app(runtime))
 
     response = client.post(
         "/api/runtime/v1/semantic/query",
@@ -268,7 +275,7 @@ def test_runtime_unified_semantic_query_executes_joined_dimension_query(tmp_path
 
 def test_runtime_unified_semantic_query_filters_across_model_boundaries(tmp_path: Path) -> None:
     runtime = _build_runtime_with_configured_unified_semantic_models(tmp_path)
-    client = TestClient(create_runtime_api_app(runtime_host=runtime))
+    client = TestClient(_create_runtime_app(runtime))
 
     response = client.post(
         "/api/runtime/v1/semantic/query",
@@ -309,7 +316,7 @@ def test_runtime_unified_semantic_query_filters_across_model_boundaries(tmp_path
 
 def test_runtime_unified_semantic_query_groups_and_aggregates_across_models(tmp_path: Path) -> None:
     runtime = _build_runtime_with_configured_unified_semantic_models(tmp_path)
-    client = TestClient(create_runtime_api_app(runtime_host=runtime))
+    client = TestClient(_create_runtime_app(runtime))
 
     response = client.post(
         "/api/runtime/v1/semantic/query",
@@ -352,7 +359,7 @@ def test_runtime_unified_semantic_query_rejects_missing_cross_model_relationship
         tmp_path,
         include_relationships=False,
     )
-    client = TestClient(create_runtime_api_app(runtime_host=runtime))
+    client = TestClient(_create_runtime_app(runtime))
 
     response = client.post(
         "/api/runtime/v1/semantic/query",
@@ -369,7 +376,7 @@ def test_runtime_unified_semantic_query_rejects_missing_cross_model_relationship
 
 def test_runtime_unified_semantic_query_rejects_unknown_semantic_model(tmp_path: Path) -> None:
     runtime = _build_runtime_with_configured_unified_semantic_models(tmp_path)
-    client = TestClient(create_runtime_api_app(runtime_host=runtime))
+    client = TestClient(_create_runtime_app(runtime))
 
     response = client.post(
         "/api/runtime/v1/semantic/query",
@@ -385,7 +392,7 @@ def test_runtime_unified_semantic_query_rejects_unknown_semantic_model(tmp_path:
 
 def test_runtime_unified_semantic_query_rejects_incompatible_unified_request_shape(tmp_path: Path) -> None:
     runtime = _build_runtime_with_configured_unified_semantic_models(tmp_path)
-    client = TestClient(create_runtime_api_app(runtime_host=runtime))
+    client = TestClient(_create_runtime_app(runtime))
 
     response = client.post(
         "/api/runtime/v1/semantic/query",
@@ -407,7 +414,7 @@ def test_runtime_unified_semantic_query_rejects_ambiguous_configured_unified_mat
         tmp_path,
         duplicate_unified_definition=True,
     )
-    client = TestClient(create_runtime_api_app(runtime_host=runtime))
+    client = TestClient(_create_runtime_app(runtime))
 
     response = client.post(
         "/api/runtime/v1/semantic/query",

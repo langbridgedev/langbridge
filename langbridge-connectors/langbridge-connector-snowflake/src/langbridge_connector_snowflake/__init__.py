@@ -1,4 +1,5 @@
 from langbridge.plugins import (
+    ConnectorCapabilities,
     ConnectorFamily,
     ConnectorPlugin,
     ConnectorRuntimeType,
@@ -16,6 +17,12 @@ from .metadata import SnowflakeMetadataExtractor
 PLUGIN = ConnectorPlugin(
     connector_type=ConnectorRuntimeType.SNOWFLAKE,
     connector_family=ConnectorFamily.DATABASE,
+    capabilities=ConnectorCapabilities(
+        supports_live_datasets=True,
+        supports_query_pushdown=True,
+        supports_preview=True,
+        supports_federated_execution=True,
+    ),
     config_factory=SnowflakeConnectorConfigFactory,
     config_schema_factory=SnowflakeConnectorConfigSchemaFactory,
 )

@@ -187,6 +187,7 @@ export function ChartPreview({
   visualization = {},
   preferredDimension,
   preferredMeasure,
+  themeColors = [],
 }) {
   const records = toRecords(result);
   if (records.length === 0) {
@@ -233,7 +234,13 @@ export function ChartPreview({
   }
 
   return (
-    <div className="chart-panel">
+    <div
+      className="chart-panel"
+      style={{
+        "--chart-primary": themeColors[0] || undefined,
+        "--chart-secondary": themeColors[1] || undefined,
+      }}
+    >
       <div className="chart-panel-header">
         <h3>{title || "Chart preview"}</h3>
         <span className="chart-kind">{chartType}</span>

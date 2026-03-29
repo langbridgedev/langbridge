@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from sqlalchemy import JSON, String, Text, Enum as SAEnum, ForeignKey, DateTime, Integer, UUID, func
+from sqlalchemy import JSON, String, Text, Enum as SAEnum, ForeignKey, DateTime, Integer, Uuid as UUID, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from .base import Base

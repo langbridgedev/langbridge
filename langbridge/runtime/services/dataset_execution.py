@@ -1,11 +1,10 @@
-from __future__ import annotations
 
 import re
 import uuid
 from collections.abc import Mapping
 from typing import Any
 
-from .errors import ExecutionRuntimeError
+from .errors import ExecutionRuntimeError, ExecutionValidationError
 from langbridge.runtime.models.metadata import DatasetMetadata
 from langbridge.runtime.ports import DatasetCatalogStore
 from langbridge.runtime.providers import DatasetMetadataProvider
@@ -13,6 +12,7 @@ from langbridge.runtime.utils.datasets import (
     build_dataset_execution_capabilities,
     build_dataset_relation_identity,
     derive_legacy_dataset_type,
+    resolve_dataset_materialization_mode,
     resolve_dataset_connector_kind,
     resolve_dataset_source_kind,
     resolve_dataset_storage_kind,
@@ -137,6 +137,10 @@ class DatasetExecutionResolver:
         catalog_name: str | None = None,
     ) -> tuple[VirtualTableBinding, str]:
         dataset_type = str(dataset.dataset_type or "").upper()
+        materialization_mode = resolve_dataset_materialization_mode(
+            explicit_materialization_mode=getattr(dataset, "materialization_mode", None),
+            file_config=dict(dataset.file_config_json or {}),
+        ).value
         logical_table = self._logical_table_name(
             dataset=dataset,
             logical_table_name=logical_table_name,
@@ -166,6 +170,7 @@ class DatasetExecutionResolver:
                 metadata={
                     "dataset_id": str(dataset.id),
                     "source_kind": "connector",
+                    "materialization_mode": materialization_mode,
                     "physical_catalog": dataset.catalog_name,
                     "physical_schema": dataset.schema_name,
                     "physical_table": physical_table,
@@ -191,6 +196,7 @@ class DatasetExecutionResolver:
                 metadata={
                     "dataset_id": str(dataset.id),
                     "source_kind": "connector",
+                    "materialization_mode": materialization_mode,
                     "physical_sql": sql_text,
                     "sql_dialect": dialect,
                 },
@@ -205,6 +211,7 @@ class DatasetExecutionResolver:
             metadata: dict[str, Any] = {
                 "dataset_id": str(dataset.id),
                 "source_kind": "file",
+                "materialization_mode": materialization_mode,
                 "storage_uri": storage_uri,
                 "file_format": file_format,
             }
@@ -379,6 +386,19 @@ class DatasetExecutionResolver:
             or str(file_config.get("storage_uri") or file_config.get("uri") or file_config.get("path") or "").strip()
         )
         if not storage_uri:
+            materialization_mode = resolve_dataset_materialization_mode(
+                explicit_materialization_mode=getattr(dataset, "materialization_mode", None),
+                file_config=file_config,
+            )
+            sync_meta = file_config.get("connector_sync") if isinstance(file_config.get("connector_sync"), Mapping) else {}
+            if materialization_mode.value == "synced":
+                resource_name = str(sync_meta.get("resource_name") or "").strip()
+                connector_name = str(sync_meta.get("connector_type") or "").strip().lower() or "connector"
+                resource_detail = f" resource '{resource_name}'" if resource_name else ""
+                raise ExecutionValidationError(
+                    f"Synced dataset '{dataset.name}' has not been populated yet. "
+                    f"Run connector sync for {connector_name}{resource_detail} before querying it."
+                )
             raise ExecutionValidationError(f"FILE dataset '{dataset.id}' is missing storage_uri.")
         return storage_uri
 
@@ -556,10 +576,15 @@ class DatasetExecutionResolver:
             storage_kind=storage_kind,
             existing_payload=dict(getattr(dataset, "execution_capabilities_json", None) or {}),
         )
+        materialization_mode = resolve_dataset_materialization_mode(
+            explicit_materialization_mode=getattr(dataset, "materialization_mode", None),
+            file_config=dict(getattr(dataset, "file_config_json", None) or {}),
+        )
         return DatasetExecutionDescriptor(
             dataset_id=dataset.id,
             connector_id=dataset.connection_id,
             name=dataset.name,
+            materialization_mode=materialization_mode.value,
             source_kind=source_kind.value,
             connector_kind=connector_kind,
             storage_kind=storage_kind.value,

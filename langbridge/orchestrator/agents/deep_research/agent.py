@@ -1,6 +1,5 @@
 """Deep research agent with plan -> execute -> synthesize workflow."""
 
-from __future__ import annotations
 
 import json
 import logging

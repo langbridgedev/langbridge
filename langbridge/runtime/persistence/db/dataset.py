@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
@@ -14,7 +13,7 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
-    UUID,
+    Uuid as UUID,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
@@ -56,6 +55,7 @@ class DatasetRecord(Base):
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     tags_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     dataset_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    materialization_mode: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     source_kind: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     connector_kind: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     storage_kind: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
@@ -78,6 +78,9 @@ class DatasetRecord(Base):
     row_count_estimate: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     bytes_estimate: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_profiled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    
+    management_mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    lifecycle_state: Mapped[str] = mapped_column(String(50), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

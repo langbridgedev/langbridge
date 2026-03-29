@@ -1,3 +1,5 @@
+import enum
+
 from sqlalchemy.orm import DeclarativeBase
 
 

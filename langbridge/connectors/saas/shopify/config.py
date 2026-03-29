@@ -1,11 +1,9 @@
-from pydantic import Field
-
-from langbridge.config import settings
 from langbridge.connectors.base.config import (
     BaseConnectorConfig,
     BaseConnectorConfigFactory,
     BaseConnectorConfigSchemaFactory,
     ConnectorAuthFieldSchema,
+    ConnectorCapabilities,
     ConnectorConfigEntrySchema,
     ConnectorConfigSchema,
     ConnectorFamily,
@@ -43,8 +41,8 @@ SHOPIFY_SYNC_STRATEGY = ConnectorSyncStrategy.INCREMENTAL
 
 class ShopifyConnectorConfig(BaseConnectorConfig):
     shop_domain: str
-    shopify_app_client_id: str = Field(default_factory=lambda: settings.SHOPIFY_APP_CLIENT_ID)
-    shopify_app_client_secret: str = Field(default_factory=lambda: settings.SHOPIFY_APP_CLIENT_SECRET)
+    shopify_app_client_id: str
+    shopify_app_client_secret: str
 
 
 class ShopifyConnectorConfigFactory(BaseConnectorConfigFactory):
@@ -93,5 +91,9 @@ class ShopifyConnectorConfigSchemaFactory(BaseConnectorConfigSchemaFactory):
                 supported_resources=list(SHOPIFY_SUPPORTED_RESOURCES),
                 auth_schema=list(SHOPIFY_AUTH_SCHEMA),
                 sync_strategy=SHOPIFY_SYNC_STRATEGY,
+                capabilities=ConnectorCapabilities(
+                    supports_synced_datasets=True,
+                    supports_incremental_sync=True,
+                ),
             ),
         )

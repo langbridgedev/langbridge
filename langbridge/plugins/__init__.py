@@ -13,6 +13,7 @@ _EXPORTS = {
         "BaseConnectorConfigFactory",
         "BaseConnectorConfigSchemaFactory",
         "ConnectorAuthFieldSchema",
+        "ConnectorCapabilities",
         "ConnectorConfigEntrySchema",
         "ConnectorConfigSchema",
         "ConnectorFamily",

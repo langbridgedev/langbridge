@@ -8,7 +8,6 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from langbridge.config import settings
 from .errors import (
     AuthError,
     ConnectorError,
@@ -42,7 +41,6 @@ class HttpApiConnector(ApiConnector):
         super().__init__(config=config, logger=logger)
         self._transport = transport
         self._timeout_s = timeout_s
-        self._verify = _build_http_verify()
 
     async def discover_resources(self) -> list[ApiResource]:
         return [definition.resource for definition in self.RESOURCE_DEFINITIONS.values()]
@@ -101,8 +99,7 @@ class HttpApiConnector(ApiConnector):
             async with httpx.AsyncClient(
                 transport=self._transport,
                 timeout=httpx.Timeout(self._timeout_s),
-                follow_redirects=True,
-                verify=self._verify,
+                follow_redirects=True
             ) as client:
                 response = await client.request(
                     method=method,
@@ -306,26 +303,3 @@ def _normalize_key(value: Any) -> str:
 
 def _json_string(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"), sort_keys=True, default=str)
-
-
-def _build_http_verify() -> ssl.SSLContext | bool:
-    if settings.API_HTTP_SKIP_TLS_VERIFY:
-        return False
-
-    ssl_context = ssl.create_default_context()
-    extra_ca_bundle = _extra_ca_bundle()
-    if extra_ca_bundle:
-        ssl_context.load_verify_locations(cafile=extra_ca_bundle)
-    return ssl_context
-
-
-def _extra_ca_bundle() -> str | None:
-    for candidate in (
-        settings.API_HTTP_CA_BUNDLE,
-        os.environ.get("REQUESTS_CA_BUNDLE"),
-        os.environ.get("CURL_CA_BUNDLE"),
-    ):
-        value = str(candidate or "").strip()
-        if value:
-            return value
-    return None

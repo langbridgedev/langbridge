@@ -13,6 +13,12 @@ It does not depend on `langbridge-cloud`.
 - persistent runtime state under `/examples/runtime_host/.langbridge`
 - runtime-owned HTTP endpoints for datasets, semantic query, SQL, agents, and runtime info
 
+The example config keeps runtime metadata in SQLite at
+`examples/runtime_host/.langbridge/metadata.db`. For production or
+self-managed hosted deployments, switch `runtime.metadata_store` to `postgres`.
+This example leaves `runtime.migrations.auto_apply: true`, so `langbridge serve`
+upgrades the runtime metadata schema automatically before startup.
+
 ## Prerequisites
 
 From the repository root, seed the demo database once:
@@ -56,6 +62,8 @@ List datasets:
 ```bash
 curl http://localhost:8000/api/runtime/v1/datasets
 ```
+
+The configured dataset in this example is explicitly `materialization_mode: live`.
 
 Preview a dataset:
 
@@ -129,6 +137,15 @@ Or:
 ```bash
 python -m langbridge serve --config examples/runtime_host/langbridge_config.yml --host 0.0.0.0 --port 8000
 ```
+
+If you want the production-style migration flow instead, run:
+
+```bash
+langbridge migrate --config examples/runtime_host/langbridge_config.yml
+```
+
+Then set `runtime.migrations.auto_apply: false` in the config before starting
+the host.
 
 Once the host is up, the CLI can call the same runtime-owned endpoints:
 

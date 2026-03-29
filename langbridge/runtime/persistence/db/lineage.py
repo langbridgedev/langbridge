@@ -1,10 +1,9 @@
-from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, UUID, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Uuid as UUID, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base

@@ -1,10 +1,14 @@
-from __future__ import annotations
 
 import uuid
 
 import pytest
 
-from langbridge.runtime.models import ConnectorMetadata
+from langbridge.runtime.models import (
+    ConnectorCapabilities,
+    ConnectorMetadata,
+    LifecycleState,
+    ManagementMode,
+)
 from langbridge.runtime.execution.federated_query_tool import (
     FederatedQueryTool,
 )
@@ -127,7 +131,11 @@ async def test_build_sources_rejects_non_sql_connector_metadata() -> None:
                     id=connector_id,
                     name="shopify",
                     connector_type="SHOPIFY",
+                    connector_family="api",
                     config={},
+                    capabilities=ConnectorCapabilities(supports_synced_datasets=True),
+                    management_mode=ManagementMode.CONFIG_MANAGED,
+                    lifecycle_state=LifecycleState.ACTIVE,
                 )
             }
         )
@@ -167,8 +175,16 @@ async def test_build_sources_requires_connector_in_same_workspace() -> None:
                     id=connector_id,
                     name="warehouse",
                     connector_type="POSTGRES",
+                    connector_family="sql",
                     workspace_id=uuid.uuid4(),
                     config={"config": {"database": "analytics"}},
+                    capabilities=ConnectorCapabilities(
+                        supports_live_datasets=True,
+                        supports_query_pushdown=True,
+                        supports_federated_execution=True,
+                    ),
+                    management_mode=ManagementMode.CONFIG_MANAGED,
+                    lifecycle_state=LifecycleState.ACTIVE,
                 )
             }
         )

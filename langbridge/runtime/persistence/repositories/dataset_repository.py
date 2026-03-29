@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import uuid
 from typing import Iterable
@@ -30,6 +29,12 @@ class DatasetRepository(AsyncBaseRepository[DatasetRecord]):
 
     def _select_with_relationships(self):
         return select(DatasetRecord).options(*self._with_relationships())
+
+    async def get_by_id(self, id_: object) -> DatasetRecord | None:
+        result = await self._session.scalars(
+            self._select_with_relationships().where(DatasetRecord.id == id_)
+        )
+        return result.one_or_none()
 
     async def list_for_workspace(
         self,
@@ -156,7 +161,12 @@ class DatasetRepository(AsyncBaseRepository[DatasetRecord]):
                 DatasetRecord.table_name == table_name,
             )
         )
-        return result.one_or_none()
+        for row in result.all():
+            mode = str(getattr(row, "materialization_mode", "") or "").strip().lower()
+            file_config = getattr(row, "file_config_json", None) or {}
+            if mode == "synced" or bool(file_config.get("managed_dataset")):
+                return row
+        return None
 
     async def list_for_connection(
         self,

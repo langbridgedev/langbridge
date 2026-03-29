@@ -2,9 +2,8 @@
 Connector registry responsible for managing available connectors.
 """
 
-from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import import_module
 from importlib.metadata import entry_points
 from logging import Logger, getLogger
@@ -17,6 +16,7 @@ from langbridge.connectors.base.config import (
     BaseConnectorConfigFactory,
     BaseConnectorConfigSchemaFactory,
     ConnectorAuthFieldSchema,
+    ConnectorCapabilities,
     ConnectorFamily,
     ConnectorRuntimeType,
     ConnectorSyncStrategy,
@@ -137,6 +137,7 @@ class ConnectorPlugin:
     supported_resources: tuple[str, ...] = ()
     auth_schema: tuple[ConnectorAuthFieldSchema, ...] = ()
     sync_strategy: ConnectorSyncStrategy | None = None
+    capabilities: ConnectorCapabilities = field(default_factory=ConnectorCapabilities)
     config_factory: Type[BaseConnectorConfigFactory] | None = None
     config_schema_factory: Type[BaseConnectorConfigSchemaFactory] | None = None
     api_connector_class: Type[ApiConnector] | None = None

@@ -53,6 +53,12 @@ class RuntimeHost:
     def with_context(self, context: RuntimeContext) -> "RuntimeHost":
         return replace(self, context=context)
 
+    async def aclose(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
     async def query_dataset(self, *args: Any, **kwargs: Any) -> Any:
         if self.services.dataset_query is None:
             raise RuntimeError("DatasetQueryService is not configured for this runtime host.")

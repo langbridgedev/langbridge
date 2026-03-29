@@ -13,20 +13,33 @@ distribution of connector packages where needed.
 
 ## Runtime Direction
 
-Connectors should be understood in two groups:
+Connector kind, connector capabilities, and dataset mode are separate concerns:
 
-- query-time connectors for direct SQL, NoSQL, or vector access
-- sync-oriented SaaS or API connectors that materialize runtime-managed datasets
+- connector kind describes the source family, such as `database`, `api`, `file`, or `vector`
+- connector capabilities describe what the connector can actually do
+- dataset `materialization_mode` describes whether a specific dataset is `live` or `synced`
 
-For SaaS and API sources, the intended direction is sync first:
+The runtime now validates dataset mode against connector capabilities instead of
+inferring behavior from connector family alone.
 
-- list available resources
-- sync selected resources
-- track per-resource sync state
-- materialize datasets owned by the runtime workspace
+Current connector capabilities include:
 
-That is a better fit for semantic, SQL, and agent workloads than querying third
-party APIs directly during federation.
+- `supports_live_datasets`
+- `supports_synced_datasets`
+- `supports_incremental_sync`
+- `supports_query_pushdown`
+- `supports_preview`
+- `supports_federated_execution`
+
+Today that means:
+
+- SQL connectors expose live datasets
+- file connectors expose live file-backed datasets
+- API/SaaS sync connectors expose synced datasets through the runtime sync flow
+
+The long-term product direction remains broader than the currently implemented
+matrix. A connector may eventually support one or both of live and synced
+datasets, but the runtime is explicit about what is supported right now.
 
 ## Runtime-Owned Sync
 
@@ -50,13 +63,13 @@ Core owns:
 - manifest models and schema validation
 - manifest loading helpers
 - shared auth/config-schema derivation helpers
-- manifest-driven HTTP execution for narrow sync-oriented SaaS connectors
+- manifest-driven HTTP execution for SaaS/API connectors that currently feed the synced dataset path
 
 The current declarative runtime slice is intentionally narrow and runtime-first:
 
-- package manifests define auth, pagination, incremental cursor rules, and resource inventory
+- package manifests define auth, pagination, incremental cursor rules, resource inventory, and connector capability metadata
 - core `langbridge` turns that manifest into an executable `ApiConnector`
-- the existing runtime sync flow materializes those resources into runtime-managed datasets
+- the existing runtime sync flow materializes those resources into runtime-managed datasets with `materialization_mode: synced`
 
 The declarative runtime now covers multiple common SaaS API patterns:
 
@@ -66,6 +79,17 @@ The declarative runtime now covers multiple common SaaS API patterns:
 - request-param incremental sync and client-side incremental filtering for APIs without a native incremental filter
 
 This is enough for real manifest-defined SaaS sync without forcing every connector into the declarative model.
+
+## Current Support Matrix
+
+The runtime is intentionally honest about what it supports today:
+
+- config-defined SQL datasets: supported with `materialization_mode: live`
+- config-defined file datasets: supported with `materialization_mode: live`
+- config-defined synced API datasets: supported with `materialization_mode: synced` and `source.resource` naming the sync resource
+- runtime-managed connector sync datasets: supported with `materialization_mode: synced`
+- config-defined synced datasets without a runtime sync path: not supported yet
+- live API/SaaS datasets: not implemented yet unless a connector eventually exposes a real live execution path
 
 Connector packages under `langbridge-connectors` should stay thin and primarily
 provide manifest files, package-specific config/schema adapters, and a package-owned

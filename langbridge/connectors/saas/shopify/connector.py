@@ -15,7 +15,6 @@ from langbridge.connectors.base.connector import (
     ApiResource,
 )
 
-from langbridge.config import settings
 from .config import SHOPIFY_SUPPORTED_RESOURCES, ShopifyConnectorConfig
 
 

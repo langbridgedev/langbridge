@@ -1,28 +1,17 @@
-from __future__ import annotations
 
 import re
 import uuid
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 
 from langbridge.runtime.models import (
     DatasetExecutionCapabilities,
+    DatasetMaterializationMode,
     DatasetRelationIdentity,
     DatasetSourceKind,
     DatasetStorageKind,
 )
-
-_SAAS_CONNECTOR_KINDS = {
-    "asana",
-    "github",
-    "google_analytics",
-    "hubspot",
-    "jira",
-    "salesforce",
-    "shopify",
-    "stripe",
-}
-
 
 def resolve_dataset_source_kind(
     *,
@@ -42,8 +31,6 @@ def resolve_dataset_source_kind(
     if legacy_type == "federated":
         return DatasetSourceKind.VIRTUAL
     if legacy_type == "file":
-        if connector_kind in _SAAS_CONNECTOR_KINDS:
-            return DatasetSourceKind.SAAS
         if sync_meta and connector_kind:
             return DatasetSourceKind.API
         return DatasetSourceKind.FILE
@@ -265,6 +252,25 @@ def build_dataset_execution_capabilities(
     )
 
 
+def resolve_dataset_materialization_mode(
+    *,
+    explicit_materialization_mode: str | DatasetMaterializationMode | None,
+    file_config: Mapping[str, Any] | None,
+) -> DatasetMaterializationMode:
+    normalized = _normalize_enum_value(explicit_materialization_mode)
+    if normalized:
+        return DatasetMaterializationMode(normalized)
+
+    sync_meta = _connector_sync_meta(file_config)
+    if sync_meta:
+        return DatasetMaterializationMode.SYNCED
+
+    config_payload = dict(file_config or {})
+    if config_payload.get("managed_dataset") or config_payload.get("source_storage_uri"):
+        return DatasetMaterializationMode.SYNCED
+    return DatasetMaterializationMode.LIVE
+
+
 def dataset_supports_structured_federation(
     *,
     source_kind: str | DatasetSourceKind | None,
@@ -336,7 +342,11 @@ def _should_suppress_synthetic_schema(
 def _normalize_enum_value(value: Any) -> str | None:
     if value is None:
         return None
-    normalized = str(value).strip().lower()
+    if isinstance(value, Enum):
+        raw_value = value.value
+    else:
+        raw_value = value
+    normalized = str(raw_value).strip().lower()
     return normalized or None
 
 

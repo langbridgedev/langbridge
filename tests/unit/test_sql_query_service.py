@@ -1,9 +1,8 @@
-from __future__ import annotations
 
 import asyncio
 import uuid
 
-from langbridge.runtime.models import DatasetMetadata
+from langbridge.runtime.models import DatasetMetadata, LifecycleState, ManagementMode
 from langbridge.runtime.services.sql_query_service import SqlQueryService
 
 
@@ -60,6 +59,8 @@ def _dataset(
             "supports_sql_federation": supports_sql_federation,
         },
         status="published",
+        management_mode=ManagementMode.CONFIG_MANAGED,
+        lifecycle_state=LifecycleState.ACTIVE,
     )
 
 

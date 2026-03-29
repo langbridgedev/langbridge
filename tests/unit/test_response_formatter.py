@@ -163,3 +163,35 @@ def test_summarize_response_uses_executive_prompt_and_guardrails() -> None:
     assert "executive briefing assistant" in human_prompt
     assert "Return 3 bullet points and 1 recommended action." in human_prompt
     assert "Tabular result preview:" in human_prompt
+
+
+def test_summarize_response_includes_grounded_analytical_context_for_analyst_mode() -> None:
+    provider = _FakeProvider("US leads revenue.")
+    formatter = ResponseFormatter()
+    presentation = ResponsePresentation(
+        prompt_contract=PromptContract(system_prompt="System prompt"),
+        output_schema=OutputSchema(format=OutputFormat.text),
+        guardrails=GuardrailConfig(),
+        response_mode=ResponseMode.analyst,
+    )
+
+    result = asyncio.run(
+        formatter.summarize_response(
+            provider,
+            "Which region had the highest revenue?",
+            {
+                "result": {
+                    "columns": ["region", "revenue"],
+                    "rows": [["US", 2200], ["EMEA", 1200], ["APAC", 800]],
+                },
+                "visualization": {"chart_type": "bar", "x": "region", "y": "revenue"},
+            },
+            presentation=presentation,
+        )
+    )
+
+    assert result == "US leads revenue."
+    human_prompt = str(provider.calls[0]["messages"][-1].content)
+    assert "Key analytical facts:" in human_prompt
+    assert "Observed facts:" in human_prompt
+    assert "Interpret the result instead of restating the table." in human_prompt

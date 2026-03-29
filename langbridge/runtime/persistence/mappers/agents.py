@@ -1,9 +1,13 @@
-from __future__ import annotations
 
 from typing import Any
 
 from langbridge.runtime.models import RuntimeAgentDefinition
 from langbridge.runtime.persistence.db.agent import AgentDefinition
+
+
+def _enum_value(value: Any, default: str) -> str:
+    raw_value = value if value is not None else default
+    return str(getattr(raw_value, "value", raw_value))
 
 
 def from_agent_definition_record(value: Any | None) -> RuntimeAgentDefinition | None:
@@ -20,6 +24,8 @@ def from_agent_definition_record(value: Any | None) -> RuntimeAgentDefinition | 
         is_active=bool(getattr(value, "is_active", True)),
         created_at=getattr(value, "created_at", None),
         updated_at=getattr(value, "updated_at", None),
+        management_mode=_enum_value(getattr(value, "management_mode", None), "runtime_managed"),
+        lifecycle_state=_enum_value(getattr(value, "lifecycle_state", None), "active"),
     )
 
 
@@ -37,6 +43,8 @@ def to_agent_definition_record(
         is_active=value.is_active,
         created_at=value.created_at,
         updated_at=value.updated_at,
+        management_mode=_enum_value(value.management_mode, "runtime_managed"),
+        lifecycle_state=_enum_value(value.lifecycle_state, "active"),
     )
 
 

@@ -3,6 +3,7 @@ import os
 import uuid
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
+import inspect
 from pathlib import Path
 from typing import Any
 from fastapi import FastAPI, HTTPException, Request
@@ -13,6 +14,7 @@ from langbridge.ui import register_runtime_ui
 from langbridge.runtime.hosting.auth import (
     RuntimeAuthConfig,
     RuntimeAuthMode,
+    RuntimeAuthPrincipal,
     RuntimeAuthResolver,
 )
 from langbridge.runtime.hosting.background import (
@@ -21,7 +23,7 @@ from langbridge.runtime.hosting.background import (
     RuntimeBackgroundTaskManager,
     build_semantic_vector_refresh_default_task,
 )
-from langbridge.runtime.local_config import (
+from langbridge.runtime.bootstrap import (
     ConfiguredLocalRuntimeHost,
     build_configured_local_runtime,
 )
@@ -37,11 +39,16 @@ from langbridge.runtime.hosting.api_models import (
     RuntimeAgentAskResponse,
     RuntimeAuthBootstrapRequest,
     RuntimeAuthLoginRequest,
+    RuntimeConnectorCreateRequest,
     RuntimeConnectorListResponse,
+    RuntimeConnectorSummary,
+    RuntimeDatasetCreateRequest,
     RuntimeDatasetListResponse,
     RuntimeDatasetPreviewRequest,
     RuntimeDatasetPreviewResponse,
     RuntimeInfoResponse,
+    RuntimeSemanticModelCreateRequest,
+    RuntimeSemanticModelListResponse,
     RuntimeSemanticQueryRequest,
     RuntimeSemanticQueryResponse,
     RuntimeSyncRequest,
@@ -88,6 +95,7 @@ def create_runtime_api_app(
             config_path=getattr(host, "_config_path", config_path),
         ),
         default_context=host.context,
+        runtime_host=host,
     )
     resolved_default_background_tasks = _resolve_default_background_tasks(
         runtime_host=host,
@@ -133,6 +141,7 @@ def create_runtime_api_app(
                 yield
         finally:
             await task_manager.stop()
+            await _close_runtime_host(host)
 
     app = FastAPI(
         title="Langbridge Runtime Host",
@@ -169,7 +178,7 @@ def create_runtime_api_app(
 
     @app.get("/api/runtime/v1/auth/bootstrap")
     async def runtime_auth_bootstrap_status() -> dict[str, Any]:
-        return _build_runtime_auth_status(auth_resolver)
+        return await _build_runtime_auth_status(auth_resolver)
 
     @app.post("/api/runtime/v1/auth/bootstrap")
     async def runtime_auth_bootstrap(
@@ -178,7 +187,7 @@ def create_runtime_api_app(
     ) -> JSONResponse:
         local_auth = _require_local_auth_manager(auth_resolver)
         try:
-            session = local_auth.bootstrap_admin(
+            session = await local_auth.bootstrap_admin(
                 username=body.username,
                 email=body.email,
                 password=body.password,
@@ -187,12 +196,13 @@ def create_runtime_api_app(
             detail = str(exc)
             status_code = 409 if "already" in detail.lower() else 400
             raise HTTPException(status_code=status_code, detail=detail) from exc
-        token = local_auth.issue_session_token(session)
+        principal = await auth_resolver.sync_local_session(session)
+        token = await local_auth.issue_session_token(session)
         response = JSONResponse(
             {
                 "ok": True,
                 "auth_mode": auth_resolver.mode.value,
-                "user": session.model_dump(mode="json"),
+                "user": _serialize_runtime_principal_user(principal),
             }
         )
         _set_runtime_session_cookie(
@@ -210,7 +220,7 @@ def create_runtime_api_app(
     ) -> JSONResponse:
         local_auth = _require_local_auth_manager(auth_resolver)
         try:
-            session = local_auth.authenticate(
+            session = await local_auth.authenticate(
                 identifier=str(body.identifier or ""),
                 password=body.password,
             )
@@ -218,12 +228,13 @@ def create_runtime_api_app(
             detail = str(exc)
             status_code = 409 if "bootstrap" in detail.lower() else 401
             raise HTTPException(status_code=status_code, detail=detail) from exc
-        token = local_auth.issue_session_token(session)
+        principal = await auth_resolver.sync_local_session(session)
+        token = await local_auth.issue_session_token(session)
         response = JSONResponse(
             {
                 "ok": True,
                 "auth_mode": auth_resolver.mode.value,
-                "user": session.model_dump(mode="json"),
+                "user": _serialize_runtime_principal_user(principal),
             }
         )
         _set_runtime_session_cookie(
@@ -257,29 +268,11 @@ def create_runtime_api_app(
                     "provider": "runtime_none",
                 },
             }
-        if auth_resolver.mode == RuntimeAuthMode.local:
-            local_auth = _require_local_auth_manager(auth_resolver)
-            try:
-                session = local_auth.authenticate_request(request)
-            except ValueError as exc:
-                raise HTTPException(status_code=401, detail=str(exc)) from exc
-            return {
-                "auth_enabled": True,
-                "auth_mode": auth_resolver.mode.value,
-                "user": session.model_dump(mode="json"),
-            }
-
         principal = await auth_resolver.authenticate(request)
         return {
             "auth_enabled": True,
             "auth_mode": auth_resolver.mode.value,
-            "user": {
-                "id": str(principal.actor_id) if principal.actor_id else None,
-                "username": principal.subject or "runtime",
-                "email": None,
-                "roles": list(principal.roles),
-                "provider": auth_resolver.mode.value,
-            },
+            "user": _serialize_runtime_principal_user(principal),
         }
 
     @app.get("/api/runtime/v1/info", response_model=RuntimeInfoResponse)
@@ -289,9 +282,12 @@ def create_runtime_api_app(
         capabilities = [
             "datasets.list",
             "datasets.get",
+            "datasets.create",
             "datasets.preview",
+            "connectors.create",
             "semantic_models.list",
             "semantic_models.get",
+            "semantic_models.create",
             "semantic.query",
             "sql.query",
             "agents.list",
@@ -306,7 +302,7 @@ def create_runtime_api_app(
         ]
         if connector_items:
             capabilities.append("connectors.list")
-        if auth_resolver.mode == RuntimeAuthMode.local:
+        if auth_resolver.local_auth_enabled:
             capabilities.extend(
                 [
                     "auth.bootstrap",
@@ -344,6 +340,20 @@ def create_runtime_api_app(
         items = await configured_host.list_datasets()
         return RuntimeDatasetListResponse(items=items, total=len(items))
 
+    @app.post("/api/runtime/v1/datasets", status_code=201)
+    async def create_dataset(
+        request: Request,
+        body: RuntimeDatasetCreateRequest,
+    ) -> dict[str, Any]:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return await configured_host.create_dataset(request=body)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=_runtime_mutation_status_code(str(exc)),
+                detail=str(exc),
+            ) from exc
+
     @app.get("/api/runtime/v1/datasets/{dataset_ref}")
     async def get_dataset(request: Request, dataset_ref: str) -> dict[str, Any]:
         configured_host = await _resolve_request_host(request)
@@ -374,12 +384,14 @@ def create_runtime_api_app(
                     correlation_id=configured_host.context.request_id,
                 )
             )
+        except (ValueError, ExecutionValidationError) as exc:
+            detail = str(exc)
+            status_code = 404 if _is_missing_runtime_resource(detail) else 400
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+        except HTTPException:
+            raise
         except Exception as exc:
-            return RuntimeDatasetPreviewResponse(
-                dataset_id=dataset_id,
-                status="failed",
-                error=str(exc),
-            )
+            _raise_runtime_internal_server_error("dataset preview", exc)
 
         return RuntimeDatasetPreviewResponse(
             dataset_id=dataset_id,
@@ -417,11 +429,10 @@ def create_runtime_api_app(
             detail = str(exc)
             status_code = 404 if _is_missing_semantic_resource(detail) else 400
             raise HTTPException(status_code=status_code, detail=detail) from exc
+        except HTTPException:
+            raise
         except Exception as exc:
-            return RuntimeSemanticQueryResponse(
-                status="failed",
-                error=str(exc),
-            )
+            _raise_runtime_internal_server_error("semantic query", exc)
         semantic_model_id = payload.get("semantic_model_id")
         connector_id = payload.get("connector_id")
         return RuntimeSemanticQueryResponse(
@@ -438,11 +449,25 @@ def create_runtime_api_app(
             generated_sql=payload.get("generated_sql"),
         )
 
-    @app.get("/api/runtime/v1/semantic-models")
-    async def list_semantic_models(request: Request) -> dict[str, Any]:
+    @app.get("/api/runtime/v1/semantic-models", response_model=RuntimeSemanticModelListResponse)
+    async def list_semantic_models(request: Request) -> RuntimeSemanticModelListResponse:
         configured_host = await _resolve_request_host(request)
         items = await configured_host.list_semantic_models()
-        return {"items": items, "total": len(items)}
+        return RuntimeSemanticModelListResponse(items=items, total=len(items))
+
+    @app.post("/api/runtime/v1/semantic-models", status_code=201)
+    async def create_semantic_model(
+        request: Request,
+        body: RuntimeSemanticModelCreateRequest,
+    ) -> dict[str, Any]:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return await configured_host.create_semantic_model(request=body)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=_runtime_mutation_status_code(str(exc)),
+                detail=str(exc),
+            ) from exc
 
     @app.get("/api/runtime/v1/semantic-models/{model_ref}")
     async def get_semantic_model(request: Request, model_ref: str) -> dict[str, Any]:
@@ -492,11 +517,10 @@ def create_runtime_api_app(
                 thread_id=body.thread_id,
                 title=body.title,
             )
+        except HTTPException:
+            raise
         except Exception as exc:
-            return RuntimeAgentAskResponse(
-                status="failed",
-                error={"message": str(exc)},
-            )
+            _raise_runtime_internal_server_error("agent ask", exc)
         payload_thread_id = result.get("thread_id")
         payload_job_id = result.get("job_id")
         return RuntimeAgentAskResponse(
@@ -567,6 +591,25 @@ def create_runtime_api_app(
         items = await configured_host.list_connectors()
         return RuntimeConnectorListResponse(items=items, total=len(items))
 
+    @app.post(
+        "/api/runtime/v1/connectors",
+        response_model=RuntimeConnectorSummary,
+        status_code=201,
+    )
+    async def create_connector(
+        request: Request,
+        body: RuntimeConnectorCreateRequest,
+    ) -> RuntimeConnectorSummary:
+        configured_host = await _resolve_request_host(request)
+        try:
+            payload = await configured_host.create_connector(request=body)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=_runtime_mutation_status_code(str(exc)),
+                detail=str(exc),
+            ) from exc
+        return RuntimeConnectorSummary.model_validate(payload)
+
     @app.get(
         "/api/runtime/v1/connectors/{connector_name}/sync/resources",
         response_model=RuntimeSyncResourceListResponse,
@@ -608,13 +651,10 @@ def create_runtime_api_app(
                 sync_mode=body.sync_mode,
                 force_full_refresh=bool(body.force_full_refresh),
             )
+        except HTTPException:
+            raise
         except Exception as exc:
-            return RuntimeSyncResponse(
-                status="failed",
-                connector_name=connector_name,
-                sync_mode=body.sync_mode,
-                error=str(exc),
-            )
+            _raise_runtime_internal_server_error("connector sync", exc)
         return RuntimeSyncResponse.model_validate(payload)
 
     if ui_enabled:
@@ -629,7 +669,7 @@ def create_runtime_api_app(
             return {
                 "health": {"status": "ok"},
                 "features": list(enabled_features),
-                "auth": _build_runtime_auth_status(auth_resolver),
+                "auth": await _build_runtime_auth_status(auth_resolver),
                 "runtime": {
                     "mode": "configured_local",
                     "workspace_id": str(configured_host.context.workspace_id),
@@ -652,6 +692,7 @@ def create_runtime_api_app(
                         "name": item.get("name"),
                         "connector": item.get("connector"),
                         "semantic_model": item.get("semantic_model"),
+                        "management_mode": item.get("management_mode"),
                         "managed": bool(item.get("managed")),
                     }
                     for item in dataset_items[:8]
@@ -662,6 +703,7 @@ def create_runtime_api_app(
                         "name": item.get("name"),
                         "connector_type": item.get("connector_type"),
                         "supports_sync": bool(item.get("supports_sync")),
+                        "management_mode": item.get("management_mode"),
                         "managed": bool(item.get("managed")),
                     }
                     for item in connector_items[:8]
@@ -764,13 +806,10 @@ async def _execute_runtime_sql(
                 connection_name=request.connection_name,
                 requested_limit=request.requested_limit,
             )
+        except HTTPException:
+            raise
         except Exception as exc:
-            return RuntimeSqlQueryResponse(
-                sql_job_id=uuid.uuid4(),
-                status="failed",
-                error={"message": str(exc)},
-                query=request.query,
-            )
+            _raise_runtime_internal_server_error("direct SQL query", exc)
         return RuntimeSqlQueryResponse(
             sql_job_id=uuid.uuid4(),
             status="succeeded",
@@ -809,13 +848,10 @@ async def _execute_runtime_sql(
     )
     try:
         payload = await runtime_host.execute_sql(request=create_request)
+    except HTTPException:
+        raise
     except Exception as exc:
-        return RuntimeSqlQueryResponse(
-            sql_job_id=sql_job_id,
-            status="failed",
-            error={"message": str(exc)},
-            query=request.query,
-        )
+        _raise_runtime_internal_server_error("SQL query", exc)
     return RuntimeSqlQueryResponse(
         sql_job_id=sql_job_id,
         status="succeeded",
@@ -835,23 +871,29 @@ def _parse_runtime_features_env(value: str | None) -> tuple[str, ...]:
     return _normalize_runtime_features(str(value or "").split(","))
 
 
+def _raise_runtime_internal_server_error(operation: str, exc: Exception) -> None:
+    logging.getLogger(__name__).exception("Runtime API %s failed", operation)
+    raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 def _parse_runtime_debug_env(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "debug"}
 
 
 def _require_local_auth_manager(auth_resolver: RuntimeAuthResolver):
-    if auth_resolver.mode != RuntimeAuthMode.local or auth_resolver.local_auth is None:
+    if auth_resolver.local_auth is None:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Runtime local login is not enabled. "
-                "Set LANGBRIDGE_RUNTIME_AUTH_MODE=local to use bootstrap and login endpoints."
+                "Runtime local operator login is not enabled. "
+                "Use a secured runtime auth mode and keep LANGBRIDGE_RUNTIME_AUTH_LOCAL_ENABLED enabled "
+                "to use bootstrap and login endpoints."
             ),
         )
     return auth_resolver.local_auth
 
 
-def _build_runtime_auth_status(auth_resolver: RuntimeAuthResolver) -> dict[str, Any]:
+async def _build_runtime_auth_status(auth_resolver: RuntimeAuthResolver) -> dict[str, Any]:
     if auth_resolver.mode == RuntimeAuthMode.none:
         return {
             "auth_enabled": False,
@@ -860,24 +902,29 @@ def _build_runtime_auth_status(auth_resolver: RuntimeAuthResolver) -> dict[str, 
             "has_admin": False,
             "login_allowed": False,
         }
-    if auth_resolver.mode != RuntimeAuthMode.local:
+
+    if auth_resolver.local_auth is None:
         return {
             "auth_enabled": True,
             "auth_mode": auth_resolver.mode.value,
             "bootstrap_required": False,
-            "has_admin": True,
+            "has_admin": False,
             "login_allowed": False,
-            "detail": "This runtime uses bearer-token or JWT authentication instead of browser-managed local sessions.",
+            "detail": "This runtime uses bearer authentication only. Local operator browser sessions are disabled.",
         }
-    local_auth = _require_local_auth_manager(auth_resolver)
-    status = local_auth.auth_status()
+
+    status = await auth_resolver.local_auth.auth_status()
     return {
         "auth_enabled": True,
         "auth_mode": auth_resolver.mode.value,
         "bootstrap_required": bool(status["bootstrap_required"]),
         "has_admin": bool(status["has_admin"]),
         "login_allowed": True,
-        "session_cookie_name": local_auth.cookie_name,
+        "session_cookie_name": auth_resolver.local_auth.cookie_name,
+        "detail": (
+            "Bearer clients can continue using the configured runtime auth mode. "
+            "The runtime UI uses a local operator session cookie."
+        ),
     }
 
 
@@ -887,7 +934,7 @@ def _set_runtime_session_cookie(
     response: JSONResponse,
     auth_resolver: RuntimeAuthResolver,
     token: str,
-) -> None:
+    ) -> None:
     local_auth = _require_local_auth_manager(auth_resolver)
     forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").strip().lower()
     secure = forwarded_proto == "https" or request.url.scheme == "https"
@@ -900,6 +947,17 @@ def _set_runtime_session_cookie(
         secure=secure,
         path="/",
     )
+
+
+def _serialize_runtime_principal_user(principal: RuntimeAuthPrincipal) -> dict[str, Any]:
+    username = principal.display_name or principal.subject or "runtime"
+    return {
+        "id": str(principal.actor_id) if principal.actor_id else None,
+        "username": username,
+        "email": principal.email,
+        "roles": list(principal.roles),
+        "provider": principal.provider,
+    }
 
 
 def _resolve_default_background_tasks(
@@ -954,10 +1012,31 @@ def _configure_runtime_logging(*, debug: bool) -> None:
     logger.addHandler(handler)
 
 
+async def _close_runtime_host(runtime_host: RuntimeHost) -> None:
+    aclose = getattr(runtime_host, "aclose", None)
+    if callable(aclose):
+        result = aclose()
+        if inspect.isawaitable(result):
+            await result
+        return
+    close = getattr(runtime_host, "close", None)
+    if callable(close):
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+
+
 def _stringify_optional_uuid(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _runtime_mutation_status_code(detail: str) -> int:
+    normalized = str(detail or "").strip().lower()
+    if "already exists" in normalized or "already in use" in normalized:
+        return 409
+    return 400
 
 
 def _is_missing_semantic_resource(detail: str) -> bool:
@@ -967,3 +1046,8 @@ def _is_missing_semantic_resource(detail: str) -> bool:
         or "semantic model" in normalized and "not found" in normalized
         or "dataset" in normalized and "not found" in normalized
     )
+
+
+def _is_missing_runtime_resource(detail: str) -> bool:
+    normalized = str(detail or "").strip().lower()
+    return "not found" in normalized or "unknown " in normalized

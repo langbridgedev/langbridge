@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -27,6 +27,7 @@ from langbridge.connectors.base.config import ConnectorRuntimeType
 from langbridge.runtime.models import (
     ConnectorSyncState,
     DatasetColumnMetadata,
+    DatasetMaterializationMode,
     DatasetMetadata,
     DatasetPolicyMetadata,
     DatasetRevision,
@@ -40,6 +41,7 @@ from langbridge.runtime.ports import (
     DatasetRevisionStore,
     LineageEdgeStore,
 )
+from langbridge.runtime.models.metadata import LifecycleState, ManagementMode
 from langbridge.runtime.settings import runtime_settings as settings
 
 _RESOURCE_SANITIZER = re.compile(r"[^0-9A-Za-z_]+")
@@ -48,6 +50,13 @@ _SYNC_MODE_FULL_REFRESH = "FULL_REFRESH"
 _SYNC_STATUS_NEVER_SYNCED = "never_synced"
 _SYNC_STATUS_SUCCEEDED = "succeeded"
 _SYNC_STATUS_FAILED = "failed"
+
+
+async def _flush_stores(*stores: Any) -> None:
+    for store in stores:
+        flush = getattr(store, "flush", None)
+        if callable(flush):
+            await flush()
 
 
 def _enum_value(value: Any) -> str:
@@ -265,16 +274,18 @@ class ConnectorSyncRuntime:
         checkpoint_cursor: str | None,
         last_sync_at: datetime,
     ) -> MaterializedDatasetResult:
-        dataset_name = self._dataset_name(
+        generated_dataset_name = self._dataset_name(
             connector_type=connector_type,
             connection_id=connection_id,
             resource_name=resource_name,
         )
-        dataset = await self._dataset_repository.find_file_dataset_for_connection(
+        dataset = await self._find_declared_or_materialized_dataset(
             workspace_id=workspace_id,
             connection_id=connection_id,
-            table_name=dataset_name,
+            resource_name=resource_name,
+            generated_dataset_name=generated_dataset_name,
         )
+        dataset_name = dataset.name if dataset is not None else generated_dataset_name
         parquet_path = self._dataset_parquet_path(
             workspace_id=workspace_id,
             connection_id=connection_id,
@@ -302,6 +313,7 @@ class ConnectorSyncRuntime:
             "connector_sync": {
                 "connector_id": str(connection_id),
                 "connector_type": connector_type.value,
+                "connector_family": getattr(connector_record, "connector_family", None),
                 "resource_name": resource_name,
                 "root_resource_name": root_resource_name,
                 "parent_resource_name": parent_resource_name,
@@ -325,6 +337,7 @@ class ConnectorSyncRuntime:
                 description=self._dataset_description(connector_record.name, resource_name, parent_resource_name),
                 tags=self._dataset_tags(connector_type=connector_type, resource_name=resource_name),
                 dataset_type="FILE",
+                materialization_mode=DatasetMaterializationMode.SYNCED.value,
                 dialect="duckdb",
                 catalog_name=None,
                 schema_name=None,
@@ -341,6 +354,8 @@ class ConnectorSyncRuntime:
                 last_profiled_at=None,
                 created_at=now,
                 updated_at=now,
+                management_mode=ManagementMode.RUNTIME_MANAGED,
+                lifecycle_state=LifecycleState.ACTIVE,
             )
             self._apply_dataset_descriptor_metadata(
                 dataset=dataset,
@@ -349,22 +364,30 @@ class ConnectorSyncRuntime:
             self._dataset_repository.add(dataset)
             change_summary = f"Initial sync materialized {resource_name}."
         else:
+            existing_sync_meta = self._sync_meta(dataset)
+            existing_resource_name = str(existing_sync_meta.get("resource_name") or "").strip()
+            configured_dataset = (
+                str(getattr(dataset.management_mode, "value", dataset.management_mode))
+                == ManagementMode.CONFIG_MANAGED.value
+            )
             dataset.connection_id = connection_id
             dataset.updated_by = actor_id
-            dataset.name = dataset_name
-            dataset.description = self._dataset_description(
-                connector_record.name,
-                resource_name,
-                parent_resource_name,
-            )
+            dataset.name = dataset.name or dataset_name
+            if not configured_dataset or not str(dataset.description or "").strip():
+                dataset.description = self._dataset_description(
+                    connector_record.name,
+                    resource_name,
+                    parent_resource_name,
+                )
             dataset.tags = self._merge_tags(
                 existing=list(dataset.tags_json or []),
                 required=self._dataset_tags(connector_type=connector_type, resource_name=resource_name),
             )
             dataset.dataset_type = "FILE"
+            dataset.materialization_mode = DatasetMaterializationMode.SYNCED.value
             dataset.dialect = "duckdb"
             dataset.schema_name = None
-            dataset.table_name = dataset_name
+            dataset.table_name = dataset.table_name or self._dataset_sql_alias(dataset.name)
             dataset.storage_uri = storage_uri
             dataset.file_config = file_config
             dataset.status = "published"
@@ -375,7 +398,10 @@ class ConnectorSyncRuntime:
                 dataset=dataset,
                 connection_connector_type=connector_type.value,
             )
-            change_summary = f"{sync_mode.replace('_', ' ').title()} sync updated {resource_name}."
+            if configured_dataset and not existing_resource_name:
+                change_summary = f"Initial sync materialized declared dataset for {resource_name}."
+            else:
+                change_summary = f"{sync_mode.replace('_', ' ').title()} sync updated {resource_name}."
 
         await self._replace_columns(dataset=dataset, table=table)
         policy = await self._get_or_create_policy(dataset=dataset)
@@ -451,6 +477,11 @@ class ConnectorSyncRuntime:
     ) -> None:
         if self._dataset_revision_repository is None:
             return
+        await _flush_stores(
+            self._dataset_repository,
+            self._dataset_column_repository,
+            self._dataset_policy_repository,
+        )
         columns = await self._dataset_column_repository.list_for_dataset(dataset_id=dataset.id)
         next_revision = await self._dataset_revision_repository.next_revision_number(dataset_id=dataset.id)
         definition = self._build_dataset_definition_snapshot(dataset)
@@ -601,6 +632,7 @@ class ConnectorSyncRuntime:
             "description": dataset.description,
             "tags": list(dataset.tags_json or []),
             "dataset_type": dataset.dataset_type,
+            "materialization_mode": dataset.materialization_mode_value,
             "source_kind": dataset.source_kind,
             "connector_kind": dataset.connector_kind,
             "storage_kind": dataset.storage_kind,
@@ -630,6 +662,7 @@ class ConnectorSyncRuntime:
             {
                 "source_type": "dataset_contract",
                 "dataset_id": str(dataset.id),
+                "materialization_mode": dataset.materialization_mode_value,
                 "source_kind": dataset.source_kind,
                 "connector_kind": dataset.connector_kind,
                 "storage_kind": dataset.storage_kind,
@@ -768,6 +801,43 @@ class ConnectorSyncRuntime:
             seen.add(normalized)
             merged.append(normalized)
         return merged
+
+    async def _find_declared_or_materialized_dataset(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        connection_id: uuid.UUID,
+        resource_name: str,
+        generated_dataset_name: str,
+    ) -> DatasetMetadata | None:
+        datasets = await self._dataset_repository.list_for_connection(
+            workspace_id=workspace_id,
+            connection_id=connection_id,
+            dataset_types=["FILE"],
+            limit=1000,
+        )
+        normalized_resource_name = resource_name.strip()
+        normalized_generated_name = generated_dataset_name.strip().lower()
+        generated_match: DatasetMetadata | None = None
+        for dataset in datasets:
+            if str(dataset.materialization_mode_value or "").strip().lower() != DatasetMaterializationMode.SYNCED.value:
+                continue
+            sync_meta = self._sync_meta(dataset)
+            if str(sync_meta.get("resource_name") or "").strip() == normalized_resource_name:
+                return dataset
+            if str(dataset.name or "").strip().lower() == normalized_generated_name:
+                generated_match = dataset
+            elif str(dataset.table_name or "").strip().lower() == normalized_generated_name:
+                generated_match = dataset
+        return generated_match
+
+    @staticmethod
+    def _sync_meta(dataset: DatasetMetadata) -> Mapping[str, Any]:
+        file_config = dict(dataset.file_config_json or {})
+        payload = file_config.get("connector_sync")
+        if isinstance(payload, Mapping):
+            return payload
+        return {}
 
     @staticmethod
     def _dataset_parquet_path(

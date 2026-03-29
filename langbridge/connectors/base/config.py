@@ -49,6 +49,15 @@ class ConnectorSyncStrategy(str, Enum):
     WINDOWED_INCREMENTAL = "WINDOWED_INCREMENTAL"
     MANUAL = "MANUAL"
 
+
+class ConnectorCapabilities(_Base):
+    supports_live_datasets: bool = False
+    supports_synced_datasets: bool = False
+    supports_incremental_sync: bool = False
+    supports_query_pushdown: bool = False
+    supports_preview: bool = False
+    supports_federated_execution: bool = False
+
 class ConnectorConfigEntrySchema(_Base):
     field: str
     value: Optional[Any] = None
@@ -77,6 +86,7 @@ class ConnectorPluginMetadata(_Base):
     supported_resources: List[str] = Field(default_factory=list)
     auth_schema: List[ConnectorAuthFieldSchema] = Field(default_factory=list)
     sync_strategy: ConnectorSyncStrategy | None = None
+    capabilities: ConnectorCapabilities = Field(default_factory=ConnectorCapabilities)
 
 
 class ConnectorConfigSchema(_Base):
