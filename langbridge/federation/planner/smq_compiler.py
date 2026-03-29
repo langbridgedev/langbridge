@@ -1,5 +1,4 @@
-﻿from __future__ import annotations
-
+﻿
 from langbridge.federation.models.smq import SMQQuery
 from langbridge.semantic.model import SemanticModel
 from langbridge.semantic.query import SemanticQuery, SemanticQueryEngine

@@ -1,4 +1,5 @@
 import logging
+import traceback
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
@@ -25,7 +26,7 @@ from langbridge.orchestrator.agents.planner import (
     PlanningConstraints,
 )
 from langbridge.orchestrator.agents.reasoning.agent import ReasoningAgent
-from langbridge.orchestrator.agents.supervisor import SupervisorOrchestrator
+from langbridge.orchestrator.agents.supervisor.orchestrator import SupervisorOrchestrator
 from langbridge.orchestrator.agents.visual import VisualAgent
 from langbridge.orchestrator.agents.web_search import WebSearchAgent
 from langbridge.orchestrator.definitions import AgentDefinitionModel, ExecutionMode
@@ -817,9 +818,24 @@ class AgentOrchestratorFactory:
             logger=self._logger,
             event_emitter=event_emitter,
         )
-        
-        print(definition.execution.response_mode)
 
+        try:
+            print(SupervisorOrchestrator(
+                llm=llm_provider,
+                analyst_agent=analyst_agent,
+                visual_agent=visual_agent,
+                planning_agent=planning_agent,
+                reasoning_agent=reasoning_agent,
+                deep_research_agent=deep_research_agent,
+                web_search_agent=web_search_agent,
+                logger=self._logger,
+                event_emitter=event_emitter,
+                # response_mode=definition.execution.response_mode,
+            ))
+        except Exception as exc:
+            self._logger.error("Error building SupervisorOrchestrator: %s", exc, exc_info=True)
+            print(traceback.format_exc())
+        
         return SupervisorOrchestrator(
             llm=llm_provider,
             analyst_agent=analyst_agent,

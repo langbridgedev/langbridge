@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 import copy
 import uuid
@@ -64,8 +63,6 @@ class SemanticApplication:
         async with self._host._runtime_operation_scope() as uow:
             datasets = await self._host._dataset_repository.list_for_workspace(
                 workspace_id=self._host.context.workspace_id,
-                limit=5000,
-                offset=0,
             )
             datasets_by_name = {dataset.name: dataset for dataset in datasets}
 

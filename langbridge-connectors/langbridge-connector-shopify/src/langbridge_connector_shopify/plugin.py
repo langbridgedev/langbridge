@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 from langbridge.connectors.base.config import ConnectorCapabilities, ConnectorFamily, ConnectorRuntimeType
 from langbridge.plugins import ConnectorPlugin, register_connector_plugin

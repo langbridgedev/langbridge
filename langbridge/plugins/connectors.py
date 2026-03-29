@@ -2,7 +2,6 @@
 Connector registry responsible for managing available connectors.
 """
 
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 from importlib import import_module

@@ -2,7 +2,6 @@
 Web search agent that retrieves, summarizes, reranks, and synthesizes web results.
 """
 
-from __future__ import annotations
 
 import asyncio
 import html

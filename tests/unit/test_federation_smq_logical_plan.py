@@ -1,5 +1,4 @@
-﻿from __future__ import annotations
-
+﻿
 import uuid
 
 from langbridge.federation.models import FederationWorkflow, SMQQuery, VirtualDataset, VirtualRelationship, VirtualTableBinding

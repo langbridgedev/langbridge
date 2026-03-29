@@ -2,7 +2,6 @@
 Federated analytical tool for dataset-backed and semantic-model-backed SQL generation.
 """
 
-from __future__ import annotations
 
 import asyncio
 import logging
