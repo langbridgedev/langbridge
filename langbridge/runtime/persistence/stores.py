@@ -393,6 +393,14 @@ class RepositoryDatasetCatalogStore(DatasetCatalogStore):
             )
         return from_dataset_record(reloaded) or instance
 
+    async def delete(self, instance: DatasetMetadata) -> None:
+        record = await self._repository.get_for_workspace(
+            dataset_id=instance.id,
+            workspace_id=instance.workspace_id,
+        )
+        if record is not None:
+            await self._repository.delete(record)
+
     async def get_by_id(self, id_: object) -> DatasetMetadata | None:
         return from_dataset_record(await self._repository.get_by_id(id_))
 

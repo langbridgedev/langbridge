@@ -263,10 +263,12 @@ def _resolve_table(
     schema_name = table_expression.db
     catalog_name = table_expression.catalog
 
-    direct = virtual_dataset.tables.get(table_name)
+    direct = virtual_dataset.virtual_tables.get(table_name.lower())
     if direct is not None:
         return alias, direct
-
+    direct = virtual_dataset.tables.get(f"{schema_name}.{table_name}" if schema_name else table_name)
+    if direct is not None:
+        return alias, direct
     candidates = []
     for table_key, binding in virtual_dataset.tables.items():
         if table_key == table_name:

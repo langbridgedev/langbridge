@@ -932,6 +932,42 @@ def test_runtime_host_api_lifespan_closes_runtime_host(tmp_path: Path) -> None:
     assert controller.closed is True
 
 
+def test_runtime_host_api_exposes_connector_type_config_schema(tmp_path: Path) -> None:
+    runtime = _build_runtime(tmp_path)
+    client = TestClient(_create_runtime_app(runtime))
+
+    response = client.get("/api/runtime/v1/connector/type/sqlite/config")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["connector_type"] == "SQLITE"
+    assert payload["name"] == "Sqlite"
+    assert payload["plugin_metadata"]["connector_type"] == "SQLITE"
+    assert payload["plugin_metadata"]["connector_family"] == "DATABASE"
+    assert payload["config"] == [
+        {
+            "field": "location",
+            "value": None,
+            "label": "Location",
+            "required": True,
+            "default": None,
+            "description": "Sqlite Location",
+            "type": "string",
+            "value_list": None,
+        }
+    ]
+
+
+def test_runtime_host_api_rejects_unknown_connector_type_config_requests(tmp_path: Path) -> None:
+    runtime = _build_runtime(tmp_path)
+    client = TestClient(_create_runtime_app(runtime))
+
+    response = client.get("/api/runtime/v1/connector/type/not_real/config")
+
+    assert response.status_code == 400
+    assert "not_real" in response.json()["detail"].lower()
+
+
 def test_runtime_host_api_supports_connector_sync(tmp_path: Path) -> None:
     with mock_stripe_api() as api_base_url, runtime_storage_dirs(tmp_path):
         config_path = write_sync_runtime_config(tmp_path, api_base_url=api_base_url)
@@ -1223,6 +1259,160 @@ def test_runtime_host_api_create_endpoints_do_not_override_config_managed_resour
     assert semantic_detail.status_code == 200
     assert semantic_detail.json()["management_mode"] == "config_managed"
     assert semantic_detail.json()["managed"] is True
+
+
+def test_runtime_host_api_updates_and_deletes_runtime_managed_resources(
+    tmp_path: Path,
+) -> None:
+    runtime = _build_runtime(tmp_path)
+    client = TestClient(_create_runtime_app(runtime))
+    created = _create_runtime_managed_resources(client, tmp_path)
+
+    connector_update = client.patch(
+        "/api/runtime/v1/connectors/runtime_demo",
+        json={
+            "description": "Updated runtime connector",
+            "connection": {"path": str((tmp_path / "example.db").resolve())},
+            "metadata": {"schema": "main"},
+        },
+    )
+    assert connector_update.status_code == 200
+    assert connector_update.json()["description"] == "Updated runtime connector"
+    assert connector_update.json()["metadata"]["schema"] == "main"
+    assert connector_update.json()["management_mode"] == "runtime_managed"
+
+    dataset_update = client.patch(
+        "/api/runtime/v1/datasets/runtime_orders",
+        json={
+            "description": "Updated runtime dataset",
+            "materialization_mode": "live",
+            "source": {"sql": "SELECT country, net_revenue FROM orders_enriched"},
+            "tags": ["runtime", "edited"],
+        },
+    )
+    assert dataset_update.status_code == 200
+    assert dataset_update.json()["description"] == "Updated runtime dataset"
+    assert dataset_update.json()["sql_text"] == "SELECT country, net_revenue FROM orders_enriched"
+    assert dataset_update.json()["management_mode"] == "runtime_managed"
+    assert "edited" in dataset_update.json()["tags"]
+
+    semantic_payload = created["semantic_model"]["content_json"]
+    semantic_payload["description"] = "Updated runtime semantic model"
+    semantic_update = client.patch(
+        "/api/runtime/v1/semantic-models/runtime_orders_model",
+        json={
+            "description": "Updated runtime semantic model",
+            "datasets": ["runtime_orders"],
+            "model": semantic_payload,
+        },
+    )
+    assert semantic_update.status_code == 200
+    assert semantic_update.json()["description"] == "Updated runtime semantic model"
+    assert semantic_update.json()["management_mode"] == "runtime_managed"
+
+    delete_semantic = client.delete("/api/runtime/v1/semantic-models/runtime_orders_model")
+    assert delete_semantic.status_code == 200
+    assert delete_semantic.json()["deleted"] is True
+    assert client.get("/api/runtime/v1/semantic-models/runtime_orders_model").status_code == 404
+
+    delete_dataset = client.delete("/api/runtime/v1/datasets/runtime_orders")
+    assert delete_dataset.status_code == 200
+    assert delete_dataset.json()["deleted"] is True
+    assert client.get("/api/runtime/v1/datasets/runtime_orders").status_code == 404
+
+    delete_connector = client.delete("/api/runtime/v1/connectors/runtime_demo")
+    assert delete_connector.status_code == 200
+    assert delete_connector.json()["deleted"] is True
+    connectors = {
+        item["name"]: item
+        for item in client.get("/api/runtime/v1/connectors").json()["items"]
+    }
+    assert "runtime_demo" not in connectors
+
+
+def test_runtime_host_api_supports_connectorless_file_datasets(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "uploaded_orders.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "order_id,customer_name",
+                "1,Ada",
+                "2,Grace",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    runtime = _build_runtime(tmp_path)
+    client = TestClient(_create_runtime_app(runtime))
+
+    created = client.post(
+        "/api/runtime/v1/datasets",
+        json={
+            "name": "uploaded_orders",
+            "connector": None,
+            "materialization_mode": "live",
+            "source": {
+                "path": str(csv_path),
+                "header": True,
+            },
+        },
+    )
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["connector"] is None
+    assert payload["connector_id"] is None
+    assert payload["source_kind"] == "file"
+    assert payload["storage_kind"] == "csv"
+
+    preview = client.post(
+        f"/api/runtime/v1/datasets/{payload['id']}/preview",
+        json={"limit": 2},
+    )
+    assert preview.status_code == 200
+    assert preview.json()["rows"] == [
+        {"order_id": "1", "customer_name": "Ada"},
+        {"order_id": "2", "customer_name": "Grace"},
+    ]
+
+    updated = client.patch(
+        "/api/runtime/v1/datasets/uploaded_orders",
+        json={"description": "Uploaded file dataset"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["connector"] is None
+    assert updated.json()["description"] == "Uploaded file dataset"
+
+
+def test_runtime_host_api_rejects_mutating_config_managed_resources(
+    tmp_path: Path,
+) -> None:
+    runtime = _build_runtime(tmp_path)
+    client = TestClient(_create_runtime_app(runtime))
+
+    connector_update = client.patch(
+        "/api/runtime/v1/connectors/commerce_demo",
+        json={"description": "Should fail"},
+    )
+    assert connector_update.status_code == 400
+    assert "config_managed" in connector_update.json()["detail"]
+
+    dataset_delete = client.delete("/api/runtime/v1/datasets/shopify_orders")
+    assert dataset_delete.status_code == 400
+    assert "config_managed" in dataset_delete.json()["detail"]
+
+    semantic_update = client.patch(
+        "/api/runtime/v1/semantic-models/commerce_performance",
+        json={
+            "description": "Should fail",
+            "datasets": ["shopify_orders"],
+            "model": {"version": "1", "name": "commerce_performance", "datasets": {}},
+        },
+    )
+    assert semantic_update.status_code == 400
+    assert "config_managed" in semantic_update.json()["detail"]
 
 
 def test_runtime_host_api_sqlite_persists_runtime_managed_resources_across_restart(

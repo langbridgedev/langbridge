@@ -70,7 +70,7 @@ class LocalRuntimeDatasetConfig(BaseModel):
     name: str
     label: str | None = None
     description: str | None = None
-    connector: str
+    connector: str | None = None
     materialization_mode: DatasetMaterializationMode = DatasetMaterializationMode.LIVE
     source: LocalRuntimeDatasetSourceConfig
     semantic_model: str | None = None

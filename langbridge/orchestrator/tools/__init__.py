@@ -13,8 +13,6 @@ from .sql_analyst import (
     QueryResult,
     SqlAnalystTool,
     SemanticModel,
-    SemanticModelError,
-    load_semantic_model,
 )
 from .semantic_query_builder import (
     QueryBuilderCopilotRequest,
@@ -33,8 +31,6 @@ __all__ = [
     "QueryResult",
     "SqlAnalystTool",
     "SemanticModel",
-    "SemanticModelError",
-    "load_semantic_model",
     "QueryBuilderCopilotRequest",
     "QueryBuilderCopilotResponse",
     "SemanticQueryBuilderCopilotTool",

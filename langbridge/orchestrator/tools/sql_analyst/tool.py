@@ -70,8 +70,8 @@ class SqlAnalystTool:
         llm: LLMProvider,
         context: AnalyticalContext,
         federated_sql_executor: FederatedSqlExecutor,
-        semantic_model: SemanticModelLike | None = None,
-        logger: Optional[logging.Logger] = None,
+        semantic_model: SemanticModelLike,
+        logger: logging.Logger,
         llm_temperature: float = 0.0,
         priority: int = 0,
         embedder: Optional[EmbeddingProvider] = None,
@@ -390,6 +390,14 @@ class SqlAnalystTool:
             )
         except Exception as exc:  # pragma: no cover
             self.logger.warning("Failed to emit analytical tool event %s: %s", event_type, exc)
+            
+    def _build_sql_orchestration_instructions(self) -> str:
+        if self.semantic_model.orchestration is not None:
+            return (
+                "Orchestration instructions (provide guidance on how to generate SQL for this semantic model, including how to use its semantic definitions and how to join its tables if applicable):\n"
+                f"{self.semantic_model.orchestration}\n"
+            )
+        return ""
 
     def _build_prompt(self, request: AnalystQueryRequest) -> str:
         conversation_text = ""
@@ -430,6 +438,7 @@ class SqlAnalystTool:
             "- Do not invent columns, tables, metrics, or joins.\n"
             "- Use ANSI-friendly PostgreSQL syntax.\n"
             "- Use search hints only as grounding for filters when they are relevant.\n"
+            f"{self.__build_sql_orchestration_instructions()}"
             f"{limit_hint}"
             f"{filters_text}"
             f"{conversation_text}"
@@ -570,7 +579,7 @@ class SqlAnalystTool:
             semantic_model_id=self._semantic_vector_search_model_id,
             queries=phrases,
             embedding_provider=self.embedder,
-            top_k=3,
+            top_k=10,
         )
         if not raw_hits:
             return []
@@ -586,7 +595,7 @@ class SqlAnalystTool:
             for hit in raw_hits
             if hit.score >= VECTOR_SIMILARITY_THRESHOLD
         ]
-        return matches[:3]
+        return matches[:10]
 
     def _extract_candidate_phrases(self, question: str) -> List[str]:
         base = question.strip()

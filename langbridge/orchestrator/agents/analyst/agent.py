@@ -2,7 +2,6 @@
 Analyst agent that selects an analytical context and executes it through federation.
 """
 
-
 import asyncio
 import logging
 from typing import Any, Optional, Sequence

@@ -53,6 +53,9 @@ class MemoryDatasetProvider(DatasetMetadataProvider):
     def upsert(self, dataset: DatasetMetadata) -> None:
         self._datasets[dataset.id] = dataset
 
+    def remove(self, *, dataset_id: uuid.UUID) -> None:
+        self._datasets.pop(dataset_id, None)
+
 
 class MemoryConnectorProvider(ConnectorMetadataProvider):
     def __init__(self, connectors: dict[uuid.UUID, ConnectorMetadata] | None = None) -> None:
@@ -90,6 +93,9 @@ class MemoryConnectorProvider(ConnectorMetadataProvider):
     def upsert(self, connector: ConnectorMetadata) -> None:
         self._connectors[connector.id] = connector
 
+    def remove(self, *, connector_id: uuid.UUID) -> None:
+        self._connectors.pop(connector_id, None)
+
 
 class MemorySemanticModelProvider(SemanticModelMetadataProvider):
     def __init__(
@@ -123,6 +129,9 @@ class MemorySemanticModelProvider(SemanticModelMetadataProvider):
 
     def upsert(self, semantic_model: SemanticModelMetadata) -> None:
         self._semantic_models[(semantic_model.workspace_id, semantic_model.id)] = semantic_model
+
+    def remove(self, *, workspace_id: uuid.UUID, semantic_model_id: uuid.UUID) -> None:
+        self._semantic_models.pop((workspace_id, semantic_model_id), None)
 
 
 class MemorySemanticVectorIndexProvider(SemanticVectorIndexMetadataProvider):

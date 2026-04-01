@@ -355,12 +355,17 @@ class Metric(BaseModel):
     expression: str
 
 
+class SemanticOrchestration(BaseModel):
+    orchestration: str
+    steps: Optional[List[Dict[str, Any]]] = None
+
 class SemanticModel(BaseModel):
     version: str
     name: Optional[str] = None
     connector: Optional[str] = None
     dialect: Optional[str] = None
     description: Optional[str] = None
+    orchestration: Optional[SemanticOrchestration] = None
     tags: Optional[List[str]] = None
     datasets: Dict[str, Dataset] = Field(default_factory=dict)
     relationships: Optional[List[Relationship]] = None

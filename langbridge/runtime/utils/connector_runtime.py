@@ -89,7 +89,7 @@ def _default_connector_capabilities(
         return _coerce_connector_capabilities(plugin.capabilities)
 
     normalized_type = str(connector_type or "").strip().upper()
-    if normalized_type == "FILE":
+    if normalized_type == "LOCAL_FILESYSTEM":
         return ConnectorCapabilities(
             supports_live_datasets=True,
             supports_synced_datasets=False,

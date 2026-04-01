@@ -39,6 +39,34 @@ export SHOPIFY_SHOP_DOMAIN=acme.myshopify.com
 export SHOPIFY_ACCESS_TOKEN=shpat_...
 ```
 
+If you are using a Shopify app created in the Dev Dashboard, you can fetch the
+Admin API access token directly with the helper script in this example. The
+script uses Shopify's current client-credentials token endpoint and can update
+`examples/shopify_sync/.env` for you:
+
+```bash
+export SHOPIFY_SHOP_DOMAIN=acme.myshopify.com
+export SHOPIFY_CLIENT_ID=your_shopify_client_id
+export SHOPIFY_CLIENT_SECRET=your_shopify_client_secret
+
+python examples/shopify_sync/get_shopify_access_token.py --write-env
+```
+
+The script will print shell exports and write `SHOPIFY_ACCESS_TOKEN` into the
+example `.env` file. If you only want the token value, use:
+
+```bash
+python examples/shopify_sync/get_shopify_access_token.py --raw
+```
+
+Notes:
+
+- this helper is for Dev Dashboard apps installed on your target shop
+- Shopify returns short-lived access tokens for this flow, so rerun the script when the token expires
+- admin-created custom apps still generate their Admin API token inside Shopify admin
+- if you are building for another merchant rather than your own store, this is not the right auth flow
+- the app must already be installed on the shop with the Admin API scopes you need
+
 ## Start The Runtime Host
 
 From the repository root:

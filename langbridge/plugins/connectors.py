@@ -48,13 +48,10 @@ _BUILTIN_PLUGIN_MODULES = (
     "langbridge.connectors.saas.hubspot",
     "langbridge.connectors.saas.google_analytics",
     "langbridge.connectors.saas.salesforce",
-    "langbridge_connector_shopify.plugin",
-    "langbridge_connector_hubspot.plugin",
-    "langbridge_connector_github.plugin",
-    "langbridge_connector_jira.plugin",
-    "langbridge_connector_asana.plugin",
-    "langbridge_connector_stripe.plugin",
 )
+
+# example: langbridge_connector_hubspot.plugin
+_PACKAGED_PLUGIN_MODULE_PATH = "langbridge_connector_*"
 _BUILTIN_CONNECTOR_MODULES = (
     "langbridge.connectors.builtin.postgres.connector",
     "langbridge.connectors.builtin.mysql.connector",
@@ -102,6 +99,34 @@ def _register_builtin_plugins_from_modules() -> None:
             logger.warning("Skipping connector plugin module %s: %s", module_path, exc)
 
 
+def _register_loaded_plugin(loaded: object) -> None:
+    if isinstance(loaded, ConnectorPlugin):
+        _plugin_registry.register(loaded)
+        return
+
+    if isinstance(loaded, type) and issubclass(loaded, ConnectorPlugin):
+        _plugin_registry.register(loaded())  # type: ignore[call-arg]
+        return
+
+    plugin_factory = loaded if callable(loaded) else getattr(loaded, "get_connector_plugin", None)
+    if not callable(plugin_factory):
+        raise TypeError("did not load a supported plugin object")
+
+    plugin = plugin_factory()
+    if not isinstance(plugin, ConnectorPlugin):
+        raise TypeError(f"returned an invalid plugin: {plugin!r}")
+    _plugin_registry.register(plugin)
+
+
+def _register_packaged_plugins() -> None:
+    _ensure_repo_connector_src_paths()
+
+    for entry_point in entry_points(group="langbridge.connectors"):
+        try:
+            _register_loaded_plugin(entry_point.load())
+        except Exception as exc:
+            logger.warning("Skipping entry point %s: %s", entry_point.name, exc)
+
 def ensure_builtin_plugins_loaded() -> None:
     global _builtin_plugins_loaded
 
@@ -114,6 +139,7 @@ def ensure_builtin_plugins_loaded() -> None:
 
 
 def ensure_builtin_connectors_loaded() -> None:
+    pass
     global _builtin_connectors_loaded
 
     if _builtin_connectors_loaded:
@@ -141,7 +167,7 @@ def ensure_entrypoint_plugins_loaded() -> None:
     if _entrypoint_plugins_loaded:
         return
 
-    _plugin_registry.load_entrypoints()
+    _register_packaged_plugins()
     _entrypoint_plugins_loaded = True
 
 

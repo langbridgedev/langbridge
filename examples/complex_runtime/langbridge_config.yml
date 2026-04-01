@@ -28,7 +28,7 @@ connectors:
       path: ./data/growth_ops.db
 
   - name: planning_files
-    type: file
+    type: local_filesystem
     description: File-backed planning connector for monthly channel spend targets.
     connection: {}
 

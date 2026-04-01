@@ -41,15 +41,7 @@ class ConnectionPolicy(RuntimeModel):
     redaction_rules: dict[str, str] = Field(default_factory=dict)
 
 
-class ConnectionMetadata(RuntimeModel):
-    host: str | None = None
-    port: int | None = None
-    database: str | None = None
-    schema_name: str | None = Field(default=None, alias="schema")
-    warehouse: str | None = None
-    role: str | None = None
-    account: str | None = None
-    user: str | None = None
+class ConnectionMetadata(RuntimeModel, extra="allow"):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 

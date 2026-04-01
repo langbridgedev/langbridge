@@ -1,0 +1,1514 @@
+_type: export
+__export_format: 4
+__export_date: "2026-04-01T00:00:00.000Z"
+__export_source: codex.langbridge.runtime-api
+resources:
+  - _id: wrk_langbridge_runtime_api
+    parentId: null
+    modified: 0
+    created: 0
+    name: Langbridge Runtime API
+    description: Importable Insomnia collection for the current Langbridge runtime host API.
+    scope: collection
+    _type: workspace
+
+  - _id: env_langbridge_runtime_api
+    parentId: wrk_langbridge_runtime_api
+    modified: 0
+    created: 0
+    name: Base Environment
+    data:
+      base_url: http://127.0.0.1:8000
+      bearer_token: ""
+      thread_id: 00000000-0000-0000-0000-000000000000
+      dataset_ref: runtime_orders_file
+      connector_name: local_file_connector
+      semantic_model_ref: runtime_semantic_model
+      agent_ref: default_agent
+      actor_id: 00000000-0000-0000-0000-000000000000
+    dataPropertyOrder:
+      "&":
+        - base_url
+        - bearer_token
+        - thread_id
+        - dataset_ref
+        - connector_name
+        - semantic_model_ref
+        - agent_ref
+        - actor_id
+    color: null
+    isPrivate: false
+    metaSortKey: 0
+    _type: environment
+
+  - _id: jar_langbridge_runtime_api
+    parentId: wrk_langbridge_runtime_api
+    modified: 0
+    created: 0
+    name: Default Jar
+    cookies: []
+    _type: cookie_jar
+
+  - _id: fld_health_info
+    parentId: wrk_langbridge_runtime_api
+    modified: 0
+    created: 0
+    name: Health & Info
+    description: Health and runtime info endpoints.
+    environment: {}
+    environmentPropertyOrder: null
+    metaSortKey: -1000
+    _type: request_group
+
+  - _id: fld_auth
+    parentId: wrk_langbridge_runtime_api
+    modified: 0
+    created: 0
+    name: Auth
+    description: Bootstrap and session endpoints. Cookie-based local auth works directly after login; enable the disabled bearer header where useful if you are testing bearer auth.
+    environment: {}
+    environmentPropertyOrder: null
+    metaSortKey: -900
+    _type: request_group
+
+  - _id: fld_actors
+    parentId: wrk_langbridge_runtime_api
+    modified: 0
+    created: 0
+    name: Actors
+    description: Runtime actor management endpoints. Requires admin auth.
+    environment: {}
+    environmentPropertyOrder: null
+    metaSortKey: -800
+    _type: request_group
+
+  - _id: fld_connectors
+    parentId: wrk_langbridge_runtime_api
+    modified: 0
+    created: 0
+    name: Connectors
+    description: Connector list/detail and runtime-managed connector mutation endpoints.
+    environment: {}
+    environmentPropertyOrder: null
+    metaSortKey: -700
+    _type: request_group
+
+  - _id: fld_datasets
+    parentId: wrk_langbridge_runtime_api
+    modified: 0
+    created: 0
+    name: Datasets
+    description: Dataset list/detail, preview, and runtime-managed dataset mutation endpoints.
+    environment: {}
+    environmentPropertyOrder: null
+    metaSortKey: -600
+    _type: request_group
+
+  - _id: fld_semantic
+    parentId: wrk_langbridge_runtime_api
+    modified: 0
+    created: 0
+    name: Semantic
+    description: Semantic model CRUD and semantic query endpoints.
+    environment: {}
+    environmentPropertyOrder: null
+    metaSortKey: -500
+    _type: request_group
+
+  - _id: fld_sql
+    parentId: wrk_langbridge_runtime_api
+    modified: 0
+    created: 0
+    name: SQL
+    description: Direct SQL query endpoint.
+    environment: {}
+    environmentPropertyOrder: null
+    metaSortKey: -400
+    _type: request_group
+
+  - _id: fld_agents
+    parentId: wrk_langbridge_runtime_api
+    modified: 0
+    created: 0
+    name: Agents
+    description: Agent discovery and execution endpoints.
+    environment: {}
+    environmentPropertyOrder: null
+    metaSortKey: -300
+    _type: request_group
+
+  - _id: fld_threads
+    parentId: wrk_langbridge_runtime_api
+    modified: 0
+    created: 0
+    name: Threads
+    description: Thread and thread-message list endpoints.
+    environment: {}
+    environmentPropertyOrder: null
+    metaSortKey: -200
+    _type: request_group
+
+  - _id: req_health
+    parentId: fld_health_info
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/health"
+    name: Health
+    description: GET /api/runtime/v1/health
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+    authentication: {}
+    metaSortKey: -1000
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_info
+    parentId: fld_health_info
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/info"
+    name: Runtime Info
+    description: GET /api/runtime/v1/info
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -990
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_auth_bootstrap_status
+    parentId: fld_auth
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/auth/bootstrap"
+    name: Auth Bootstrap Status
+    description: GET /api/runtime/v1/auth/bootstrap
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+    authentication: {}
+    metaSortKey: -900
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_auth_bootstrap
+    parentId: fld_auth
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/auth/bootstrap"
+    name: Bootstrap Admin
+    description: POST /api/runtime/v1/auth/bootstrap
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "username": "admin",
+          "email": "admin@example.com",
+          "password": "ChangeMe123!"
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+    authentication: {}
+    metaSortKey: -890
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_auth_login
+    parentId: fld_auth
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/auth/login"
+    name: Login
+    description: POST /api/runtime/v1/auth/login
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "identifier": "admin",
+          "password": "ChangeMe123!"
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+    authentication: {}
+    metaSortKey: -880
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_auth_logout
+    parentId: fld_auth
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/auth/logout"
+    name: Logout
+    description: POST /api/runtime/v1/auth/logout
+    method: POST
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+    authentication: {}
+    metaSortKey: -870
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_auth_me
+    parentId: fld_auth
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/auth/me"
+    name: Current User
+    description: GET /api/runtime/v1/auth/me
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -860
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_actors_list
+    parentId: fld_actors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/actors"
+    name: List Actors
+    description: GET /api/runtime/v1/actors
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -800
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_actors_create
+    parentId: fld_actors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/actors"
+    name: Create Actor
+    description: POST /api/runtime/v1/actors
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "username": "analyst",
+          "email": "analyst@example.com",
+          "display_name": "Runtime Analyst",
+          "actor_type": "human",
+          "password": "ChangeMe123!",
+          "roles": [
+            "analyst"
+          ]
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -790
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_actors_update
+    parentId: fld_actors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/actors/{{ _.actor_id }}"
+    name: Update Actor
+    description: PATCH /api/runtime/v1/actors/{actor_id}
+    method: PATCH
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "display_name": "Updated Runtime Analyst",
+          "status": "active",
+          "roles": [
+            "analyst",
+            "runtime_user"
+          ]
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -780
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_actors_reset_password
+    parentId: fld_actors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/actors/{{ _.actor_id }}/reset-password"
+    name: Reset Actor Password
+    description: POST /api/runtime/v1/actors/{actor_id}/reset-password
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "password": "RotateMe123!",
+          "must_rotate_password": true
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -770
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_connectors_list
+    parentId: fld_connectors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/connectors"
+    name: List Connectors
+    description: GET /api/runtime/v1/connectors
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -700
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_connector_types_list
+    parentId: fld_connectors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/connector/types"
+    name: List Connector Types
+    description: GET /api/runtime/v1/connector/types
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -690
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_connectors_get
+    parentId: fld_connectors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/connectors/{{ _.connector_name }}"
+    name: Get Connector
+    description: GET /api/runtime/v1/connectors/{connector_name}
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -680
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_connectors_create
+    parentId: fld_connectors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/connectors"
+    name: Create Connector
+    description: POST /api/runtime/v1/connectors
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "name": "local_file_connector",
+          "type": "FILE",
+          "description": "Runtime-managed local file connector",
+          "connection": {
+            "path": "/tmp/orders.csv",
+            "format": "csv"
+          },
+          "metadata": {},
+          "secrets": {}
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -670
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_connectors_update
+    parentId: fld_connectors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/connectors/{{ _.connector_name }}"
+    name: Update Connector
+    description: PATCH /api/runtime/v1/connectors/{connector_name}
+    method: PATCH
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "description": "Updated runtime-managed connector",
+          "metadata": {
+            "owner": "insomnia"
+          }
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -660
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_connectors_delete
+    parentId: fld_connectors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/connectors/{{ _.connector_name }}"
+    name: Delete Connector
+    description: DELETE /api/runtime/v1/connectors/{connector_name}
+    method: DELETE
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -650
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_connectors_sync_resources
+    parentId: fld_connectors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/connectors/{{ _.connector_name }}/sync/resources"
+    name: List Sync Resources
+    description: GET /api/runtime/v1/connectors/{connector_name}/sync/resources
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -640
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_connectors_sync_states
+    parentId: fld_connectors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/connectors/{{ _.connector_name }}/sync/states"
+    name: List Sync States
+    description: GET /api/runtime/v1/connectors/{connector_name}/sync/states
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -630
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_connectors_run_sync
+    parentId: fld_connectors
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/connectors/{{ _.connector_name }}/sync"
+    name: Run Connector Sync
+    description: POST /api/runtime/v1/connectors/{connector_name}/sync
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "resource_names": [
+            "orders"
+          ],
+          "sync_mode": "INCREMENTAL",
+          "force_full_refresh": false
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -620
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_datasets_list
+    parentId: fld_datasets
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/datasets"
+    name: List Datasets
+    description: GET /api/runtime/v1/datasets
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -600
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_datasets_get
+    parentId: fld_datasets
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/datasets/{{ _.dataset_ref }}"
+    name: Get Dataset
+    description: GET /api/runtime/v1/datasets/{dataset_ref}
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -590
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_datasets_create
+    parentId: fld_datasets
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/datasets"
+    name: Create Dataset
+    description: POST /api/runtime/v1/datasets. This example uses the current file-backed live dataset contract with a null connector.
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "name": "runtime_orders_file",
+          "description": "Runtime-managed file dataset created from Insomnia",
+          "connector": null,
+          "materialization_mode": "live",
+          "source": {
+            "path": "/tmp/orders.csv",
+            "format": "csv",
+            "header": true,
+            "delimiter": ",",
+            "quote": "\""
+          },
+          "tags": [
+            "runtime",
+            "demo"
+          ],
+          "policy": {
+            "max_rows_preview": 100,
+            "max_export_rows": 1000,
+            "redaction_rules": {},
+            "row_filters": [],
+            "allow_dml": false
+          }
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -580
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_datasets_update
+    parentId: fld_datasets
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/datasets/{{ _.dataset_ref }}"
+    name: Update Dataset
+    description: PATCH /api/runtime/v1/datasets/{dataset_ref}
+    method: PATCH
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "description": "Updated dataset description from Insomnia",
+          "tags": [
+            "runtime",
+            "updated"
+          ],
+          "policy": {
+            "max_rows_preview": 50,
+            "max_export_rows": 500,
+            "redaction_rules": {},
+            "row_filters": [],
+            "allow_dml": false
+          }
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -570
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_datasets_delete
+    parentId: fld_datasets
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/datasets/{{ _.dataset_ref }}"
+    name: Delete Dataset
+    description: DELETE /api/runtime/v1/datasets/{dataset_ref}
+    method: DELETE
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -560
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_datasets_preview
+    parentId: fld_datasets
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/datasets/{{ _.dataset_ref }}/preview"
+    name: Preview Dataset
+    description: POST /api/runtime/v1/datasets/{dataset_ref}/preview
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "limit": 25,
+          "filters": {},
+          "sort": [],
+          "user_context": {}
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -550
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_semantic_models_list
+    parentId: fld_semantic
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/semantic-models"
+    name: List Semantic Models
+    description: GET /api/runtime/v1/semantic-models
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -500
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_semantic_models_get
+    parentId: fld_semantic
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/semantic-models/{{ _.semantic_model_ref }}"
+    name: Get Semantic Model
+    description: GET /api/runtime/v1/semantic-models/{model_ref}
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -490
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_semantic_models_create
+    parentId: fld_semantic
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/semantic-models"
+    name: Create Semantic Model
+    description: POST /api/runtime/v1/semantic-models. dataset_ref should be set to a dataset name for this example.
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "name": "runtime_semantic_model",
+          "description": "Runtime-managed semantic model created from Insomnia",
+          "datasets": [
+            "{{ _.dataset_ref }}"
+          ],
+          "model": {
+            "version": "1",
+            "name": "runtime_semantic_model",
+            "description": "Runtime-managed semantic model",
+            "datasets": {
+              "{{ _.dataset_ref }}": {
+                "relation_name": "{{ _.dataset_ref }}",
+                "dimensions": [
+                  {
+                    "name": "id",
+                    "type": "integer",
+                    "primary_key": true
+                  }
+                ],
+                "measures": [
+                  {
+                    "name": "row_count",
+                    "expression": "id",
+                    "type": "integer",
+                    "aggregation": "count"
+                  }
+                ]
+              }
+            }
+          }
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -480
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_semantic_models_update
+    parentId: fld_semantic
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/semantic-models/{{ _.semantic_model_ref }}"
+    name: Update Semantic Model
+    description: PATCH /api/runtime/v1/semantic-models/{model_ref}
+    method: PATCH
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "description": "Updated semantic model from Insomnia",
+          "datasets": [
+            "{{ _.dataset_ref }}"
+          ]
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -470
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_semantic_models_delete
+    parentId: fld_semantic
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/semantic-models/{{ _.semantic_model_ref }}"
+    name: Delete Semantic Model
+    description: DELETE /api/runtime/v1/semantic-models/{model_ref}
+    method: DELETE
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -460
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_semantic_query
+    parentId: fld_semantic
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/semantic/query"
+    name: Semantic Query
+    description: POST /api/runtime/v1/semantic/query
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "semantic_models": [
+            "{{ _.semantic_model_ref }}"
+          ],
+          "measures": [
+            "row_count"
+          ],
+          "dimensions": [
+            "id"
+          ],
+          "filters": [],
+          "time_dimensions": [],
+          "limit": 25
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -450
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_sql_query
+    parentId: fld_sql
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/sql/query"
+    name: SQL Query
+    description: POST /api/runtime/v1/sql/query using connection_name for a direct connector query.
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "query": "SELECT 1 AS ok",
+          "connection_name": "{{ _.connector_name }}",
+          "query_dialect": "tsql",
+          "params": {},
+          "requested_limit": 100,
+          "requested_timeout_seconds": 30,
+          "explain": false
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -400
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_agents_list
+    parentId: fld_agents
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/agents"
+    name: List Agents
+    description: GET /api/runtime/v1/agents
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -300
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_agents_get
+    parentId: fld_agents
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/agents/{{ _.agent_ref }}"
+    name: Get Agent
+    description: GET /api/runtime/v1/agents/{agent_ref}
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -290
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_agents_ask
+    parentId: fld_agents
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/agents/ask"
+    name: Ask Agent
+    description: POST /api/runtime/v1/agents/ask
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "message": "Summarize the available runtime datasets.",
+          "agent_name": "{{ _.agent_ref }}",
+          "title": "Runtime API smoke test",
+          "metadata_json": {
+            "source": "insomnia"
+          }
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -280
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_threads_create
+    parentId: fld_threads
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/threads"
+    name: Create Thread
+    description: POST /api/runtime/v1/threads
+    method: POST
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "title": "Runtime API test thread"
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -200
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_threads_list
+    parentId: fld_threads
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/threads"
+    name: List Threads
+    description: GET /api/runtime/v1/threads
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -190
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_threads_get
+    parentId: fld_threads
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/threads/{{ _.thread_id }}"
+    name: Get Thread
+    description: GET /api/runtime/v1/threads/{thread_id}
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -180
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_threads_update
+    parentId: fld_threads
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/threads/{{ _.thread_id }}"
+    name: Update Thread
+    description: PATCH /api/runtime/v1/threads/{thread_id}
+    method: PATCH
+    body:
+      mimeType: application/json
+      text: |-
+        {
+          "title": "Updated runtime API test thread"
+        }
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Content-Type
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -170
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_threads_delete
+    parentId: fld_threads
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/threads/{{ _.thread_id }}"
+    name: Delete Thread
+    description: DELETE /api/runtime/v1/threads/{thread_id}
+    method: DELETE
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -160
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request
+
+  - _id: req_threads_messages_list
+    parentId: fld_threads
+    modified: 0
+    created: 0
+    url: "{{ _.base_url }}/api/runtime/v1/threads/{{ _.thread_id }}/messages"
+    name: List Thread Messages
+    description: GET /api/runtime/v1/threads/{thread_id}/messages
+    method: GET
+    body: {}
+    parameters: []
+    headers:
+      - name: Accept
+        value: application/json
+      - name: Authorization
+        value: Bearer {{ _.bearer_token }}
+        disabled: true
+    authentication: {}
+    metaSortKey: -150
+    isPrivate: false
+    settingStoreCookies: true
+    settingSendCookies: true
+    settingDisableRenderRequestBody: false
+    settingEncodeUrl: true
+    settingRebuildPath: true
+    settingFollowRedirects: global
+    _type: request

@@ -25,23 +25,23 @@ from langbridge.runtime.services.sql_query_service import SqlQueryService
 
 @dataclass(slots=True)
 class RuntimeProviders:
-    dataset_metadata: DatasetMetadataProvider | None = None
-    connector_metadata: ConnectorMetadataProvider | None = None
-    semantic_models: SemanticModelMetadataProvider | None = None
-    semantic_vector_indexes: SemanticVectorIndexMetadataProvider | None = None
-    sync_state: SyncStateProvider | None = None
-    credentials: CredentialProvider | None = None
+    dataset_metadata: DatasetMetadataProvider
+    connector_metadata: ConnectorMetadataProvider
+    semantic_models: SemanticModelMetadataProvider
+    semantic_vector_indexes: SemanticVectorIndexMetadataProvider
+    sync_state: SyncStateProvider
+    credentials: CredentialProvider
 
 
 @dataclass(slots=True)
 class RuntimeServices:
-    federated_query_tool: FederatedQueryTool | None = None
-    semantic_query: SemanticQueryExecutionService | None = None
-    semantic_vector_search: SemanticVectorSearchService | None = None
-    sql_query: SqlQueryService | None = None
-    dataset_query: DatasetQueryService | None = None
-    dataset_sync: ConnectorSyncRuntime | None = None
-    agent_execution: AgentExecutionService | None = None
+    federated_query_tool: FederatedQueryTool
+    semantic_query: SemanticQueryExecutionService
+    semantic_vector_search: SemanticVectorSearchService
+    sql_query: SqlQueryService
+    dataset_query: DatasetQueryService
+    dataset_sync: ConnectorSyncRuntime
+    agent_execution: AgentExecutionService
 
 
 @dataclass(slots=True)

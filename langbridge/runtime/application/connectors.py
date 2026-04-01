@@ -2,7 +2,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Mapping, Set
 
-from langbridge.connectors.base import ConnectorRuntimeType, get_connector_config_factory
+from langbridge.connectors.base import (
+    ConnectorPluginMetadata,
+    ConnectorRuntimeType,
+    get_connector_config_factory,
+    get_connector_config_schema_factory,
+)
 from langbridge.runtime.application.errors import ApplicationError, BusinessValidationError
 from langbridge.runtime.config.models import LocalRuntimeConnectorConfig
 from langbridge.runtime.models import ConnectorSyncState
@@ -84,11 +89,97 @@ class ConnectorApplication:
             "managed": management_mode == ManagementMode.CONFIG_MANAGED.value,
         }
 
+    def _serialize_connector_detail(self, connector: ConnectorMetadata) -> dict[str, Any]:
+        return {
+            **self._serialize_connector(connector),
+            "connection": dict(((connector.config or {}).get("config")) or {}),
+            "metadata": (
+                None
+                if connector.connection_metadata is None
+                else connector.connection_metadata.model_dump(mode="json", by_alias=True)
+            ),
+            "secrets": {
+                str(key): value.model_dump(mode="json")
+                for key, value in dict(connector.secret_references or {}).items()
+            },
+            "policy": (
+                None
+                if connector.connection_policy is None
+                else connector.connection_policy.model_dump(mode="json")
+            ),
+        }
+
+    @staticmethod
+    def _require_runtime_managed_connector(connector: ConnectorMetadata) -> None:
+        management_mode = str(getattr(connector.management_mode, "value", connector.management_mode)).lower()
+        if management_mode != ManagementMode.RUNTIME_MANAGED.value:
+            raise BusinessValidationError(
+                f"Connector '{connector.name}' is config_managed and read-only in the runtime UI."
+            )
+
     async def list_connectors(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         for connector in self._host._connectors.values():
             items.append(self._serialize_connector(connector))
         return items
+    
+    async def list_connector_types(self) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for plugin in self._host._get_connector_plugins():
+            capabilities_schema = plugin.capabilities if plugin is not None else {}
+            items.append(
+                {
+                    "name": plugin.connector_type,
+                    "label": plugin.connector_type,
+                    "description": plugin.connector_type,
+                    "family": plugin.connector_family,
+                    "supports_sync": bool(plugin.supported_resources),
+                    "supported_resources": list(plugin.supported_resources),
+                    "sync_strategy": plugin.sync_strategy,
+                    "capabilities_schema": capabilities_schema.model_dump(mode="json"),
+                }
+            )
+        return items
+
+    async def get_connector_type_config(self, *, connector_type: str) -> dict[str, Any]:
+        normalized_type = str(connector_type or "").strip().upper()
+        if not normalized_type:
+            raise BusinessValidationError("Connector type is required.")
+
+        try:
+            runtime_type = ConnectorRuntimeType(normalized_type)
+            schema_factory = get_connector_config_schema_factory(runtime_type)
+            schema = schema_factory.create({})
+        except ValueError as exc:
+            raise BusinessValidationError(str(exc)) from exc
+
+        plugin = self._host._resolve_connector_plugin_for_type(runtime_type.value)
+        plugin_metadata = schema.plugin_metadata
+        if plugin_metadata is None and plugin is not None:
+            plugin_metadata = ConnectorPluginMetadata(
+                connector_type=runtime_type,
+                connector_family=plugin.connector_family,
+                supported_resources=list(plugin.supported_resources),
+                auth_schema=list(plugin.auth_schema),
+                sync_strategy=plugin.sync_strategy,
+                capabilities=plugin.capabilities,
+            )
+
+        return {
+            "connector_type": runtime_type,
+            "name": schema.name,
+            "description": schema.description,
+            "version": schema.version,
+            "config": [entry.model_dump(mode="json") for entry in schema.config],
+            "plugin_metadata": (
+                plugin_metadata.model_dump(mode="json") if plugin_metadata is not None else None
+            ),
+        }
+
+
+    async def get_connector(self, *, connector_name: str) -> dict[str, Any]:
+        connector = self._host._resolve_connector(connector_name)
+        return self._serialize_connector_detail(connector)
 
     async def create_connector(self, *, request) -> dict[str, Any]:
         normalized_request = LocalRuntimeConnectorConfig.model_validate(
@@ -194,6 +285,154 @@ class ConnectorApplication:
         self._host._upsert_runtime_connector(connector)
         return self._serialize_connector(connector)
 
+    async def update_connector(self, *, connector_name: str, request) -> dict[str, Any]:
+        connector = self._host._resolve_connector(connector_name)
+        self._require_runtime_managed_connector(connector)
+
+        fields_set = set(getattr(request, "model_fields_set", set()))
+        connector_type = ConnectorRuntimeType(str(connector.connector_type_value or "").strip().upper())
+        plugin = self._host._resolve_connector_plugin_for_type(connector_type.value)
+
+        current_connection = dict(((connector.config or {}).get("config")) or {})
+        current_metadata = (
+            {}
+            if connector.connection_metadata is None
+            else connector.connection_metadata.model_dump(mode="json", by_alias=True)
+        )
+        current_secrets = {
+            str(key): value.model_dump(mode="json")
+            for key, value in dict(connector.secret_references or {}).items()
+        }
+        current_policy = (
+            None
+            if connector.connection_policy is None
+            else connector.connection_policy.model_dump(mode="json")
+        )
+
+        connection_payload = (
+            _normalize_connection_payload(
+                connector_type=connector_type.value,
+                connection_payload=dict(request.connection or {}),
+            )
+            if "connection" in fields_set
+            else current_connection
+        )
+        metadata_payload = dict(request.metadata or {}) if "metadata" in fields_set else current_metadata
+        secrets_payload = dict(request.secrets or {}) if "secrets" in fields_set else current_secrets
+        policy_payload = request.policy if "policy" in fields_set else current_policy
+        description = request.description if "description" in fields_set else connector.description
+        capabilities_input = request.capabilities if "capabilities" in fields_set else connector.capabilities
+        merged_connection = {**connection_payload, **metadata_payload}
+
+        try:
+            secret_references = {
+                str(key): SecretReference.model_validate(value)
+                for key, value in dict(secrets_payload or {}).items()
+            }
+        except Exception as exc:
+            raise ApplicationError(f"Connector '{connector.name}' defines invalid secret references.") from exc
+
+        try:
+            connection_policy = (
+                ConnectionPolicy.model_validate(policy_payload)
+                if isinstance(policy_payload, Mapping)
+                else None
+            )
+        except Exception as exc:
+            raise ApplicationError(f"Connector '{connector.name}' defines an invalid connection policy.") from exc
+
+        capabilities = resolve_connector_capabilities(
+            configured_capabilities=capabilities_input,
+            connector_type=connector_type.value,
+            plugin=plugin,
+        )
+
+        try:
+            config_factory = get_connector_config_factory(connector_type)
+            metadata_keys = config_factory.get_metadata_keys()
+            connection_metadata = _extract_connection_metadata(
+                merged_connection,
+                known_keys=metadata_keys,
+            )
+            runtime_payload = build_connector_runtime_payload(
+                config_json={"config": connection_payload},
+                connection_metadata=(
+                    connection_metadata.model_dump(mode="json", by_alias=True)
+                    if connection_metadata is not None
+                    else None
+                ),
+                secret_references={
+                    key: value.model_dump(mode="json")
+                    for key, value in secret_references.items()
+                },
+                secret_resolver=self._host._secret_provider_registry.resolve,
+            )
+            config_factory.create(runtime_payload.get("config") or {})
+        except Exception as exc:
+            raise ApplicationError(
+                f"Connector '{connector.name}' failed validation for connector type '{connector_type}'."
+            ) from exc
+
+        updated_connector = connector.model_copy(
+            update={
+                "description": (str(description).strip() or None) if description is not None else None,
+                "config": {"config": connection_payload},
+                "connection_metadata": connection_metadata,
+                "secret_references": secret_references,
+                "connection_policy": connection_policy,
+                "capabilities": capabilities,
+                "updated_by": self._host.context.actor_id,
+            }
+        )
+
+        async with self._host._runtime_operation_scope() as uow:
+            if uow is None:
+                raise ApplicationError("Runtime connector updates require persistence support.")
+            repository = uow.repository("connector_repository")
+            record = await repository.get_by_id_for_workspace(
+                connector_id=connector.id,
+                workspace_id=self._host.context.workspace_id,
+            )
+            if record is None:
+                raise ValueError(f"Connector '{connector.name}' was not found.")
+            await repository.save(to_connector_record(updated_connector))
+            await uow.commit()
+
+        self._host._upsert_runtime_connector(updated_connector)
+        return self._serialize_connector_detail(updated_connector)
+
+    async def delete_connector(self, *, connector_name: str) -> dict[str, Any]:
+        connector = self._host._resolve_connector(connector_name)
+        self._require_runtime_managed_connector(connector)
+
+        async with self._host._runtime_operation_scope() as uow:
+            if uow is None:
+                raise ApplicationError("Runtime connector deletes require persistence support.")
+            bound_datasets = await self._host._dataset_repository.list_for_connection(
+                workspace_id=self._host.context.workspace_id,
+                connection_id=connector.id,
+                limit=1,
+            )
+            if bound_datasets:
+                raise BusinessValidationError(
+                    f"Connector '{connector.name}' cannot be deleted while datasets still reference it."
+                )
+            repository = uow.repository("connector_repository")
+            record = await repository.get_by_id_for_workspace(
+                connector_id=connector.id,
+                workspace_id=self._host.context.workspace_id,
+            )
+            if record is None:
+                raise ValueError(f"Connector '{connector.name}' was not found.")
+            await repository.delete(record)
+            await uow.commit()
+
+        self._host._remove_runtime_connector(
+            connector_name=connector.name,
+            connector_id=connector.id,
+        )
+        return {"ok": True, "deleted": True, "id": connector.id, "name": connector.name}
+
     async def list_sync_resources(
         self,
         *,
@@ -296,9 +535,6 @@ class ConnectorApplication:
         sync_mode: str = "INCREMENTAL",
         force_full_refresh: bool = False,
     ) -> dict[str, Any]:
-        if self._host.services.dataset_sync is None:
-            raise RuntimeError("Dataset sync is not configured for this runtime host.")
-
         connector = self._host._resolve_connector(connector_name)
         connector_type = self._host._resolve_connector_runtime_type(connector)
         api_connector = self._host._build_api_connector(connector)

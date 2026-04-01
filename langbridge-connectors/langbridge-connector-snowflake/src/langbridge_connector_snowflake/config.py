@@ -1,3 +1,5 @@
+from pydantic import Field
+
 from langbridge.connectors.base.config import (
     BaseConnectorConfig,
     BaseConnectorConfigFactory,
@@ -14,7 +16,7 @@ class SnowflakeConnectorConfig(BaseConnectorConfig):
     password: str
     database: str
     warehouse: str
-    schema: str
+    schema_name: str = Field(alias="schema")
     role: str
 
     @classmethod

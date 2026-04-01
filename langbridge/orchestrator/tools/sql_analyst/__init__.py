@@ -13,7 +13,6 @@ from .interfaces import (
     QueryResult,
     SemanticModel,
 )
-from .semantic_loader import SemanticModelError, load_semantic_model
 from .tool import SqlAnalystTool
 
 __all__ = [
@@ -27,6 +26,4 @@ __all__ = [
     "QueryResult",
     "SemanticModel",
     "SqlAnalystTool",
-    "SemanticModelError",
-    "load_semantic_model",
 ]

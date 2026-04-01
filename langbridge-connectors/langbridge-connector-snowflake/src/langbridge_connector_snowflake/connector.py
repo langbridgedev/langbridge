@@ -45,7 +45,7 @@ class SnowflakeConnector(SqlConnector):
             password=self._config.password,
             database=self._config.database,
             warehouse=self._config.warehouse,
-            schema=self._config.schema,
+            schema=self._config.schema_name,
             role=self._config.role,
         )
 

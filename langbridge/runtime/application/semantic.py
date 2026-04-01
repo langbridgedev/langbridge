@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from langbridge.runtime.application.errors import ApplicationError
 from langbridge.runtime.config.models import LocalRuntimeSemanticModelConfig
 from langbridge.runtime.models.metadata import (
     LifecycleState,
@@ -23,6 +24,14 @@ if TYPE_CHECKING:
 class SemanticApplication:
     def __init__(self, host: "ConfiguredLocalRuntimeHost") -> None:
         self._host = host
+
+    @staticmethod
+    def _require_runtime_managed_model(record) -> None:
+        management_mode = str(getattr(record.management_mode, "value", record.management_mode)).lower()
+        if management_mode != ManagementMode.RUNTIME_MANAGED.value:
+            raise ValueError(
+                f"Semantic model '{record.name}' is config_managed and read-only in the runtime UI."
+            )
 
     async def list_semantic_models(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -161,6 +170,155 @@ class SemanticApplication:
 
         self._host._upsert_runtime_semantic_model_record(record)
         return await self.get_semantic_model(model_ref=str(record.id))
+
+    async def update_semantic_model(self, *, model_ref: str, request) -> dict[str, Any]:
+        from langbridge.runtime.bootstrap.configured_runtime import (
+            ConfiguredLocalRuntimeHostFactory,
+            LocalRuntimeSemanticModelRecord,
+        )
+
+        existing_record = self._host._resolve_semantic_model_record(model_ref)
+        self._require_runtime_managed_model(existing_record)
+        fields_set = set(getattr(request, "model_fields_set", set()))
+        description = request.description if "description" in fields_set else existing_record.description
+        model_payload = request.model if "model" in fields_set else copy.deepcopy(existing_record.content_json)
+        datasets = request.datasets if "datasets" in fields_set and request.datasets is not None else []
+
+        normalized_request = LocalRuntimeSemanticModelConfig.model_validate(
+            {
+                "name": existing_record.name,
+                "description": description,
+                "model": model_payload,
+                "datasets": datasets,
+            }
+        )
+
+        async with self._host._runtime_operation_scope() as uow:
+            if uow is None:
+                raise ApplicationError("Runtime semantic model updates require persistence support.")
+            datasets_records = await self._host._dataset_repository.list_for_workspace(
+                workspace_id=self._host.context.workspace_id,
+            )
+            datasets_by_name = {dataset.name: dataset for dataset in datasets_records}
+            referenced_dataset_names: set[str] = {
+                str(dataset_name).strip()
+                for dataset_name in (normalized_request.datasets or [])
+                if str(dataset_name).strip()
+            }
+            model_json = copy.deepcopy(normalized_request.model or {})
+            raw_datasets = (
+                model_json.get("datasets")
+                if isinstance(model_json.get("datasets"), dict)
+                else model_json.get("tables")
+            )
+            if isinstance(raw_datasets, dict):
+                referenced_dataset_names.update(
+                    str(dataset_name).strip()
+                    for dataset_name in raw_datasets.keys()
+                    if str(dataset_name).strip()
+                )
+            missing_datasets = sorted(
+                dataset_name
+                for dataset_name in referenced_dataset_names
+                if dataset_name not in datasets_by_name
+            )
+            if missing_datasets:
+                raise ValueError(
+                    "Semantic model references unknown datasets: "
+                    f"{', '.join(missing_datasets)}."
+                )
+
+            payload = ConfiguredLocalRuntimeHostFactory._materialize_semantic_model_payload(
+                semantic_model=normalized_request,
+                datasets=datasets_by_name,
+            )
+            semantic_model = None
+            try:
+                semantic_model = load_semantic_model(copy.deepcopy(payload))
+                content_json = semantic_model.model_dump(mode="json", exclude_none=True)
+                content_yaml = semantic_model.yml_dump()
+            except SemanticModelError:
+                try:
+                    unified_model = load_unified_semantic_model(copy.deepcopy(payload))
+                except SemanticModelError as exc:
+                    raise ValueError(str(exc)) from exc
+                known_semantic_model_ids = {record.id for record in self._host._semantic_models.values()}
+                missing_source_models = sorted(
+                    str(source.id)
+                    for source in unified_model.source_models
+                    if source.id not in known_semantic_model_ids
+                )
+                if missing_source_models:
+                    raise ValueError(
+                        "Unified semantic model references unknown source semantic model ids: "
+                        f"{', '.join(missing_source_models)}."
+                    )
+                content_json = unified_model.model_dump(mode="json", exclude_none=True)
+                content_yaml = yaml.safe_dump(content_json, sort_keys=False).strip()
+
+            now = datetime.now(timezone.utc)
+            updated_record = LocalRuntimeSemanticModelRecord(
+                id=existing_record.id,
+                name=existing_record.name,
+                description=(
+                    normalized_request.description
+                    or content_json.get("description")
+                ),
+                workspace_id=self._host.context.workspace_id,
+                semantic_model=semantic_model,
+                content_yaml=content_yaml,
+                content_json=copy.deepcopy(content_json),
+                management_mode=ManagementMode.RUNTIME_MANAGED,
+            )
+            repository = uow.repository("semantic_model_repository")
+            persisted = await repository.get_for_workspace(
+                model_id=existing_record.id,
+                workspace_id=self._host.context.workspace_id,
+            )
+            if persisted is None:
+                raise ValueError(f"Semantic model '{existing_record.name}' was not found.")
+            metadata = SemanticModelMetadata(
+                id=updated_record.id,
+                connector_id=None,
+                workspace_id=updated_record.workspace_id,
+                created_by=getattr(persisted, "created_by_actor_id", None),
+                updated_by=self._host.context.actor_id,
+                name=updated_record.name,
+                description=updated_record.description,
+                content_yaml=updated_record.content_yaml,
+                content_json=copy.deepcopy(updated_record.content_json),
+                created_at=getattr(persisted, "created_at", now),
+                updated_at=now,
+                management_mode=ManagementMode.RUNTIME_MANAGED,
+                lifecycle_state=LifecycleState.ACTIVE,
+            )
+            await repository.save(to_semantic_model_record(metadata))
+            await uow.commit()
+
+        self._host._upsert_runtime_semantic_model_record(updated_record)
+        return await self.get_semantic_model(model_ref=str(updated_record.id))
+
+    async def delete_semantic_model(self, *, model_ref: str) -> dict[str, Any]:
+        record = self._host._resolve_semantic_model_record(model_ref)
+        self._require_runtime_managed_model(record)
+        async with self._host._runtime_operation_scope() as uow:
+            if uow is None:
+                raise ApplicationError("Runtime semantic model deletes require persistence support.")
+            repository = uow.repository("semantic_model_repository")
+            persisted = await repository.get_for_workspace(
+                model_id=record.id,
+                workspace_id=self._host.context.workspace_id,
+            )
+            if persisted is None:
+                raise ValueError(f"Semantic model '{record.name}' was not found.")
+            await repository.delete(persisted)
+            await uow.commit()
+
+        self._host._remove_runtime_semantic_model_record(
+            model_name=record.name,
+            model_id=record.id,
+        )
+        return {"ok": True, "deleted": True, "id": record.id, "name": record.name}
 
     async def query_semantic(self, *args: Any, **kwargs: Any) -> Any:
         async with self._host._runtime_operation_scope() as uow:

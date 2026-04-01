@@ -12,7 +12,6 @@ from .config import (
     SnowflakeConnectorConfigSchemaFactory,
 )
 from .connector import SnowflakeConnector
-from .metadata import SnowflakeMetadataExtractor
 
 PLUGIN = ConnectorPlugin(
     connector_type=ConnectorRuntimeType.SNOWFLAKE,

@@ -1,6 +1,12 @@
 import { ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
 
+import {
+  describeManagementMode,
+  formatManagementModeLabel,
+  normalizeManagementMode,
+} from "../lib/managedResources";
+
 export function PageEmpty({ title, message, action }) {
   return (
     <div className="empty-box page-empty">
@@ -38,6 +44,27 @@ export function DetailList({ items }) {
         </div>
       ))}
     </dl>
+  );
+}
+
+export function ManagementBadge({ mode }) {
+  const normalized = normalizeManagementMode(mode);
+  return (
+    <span className={`management-badge ${normalized === "runtime_managed" ? "runtime" : "config"}`}>
+      {formatManagementModeLabel(normalized)}
+    </span>
+  );
+}
+
+export function ManagementModeNotice({ mode, resourceLabel = "resource" }) {
+  const normalized = normalizeManagementMode(mode);
+  return (
+    <div className={`callout ${normalized === "runtime_managed" ? "success" : "warning"}`} style={{marginBottom: "1.5rem"}}>
+      <strong>
+        <ManagementBadge mode={normalized} /> {resourceLabel}
+      </strong>
+      <span>{describeManagementMode(normalized)}</span>
+    </div>
   );
 }
 

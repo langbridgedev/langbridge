@@ -6,6 +6,8 @@ from pydantic import Field, field_serializer, field_validator, model_validator
 
 from langbridge.connectors.base.config import (
     ConnectorFamily,
+    ConnectorConfigEntrySchema,
+    ConnectorPluginMetadata,
     ConnectorRuntimeType,
     ConnectorSyncStrategy,
 )
@@ -52,6 +54,15 @@ class RuntimeDatasetListResponse(RuntimeModel):
     items: list[RuntimeDatasetSummary] = Field(default_factory=list)
     total: int = 0
 
+class RuntimeConnectorTypeSummary(RuntimeModel):
+    name: ConnectorRuntimeType
+    label: str | None = None
+    description: str | None = None
+    family: ConnectorFamily | None = None
+    supports_sync: bool = False
+    supported_resources: list[str] = Field(default_factory=list)
+    sync_strategy: ConnectorSyncStrategy | None = None
+    capabilities_schema: dict[str, Any] = Field(default_factory=dict)
 
 class RuntimeConnectorSummary(RuntimeModel):
     id: uuid.UUID | None = None
@@ -98,6 +109,18 @@ class RuntimeConnectorListResponse(RuntimeModel):
     items: list[RuntimeConnectorSummary] = Field(default_factory=list)
     total: int = 0
 
+class RuntimeConnectorTypesListResponse(RuntimeModel):
+    items: list[RuntimeConnectorTypeSummary] = Field(default_factory=list)
+    total: int = 0
+
+
+class RuntimeConnectorConfigSchemaResponse(RuntimeModel):
+    connector_type: ConnectorRuntimeType
+    name: str
+    description: str
+    version: str
+    config: list[ConnectorConfigEntrySchema] = Field(default_factory=list)
+    plugin_metadata: ConnectorPluginMetadata | None = None
 
 class RuntimeSemanticModelSummary(RuntimeModel):
     id: uuid.UUID | None = None
@@ -131,6 +154,15 @@ class RuntimeConnectorCreateRequest(RuntimeRequestModel):
     @classmethod
     def _validate_type(cls, value: Any) -> ConnectorRuntimeType:
         return ConnectorRuntimeType(str(getattr(value, "value", value) or "").strip().upper())
+
+
+class RuntimeConnectorUpdateRequest(RuntimeRequestModel):
+    description: str | None = Field(default=None, max_length=1024)
+    connection: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    secrets: dict[str, Any] | None = None
+    policy: dict[str, Any] | None = None
+    capabilities: ConnectorCapabilities | dict[str, Any] | None = None
 
 
 class RuntimeDatasetSourceRequest(RuntimeRequestModel):
@@ -170,7 +202,7 @@ class RuntimeDatasetPolicyRequest(RuntimeRequestModel):
 class RuntimeDatasetCreateRequest(RuntimeRequestModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=1024)
-    connector: str = Field(..., min_length=1, max_length=255)
+    connector: str | None = Field(default=None, min_length=1, max_length=255)
     materialization_mode: DatasetMaterializationMode = DatasetMaterializationMode.LIVE
     source: RuntimeDatasetSourceRequest
     tags: list[str] = Field(default_factory=list)
@@ -178,6 +210,52 @@ class RuntimeDatasetCreateRequest(RuntimeRequestModel):
 
     @model_validator(mode="after")
     def _validate_materialization_mode_source(self) -> "RuntimeDatasetCreateRequest":
+        connector_name = str(self.connector or "").strip()
+        resource_name = str(self.source.resource or "").strip()
+        table_name = str(self.source.table or "").strip()
+        sql = str(self.source.sql or "").strip()
+        storage_uri = str(self.source.storage_uri or "").strip()
+        path = str(self.source.path or "").strip()
+
+        if self.materialization_mode == DatasetMaterializationMode.SYNCED:
+            if sql or storage_uri or path:
+                raise ValueError(
+                    "Synced datasets must declare source.resource with the connector resource name."
+                )
+            if not connector_name:
+                raise ValueError("Dataset connector is required for synced datasets.")
+            if resource_name:
+                return self
+            if table_name:
+                self.source.resource = table_name
+                self.source.table = None
+                return self
+            raise ValueError(
+                "Synced datasets must declare source.resource with the connector resource name."
+            )
+
+        if resource_name:
+            raise ValueError(
+                "Live datasets cannot use source.resource; use source.table, source.sql, or source.path/source.storage_uri."
+            )
+        if not connector_name and (table_name or sql):
+            raise ValueError(
+                "Dataset connector is required for table-backed and sql-backed dataset sources."
+            )
+        return self
+
+
+class RuntimeDatasetUpdateRequest(RuntimeRequestModel):
+    description: str | None = Field(default=None, max_length=1024)
+    materialization_mode: DatasetMaterializationMode | None = None
+    source: RuntimeDatasetSourceRequest | None = None
+    tags: list[str] | None = None
+    policy: RuntimeDatasetPolicyRequest | None = None
+
+    @model_validator(mode="after")
+    def _validate_materialization_mode_source(self) -> "RuntimeDatasetUpdateRequest":
+        if self.materialization_mode is None or self.source is None:
+            return self
         resource_name = str(self.source.resource or "").strip()
         table_name = str(self.source.table or "").strip()
         sql = str(self.source.sql or "").strip()
@@ -217,6 +295,12 @@ class RuntimeSemanticModelCreateRequest(RuntimeRequestModel):
         if not self.model and not self.datasets:
             raise ValueError("Semantic model creation requires model or datasets.")
         return self
+
+
+class RuntimeSemanticModelUpdateRequest(RuntimeRequestModel):
+    description: str | None = Field(default=None, max_length=1024)
+    model: dict[str, Any] | None = None
+    datasets: list[str] | None = None
 
 
 class RuntimeDatasetPreviewRequest(RuntimeRequestModel):

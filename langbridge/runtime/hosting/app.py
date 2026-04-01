@@ -27,7 +27,7 @@ from langbridge.runtime.bootstrap import (
     ConfiguredLocalRuntimeHost,
     build_configured_local_runtime,
 )
-from langbridge.runtime.application.errors import ApplicationError
+from langbridge.runtime.application.errors import ApplicationError, BusinessValidationError
 from langbridge.runtime.models.jobs import (
     CreateDatasetPreviewJobRequest,
     CreateSqlJobRequest,
@@ -46,15 +46,20 @@ from langbridge.runtime.hosting.api_models import (
     RuntimeAuthBootstrapRequest,
     RuntimeAuthLoginRequest,
     RuntimeConnectorCreateRequest,
+    RuntimeConnectorConfigSchemaResponse,
     RuntimeConnectorListResponse,
     RuntimeConnectorSummary,
+    RuntimeConnectorTypesListResponse,
     RuntimeDatasetCreateRequest,
     RuntimeDatasetListResponse,
     RuntimeDatasetPreviewRequest,
     RuntimeDatasetPreviewResponse,
+    RuntimeConnectorUpdateRequest,
+    RuntimeDatasetUpdateRequest,
     RuntimeInfoResponse,
     RuntimeSemanticModelCreateRequest,
     RuntimeSemanticModelListResponse,
+    RuntimeSemanticModelUpdateRequest,
     RuntimeSemanticQueryRequest,
     RuntimeSemanticQueryResponse,
     RuntimeSyncRequest,
@@ -363,11 +368,18 @@ def create_runtime_api_app(
             "datasets.list",
             "datasets.get",
             "datasets.create",
+            "datasets.update",
+            "datasets.delete",
             "datasets.preview",
+            "connectors.get",
             "connectors.create",
+            "connectors.update",
+            "connectors.delete",
             "semantic_models.list",
             "semantic_models.get",
             "semantic_models.create",
+            "semantic_models.update",
+            "semantic_models.delete",
             "semantic.query",
             "sql.query",
             "agents.list",
@@ -437,6 +449,30 @@ def create_runtime_api_app(
                 status_code=_runtime_mutation_status_code(str(exc)),
                 detail=str(exc),
             ) from exc
+
+    @app.patch("/api/runtime/v1/datasets/{dataset_ref}")
+    async def update_dataset(
+        request: Request,
+        dataset_ref: str,
+        body: RuntimeDatasetUpdateRequest,
+    ) -> dict[str, Any]:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return await configured_host.update_dataset(dataset_ref=dataset_ref, request=body)
+        except (ValueError, ApplicationError) as exc:
+            detail = str(exc)
+            status_code = 404 if _is_missing_runtime_resource(detail) else _runtime_mutation_status_code(detail)
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    @app.delete("/api/runtime/v1/datasets/{dataset_ref}")
+    async def delete_dataset(request: Request, dataset_ref: str) -> dict[str, Any]:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return await configured_host.delete_dataset(dataset_ref=dataset_ref)
+        except (ValueError, ApplicationError) as exc:
+            detail = str(exc)
+            status_code = 404 if _is_missing_runtime_resource(detail) else _runtime_mutation_status_code(detail)
+            raise HTTPException(status_code=status_code, detail=detail) from exc
 
     @app.get("/api/runtime/v1/datasets/{dataset_ref}")
     async def get_dataset(request: Request, dataset_ref: str) -> dict[str, Any]:
@@ -552,6 +588,30 @@ def create_runtime_api_app(
                 status_code=_runtime_mutation_status_code(str(exc)),
                 detail=str(exc),
             ) from exc
+
+    @app.patch("/api/runtime/v1/semantic-models/{model_ref}")
+    async def update_semantic_model(
+        request: Request,
+        model_ref: str,
+        body: RuntimeSemanticModelUpdateRequest,
+    ) -> dict[str, Any]:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return await configured_host.update_semantic_model(model_ref=model_ref, request=body)
+        except (ValueError, ApplicationError) as exc:
+            detail = str(exc)
+            status_code = 404 if _is_missing_semantic_resource(detail) else _runtime_mutation_status_code(detail)
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    @app.delete("/api/runtime/v1/semantic-models/{model_ref}")
+    async def delete_semantic_model(request: Request, model_ref: str) -> dict[str, Any]:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return await configured_host.delete_semantic_model(model_ref=model_ref)
+        except (ValueError, ApplicationError) as exc:
+            detail = str(exc)
+            status_code = 404 if _is_missing_semantic_resource(detail) else _runtime_mutation_status_code(detail)
+            raise HTTPException(status_code=status_code, detail=detail) from exc
 
     @app.get("/api/runtime/v1/semantic-models/{model_ref}")
     async def get_semantic_model(request: Request, model_ref: str) -> dict[str, Any]:
@@ -674,6 +734,38 @@ def create_runtime_api_app(
         configured_host = await _resolve_request_host(request)
         items = await configured_host.list_connectors()
         return RuntimeConnectorListResponse(items=items, total=len(items))
+    
+    
+    @app.get("/api/runtime/v1/connector/types", response_model=RuntimeConnectorTypesListResponse)
+    async def list_connector_types(request: Request) -> RuntimeConnectorTypesListResponse:
+        configured_host = await _resolve_request_host(request)
+        items = await configured_host.list_connector_types()
+        return RuntimeConnectorTypesListResponse(items=items, total=len(items))
+
+    @app.get(
+        "/api/runtime/v1/connector/type/{connector_type}/config",
+        response_model=RuntimeConnectorConfigSchemaResponse,
+    )
+    async def get_connector_type_config(
+        request: Request,
+        connector_type: str,
+    ) -> RuntimeConnectorConfigSchemaResponse:
+        configured_host = await _resolve_request_host(request)
+        try:
+            payload = await configured_host.get_connector_type_config(
+                connector_type=connector_type
+            )
+        except BusinessValidationError as exc:
+            raise HTTPException(status_code=400, detail=exc.message) from exc
+        return RuntimeConnectorConfigSchemaResponse.model_validate(payload)
+
+    @app.get("/api/runtime/v1/connectors/{connector_name}")
+    async def get_connector(request: Request, connector_name: str) -> dict[str, Any]:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return await configured_host.get_connector(connector_name=connector_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post(
         "/api/runtime/v1/connectors",
@@ -693,6 +785,30 @@ def create_runtime_api_app(
                 detail=str(exc),
             ) from exc
         return RuntimeConnectorSummary.model_validate(payload)
+
+    @app.patch("/api/runtime/v1/connectors/{connector_name}")
+    async def update_connector(
+        request: Request,
+        connector_name: str,
+        body: RuntimeConnectorUpdateRequest,
+    ) -> dict[str, Any]:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return await configured_host.update_connector(connector_name=connector_name, request=body)
+        except (ValueError, ApplicationError) as exc:
+            detail = str(exc)
+            status_code = 404 if _is_missing_runtime_resource(detail) else _runtime_mutation_status_code(detail)
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    @app.delete("/api/runtime/v1/connectors/{connector_name}")
+    async def delete_connector(request: Request, connector_name: str) -> dict[str, Any]:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return await configured_host.delete_connector(connector_name=connector_name)
+        except (ValueError, ApplicationError) as exc:
+            detail = str(exc)
+            status_code = 404 if _is_missing_runtime_resource(detail) else _runtime_mutation_status_code(detail)
+            raise HTTPException(status_code=status_code, detail=detail) from exc
 
     @app.get(
         "/api/runtime/v1/connectors/{connector_name}/sync/resources",

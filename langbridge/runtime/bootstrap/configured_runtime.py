@@ -10,7 +10,9 @@ from typing import Any, Mapping
 
 import yaml
 
+from langbridge.plugins.connectors import ConnectorPlugin
 from langbridge.runtime.application import build_runtime_applications
+from langbridge.runtime.application.connectors import _extract_connection_metadata
 from langbridge.runtime.config import load_runtime_config, resolve_metadata_store_config
 from langbridge.runtime.config.models import (
     LocalRuntimeAgentConfig,
@@ -103,10 +105,10 @@ from langbridge.runtime.services.runtime_host import (
 )
 from langbridge.connectors.base import (
     ApiConnectorFactory,
-    ConnectorFamily,
     ConnectorRuntimeType,
     get_connector_config_factory,
     get_connector_plugin,
+    list_connector_plugins
 )
 from langbridge.runtime.services.semantic_query_execution_service import (
     SemanticQueryExecutionService,
@@ -132,7 +134,7 @@ class LocalRuntimeDatasetRecord:
     name: str
     label: str
     description: str | None
-    connector_name: str
+    connector_name: str | None
     relation_name: str
     semantic_model_name: str | None
     default_time_dimension: str | None
@@ -248,21 +250,6 @@ def _merge_dataset_tags(*, existing: list[str], required: list[str]) -> list[str
         seen.add(normalized)
         merged.append(tag)
     return merged
-
-
-def _extract_connection_metadata(payload: Mapping[str, Any]) -> ConnectionMetadata | None:
-    known_keys = {"host", "port", "database", "schema", "warehouse", "role", "account", "user"}
-    metadata_payload: dict[str, Any] = {}
-    extra_payload: dict[str, Any] = {}
-    for key, value in payload.items():
-        if key in known_keys:
-            metadata_payload[key] = value
-        else:
-            extra_payload[key] = value
-    if not metadata_payload and not extra_payload:
-        return None
-    metadata_payload["extra"] = extra_payload
-    return ConnectionMetadata.model_validate(metadata_payload)
 
 
 class ConfiguredLocalRuntimeHost(RuntimeHost):
@@ -398,6 +385,24 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
     async def create_dataset(self, *, request) -> dict[str, Any]:
         return await self._applications.datasets.create_dataset(request=request)
 
+    async def update_dataset(
+        self,
+        *,
+        dataset_ref: str,
+        request,
+    ) -> dict[str, Any]:
+        return await self._applications.datasets.update_dataset(
+            dataset_ref=dataset_ref,
+            request=request,
+        )
+
+    async def delete_dataset(
+        self,
+        *,
+        dataset_ref: str,
+    ) -> dict[str, Any]:
+        return await self._applications.datasets.delete_dataset(dataset_ref=dataset_ref)
+
     async def list_semantic_models(self) -> list[dict[str, Any]]:
         return await self._applications.semantic.list_semantic_models()
 
@@ -410,6 +415,24 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
 
     async def create_semantic_model(self, *, request) -> dict[str, Any]:
         return await self._applications.semantic.create_semantic_model(request=request)
+
+    async def update_semantic_model(
+        self,
+        *,
+        model_ref: str,
+        request,
+    ) -> dict[str, Any]:
+        return await self._applications.semantic.update_semantic_model(
+            model_ref=model_ref,
+            request=request,
+        )
+
+    async def delete_semantic_model(
+        self,
+        *,
+        model_ref: str,
+    ) -> dict[str, Any]:
+        return await self._applications.semantic.delete_semantic_model(model_ref=model_ref)
 
     async def query_dataset(self, *, request) -> dict[str, Any]:
         return await self._applications.datasets.query_dataset(request=request)
@@ -714,8 +737,45 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
     async def list_connectors(self) -> list[dict[str, Any]]:
         return await self._applications.connectors.list_connectors()
 
+    async def list_connector_types(self) -> list[dict[str, Any]]:
+        return await self._applications.connectors.list_connector_types()
+
+    async def get_connector_type_config(
+        self,
+        *,
+        connector_type: str,
+    ) -> dict[str, Any]:
+        return await self._applications.connectors.get_connector_type_config(
+            connector_type=connector_type
+        )
+
+    async def get_connector(
+        self,
+        *,
+        connector_name: str,
+    ) -> dict[str, Any]:
+        return await self._applications.connectors.get_connector(connector_name=connector_name)
+
     async def create_connector(self, *, request) -> dict[str, Any]:
         return await self._applications.connectors.create_connector(request=request)
+
+    async def update_connector(
+        self,
+        *,
+        connector_name: str,
+        request,
+    ) -> dict[str, Any]:
+        return await self._applications.connectors.update_connector(
+            connector_name=connector_name,
+            request=request,
+        )
+
+    async def delete_connector(
+        self,
+        *,
+        connector_name: str,
+    ) -> dict[str, Any]:
+        return await self._applications.connectors.delete_connector(connector_name=connector_name)
 
     async def list_sync_resources(
         self,
@@ -847,9 +907,19 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         if hasattr(connector_provider, "upsert"):
             connector_provider.upsert(connector)
 
+    def _remove_runtime_connector(self, *, connector_name: str, connector_id: uuid.UUID) -> None:
+        self._connectors.pop(connector_name, None)
+        connector_provider = self.providers.connector_metadata
+        if hasattr(connector_provider, "remove"):
+            connector_provider.remove(connector_id=connector_id)
+
     def _upsert_runtime_dataset_record(self, record: LocalRuntimeDatasetRecord) -> None:
         self._datasets[record.name] = record
         self._datasets_by_id[record.id] = record
+
+    def _remove_runtime_dataset_record(self, *, dataset_name: str, dataset_id: uuid.UUID) -> None:
+        self._datasets.pop(dataset_name, None)
+        self._datasets_by_id.pop(dataset_id, None)
 
     def _upsert_runtime_semantic_model_record(
         self,
@@ -863,6 +933,28 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         semantic_store = getattr(self.services.agent_execution, "_semantic_model_store", None)
         if hasattr(semantic_store, "upsert"):
             semantic_store.upsert(metadata)
+
+    def _remove_runtime_semantic_model_record(
+        self,
+        *,
+        model_name: str,
+        model_id: uuid.UUID,
+    ) -> None:
+        self._semantic_models.pop(model_name, None)
+        if self._default_semantic_model_name == model_name:
+            self._default_semantic_model_name = next(iter(self._semantic_models), None)
+        semantic_provider = self.providers.semantic_models
+        if hasattr(semantic_provider, "remove"):
+            semantic_provider.remove(
+                workspace_id=self.context.workspace_id,
+                semantic_model_id=model_id,
+            )
+        semantic_store = getattr(self.services.agent_execution, "_semantic_model_store", None)
+        if hasattr(semantic_store, "remove"):
+            semantic_store.remove(
+                workspace_id=self.context.workspace_id,
+                semantic_model_id=model_id,
+            )
 
     def _semantic_model_metadata_from_record(
         self,
@@ -1139,6 +1231,9 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
                 if dataset is not None:
                     normalized["dataset_name"] = dataset.name
         return normalized
+    
+    def _get_connector_plugins(self) -> list[ConnectorPlugin]:
+        return list_connector_plugins()
 
     def _get_connector_plugin(self, connector: ConnectorMetadata):
         return self._resolve_connector_plugin_for_type(connector.connector_type_value)
@@ -1261,10 +1356,12 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
     async def _get_max_date(
         self,
         *,
-        connector_name: str,
+        connector_name: str | None,
         relation_name: str,
         column_name: str,
     ) -> date | None:
+        if not str(connector_name or "").strip():
+            return None
         result = await self.execute_sql_text(
             query=f"SELECT MAX({column_name}) AS max_value FROM {relation_name}",
             connection_name=connector_name,
@@ -1749,6 +1846,8 @@ class ConfiguredLocalRuntimeHostFactory:
             connector_type=connector_type.value,
             plugin=plugin,
         )
+        config_factory = get_connector_config_factory(connector_type) if connector_type != ConnectorRuntimeType.LOCAL_FILESYSTEM else None
+        metadata_keys = config_factory.get_metadata_keys() if config_factory is not None else set()
         return ConnectorMetadata(
             id=connector_id,
             name=connector.name,
@@ -1761,7 +1860,7 @@ class ConfiguredLocalRuntimeHostFactory:
             ),
             workspace_id=context.workspace_id,
             config={"config": connection_payload},
-            connection_metadata=_extract_connection_metadata(merged_connection),
+            connection_metadata=_extract_connection_metadata(merged_connection, metadata_keys),
             secret_references=dict(connector.secrets or {}),
             connection_policy=(
                 ConnectionPolicy.model_validate(connector.policy)

@@ -16,12 +16,9 @@ _EXPORTS = {
         "ConnectorSyncStrategy",
     ),
     "langbridge.connectors.base.metadata": (
-        "BaseMetadataExtractor",
         "ColumnMetadata",
         "ForeignKeyMetadata",
-        "TableMetadata",
-        "build_connector_config",
-        "get_metadata_extractor",
+        "TableMetadata"
     ),
     "langbridge.connectors.base.connector": (
         "ApiConnector",
