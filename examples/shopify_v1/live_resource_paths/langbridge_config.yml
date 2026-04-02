@@ -42,6 +42,13 @@ datasets:
     source:
       resource: customers.default_address
 
+  - name: shopify_live_products
+    description: Live parent dataset for products with explicit 1:many options flattening.
+    connector: shopify_demo
+    materialization_mode: live
+    source:
+      resource: products
+
   - name: shopify_live_product_options
     description: Live explicit child dataset for the 1:many `products.options` path.
     connector: shopify_demo
