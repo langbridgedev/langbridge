@@ -559,7 +559,94 @@ class ManagedVectorDB(VecotorDBConnector):
         """Delete the vector index."""
         raise NotImplementedError
     
+
+class StorageConnector(Connector):
+    """
+    Base class for storage connectors.
+    """
+    RUNTIME_TYPE: ConnectorRuntimeType | None = None
+
+    def __init__(
+        self,
+        config: BaseConnectorConfig,
+        logger: Optional[logging.Logger] = None,
+    ) -> None:
+        self.config = config
+        self.logger = logger or logging.getLogger(__name__)
+
+    @abstractmethod
+    async def list_buckets(self) -> List[str]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_objects(self, bucket: str) -> List[str]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_object(self, bucket: str, key: str) -> bytes:
+        raise NotImplementedError
+
+    async def configure_duckdb_connection(
+        self,
+        connection: Any,
+        *,
+        storage_uris: Sequence[str],
+        options: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Allow storage backends to prepare a DuckDB connection for remote scans."""
+        return None
+
+    async def resolve_duckdb_scan_uris(
+        self,
+        storage_uris: Sequence[str],
+        *,
+        options: Mapping[str, Any] | None = None,
+    ) -> List[str]:
+        """Allow storage backends to translate logical object URIs into DuckDB-readable paths."""
+        return [
+            str(storage_uri or "").strip()
+            for storage_uri in storage_uris
+            if str(storage_uri or "").strip()
+        ]
+
+class ManagedStorageConnector(StorageConnector):
+    """
+    Base class for managed storage connectors.
+    """
     
+    @staticmethod
+    @abstractmethod
+    async def create_managed_instance(
+        kwargs: Any,
+        logger: Optional[logging.Logger] = None,
+    ) -> "ManagedStorageConnector":
+        """Create and return a new managed storage connector instance."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def create_bucket(self, bucket_name: str) -> None:
+        """Create a new storage bucket."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def delete_bucket(self, bucket_name: str) -> None:
+        """Delete a storage bucket."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def delete_object(self, bucket: str, key: str) -> None:
+        """Delete an object from a storage bucket."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def upload_object(self, bucket: str, key: str, data: bytes) -> None:
+        """Upload an object to a storage bucket."""
+        raise NotImplementedError    
+
+    @abstractmethod
+    async def update_object(self, bucket: str, key: str, data: bytes) -> None:
+        """Update an existing object in a storage bucket."""
+        raise NotImplementedError
 
 async def run_sync(fn, *args, **kwargs):
     """

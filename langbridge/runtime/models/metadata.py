@@ -233,6 +233,8 @@ class DatasetSyncConfig(RuntimeModel):
     lookback_window: str | None = None
     backfill_start: str | None = None
     backfill_end: str | None = None
+    sync_on_start: bool = False
+    flattern_into_datasets: bool = False
 
     @field_validator("strategy", mode="before")
     @classmethod

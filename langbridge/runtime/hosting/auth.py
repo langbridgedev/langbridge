@@ -154,6 +154,10 @@ class RuntimeAuthResolver:
         return self._config.mode
 
     @property
+    def config(self) -> RuntimeAuthConfig:
+        return self._config
+
+    @property
     def local_auth(self) -> RuntimeLocalAuthManager | None:
         return self._local_auth
 

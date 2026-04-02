@@ -17,6 +17,7 @@ from langbridge.runtime.hosting.auth import (
     RuntimeAuthPrincipal,
     RuntimeAuthResolver,
 )
+from langbridge.runtime.hosting.odbc import RuntimeOdbcEndpoint, RuntimeOdbcEndpointConfig
 from langbridge.runtime.hosting.background import (
     BackgroundTaskSchedule,
     RuntimeBackgroundTaskDefinition,
@@ -75,6 +76,8 @@ from langbridge.runtime.hosting.api_models import (
 _CONFIG_PATH_ENV = "LANGBRIDGE_RUNTIME_CONFIG_PATH"
 _FEATURES_ENV = "LANGBRIDGE_RUNTIME_FEATURES"
 _DEBUG_ENV = "LANGBRIDGE_RUNTIME_DEBUG"
+_ODBC_HOST_ENV = "LANGBRIDGE_RUNTIME_ODBC_HOST"
+_ODBC_PORT_ENV = "LANGBRIDGE_RUNTIME_ODBC_PORT"
 _SEMANTIC_VECTOR_REFRESH_TASK_NAME = "semantic-vector-refresh"
 _RUNTIME_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 _DEBUG_HANDLER_MARKER = "_langbridge_runtime_debug_handler"
@@ -87,6 +90,8 @@ def create_runtime_api_app(
     auth_config: RuntimeAuthConfig | None = None,
     features: Iterable[str] | None = None,
     debug: bool = False,
+    odbc_host: str | None = None,
+    odbc_port: int | None = None,
     default_background_tasks: Iterable[RuntimeBackgroundTaskDefinition] | None = None,
     background_tasks: Iterable[RuntimeBackgroundTaskDefinition] | None = None,
     background_task_manager: RuntimeBackgroundTaskManager | None = None,
@@ -100,6 +105,7 @@ def create_runtime_api_app(
     enabled_features = _normalize_runtime_features(features)
     mcp_enabled = "mcp" in enabled_features
     ui_enabled = "ui" in enabled_features
+    odbc_enabled = "odbc" in enabled_features
     auth_resolver = RuntimeAuthResolver(
         config=auth_config
         or RuntimeAuthConfig.from_env(
@@ -128,6 +134,7 @@ def create_runtime_api_app(
             task_manager.register_custom_task(task)
     mcp_server = None
     mcp_app = None
+    odbc_server = None
     if mcp_enabled:
         mcp_server, mcp_app = build_runtime_mcp_server(
             runtime_host=host,
@@ -135,9 +142,20 @@ def create_runtime_api_app(
             mount_path=DEFAULT_MCP_MOUNT_PATH,
             debug=debug,
         )
+    if odbc_enabled:
+        odbc_server = RuntimeOdbcEndpoint(
+            runtime_host=host,
+            auth_config=auth_resolver.config,
+            config=RuntimeOdbcEndpointConfig.from_env(
+                host=odbc_host,
+                port=odbc_port,
+            ),
+        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        if odbc_server is not None:
+            await odbc_server.start()
         await task_manager.start()
         try:
             if mcp_server is None:
@@ -152,6 +170,8 @@ def create_runtime_api_app(
                 yield
         finally:
             await task_manager.stop()
+            if odbc_server is not None:
+                await odbc_server.close()
             await _close_runtime_host(host)
 
     app = FastAPI(
@@ -166,6 +186,7 @@ def create_runtime_api_app(
     app.state.runtime_auth = auth_resolver
     app.state.runtime_background_tasks = task_manager
     app.state.runtime_debug = bool(debug)
+    app.state.runtime_odbc = odbc_server
 
     if mcp_enabled:
         @app.middleware("http")
@@ -419,6 +440,8 @@ def create_runtime_api_app(
             capabilities.append("ui")
         if mcp_enabled:
             capabilities.append("mcp")
+        if odbc_enabled:
+            capabilities.append("odbc")
         return RuntimeInfoResponse(
             runtime_mode="configured_local",
             config_path=str(configured_host._config_path),
@@ -929,6 +952,8 @@ def create_runtime_api_app_from_env() -> FastAPI:
         config_path=config_path,
         features=_parse_runtime_features_env(os.getenv(_FEATURES_ENV)),
         debug=_parse_runtime_debug_env(os.getenv(_DEBUG_ENV)),
+        odbc_host=os.getenv(_ODBC_HOST_ENV),
+        odbc_port=_parse_runtime_port_env(os.getenv(_ODBC_PORT_ENV)),
     )
 
 
@@ -1078,6 +1103,13 @@ def _raise_runtime_internal_server_error(operation: str, exc: Exception) -> None
 
 def _parse_runtime_debug_env(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "debug"}
+
+
+def _parse_runtime_port_env(value: str | None) -> int | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    return int(normalized)
 
 
 def _require_local_auth_manager(auth_resolver: RuntimeAuthResolver):

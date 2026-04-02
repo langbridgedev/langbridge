@@ -27,16 +27,35 @@ connectors:
         identifier: SHOPIFY_ACCESS_TOKEN
 
 datasets:
-  - name: shopify_customers
-    description: Synced dataset pinned to the manifest-listed Shopify customers resource.
+  - name: shopify_products
+    description: Synced dataset pinned to the manifest-listed Shopify products resource.
     connector: shopify_demo
     materialization_mode: synced
+    # materialization_mode: live
+    # source:
+    #   resource: products
     sync:
-      resource: customers
+      resource: products
+      flattern_into_datasets: false
+      
+  - name: shopify_products__options
+    description: Synced dataset pinned to the manifest-listed Shopify products__options resource.
+    connector: shopify_demo
+    materialization_mode: synced
+    # materialization_mode: live
+    # source:
+    #   resource: products
+    sync:
+      resource: product/products_options
+      flattern_into_datasets: false
 
   - name: shopify_price_rules
     description: Synced dataset using a dataset-selected dynamic Shopify Admin API resource.
     connector: shopify_demo
+    # materialization_mode: live
     materialization_mode: synced
+    # source:
+    #   resource: price_rules
     sync:
       resource: price_rules
+      flattern_into_datasets: false

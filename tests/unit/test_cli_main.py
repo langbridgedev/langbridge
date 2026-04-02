@@ -134,13 +134,15 @@ def test_cli_serve_delegates_to_runtime_api(tmp_path: Path, monkeypatch) -> None
     config_path = _write_config(tmp_path)
     captured: dict[str, object] = {}
 
-    def fake_run_runtime_api(*, config_path, host, port, features, debug, reload):
+    def fake_run_runtime_api(*, config_path, host, port, features, debug, reload, odbc_host, odbc_port):
         captured["config_path"] = config_path
         captured["host"] = host
         captured["port"] = port
         captured["features"] = features
         captured["debug"] = debug
         captured["reload"] = reload
+        captured["odbc_host"] = odbc_host
+        captured["odbc_port"] = odbc_port
 
     monkeypatch.setattr("langbridge.cli.main.run_runtime_api", fake_run_runtime_api)
 
@@ -154,7 +156,11 @@ def test_cli_serve_delegates_to_runtime_api(tmp_path: Path, monkeypatch) -> None
             "--port",
             "9100",
             "--features",
-            "ui,mcp",
+            "ui,mcp,odbc",
+            "--odbc-host",
+            "0.0.0.0",
+            "--odbc-port",
+            "15432",
             "--debug",
             "--reload",
         ]
@@ -165,9 +171,11 @@ def test_cli_serve_delegates_to_runtime_api(tmp_path: Path, monkeypatch) -> None
         "config_path": str(config_path),
         "host": "0.0.0.0",
         "port": 9100,
-        "features": ["ui", "mcp"],
+        "features": ["ui", "mcp", "odbc"],
         "debug": True,
         "reload": True,
+        "odbc_host": "0.0.0.0",
+        "odbc_port": 15432,
     }
 
 

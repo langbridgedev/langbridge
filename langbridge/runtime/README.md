@@ -25,6 +25,10 @@ Self-hosted auth modes are:
 - `static_token`
 - `jwt`
 
+The hosting layer can also expose a lightweight PostgreSQL-compatible BI endpoint for
+ODBC/JDBC clients. That endpoint delegates query execution to the runtime federated SQL path
+instead of introducing a separate execution engine.
+
 When runtime auth is enabled, the self-hosted UI can also use a runtime-owned local operator session
 for first-admin bootstrap and browser login without introducing cloud tenancy or signup flows.
 

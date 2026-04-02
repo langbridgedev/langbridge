@@ -62,10 +62,22 @@ Enable the MCP endpoint:
 langbridge serve --config examples/runtime_host/langbridge_config.yml --features mcp
 ```
 
+Enable the BI / ODBC endpoint:
+
+```bash
+langbridge serve --config examples/runtime_host/langbridge_config.yml --features odbc --odbc-port 15432
+```
+
 Enable both:
 
 ```bash
 langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui,mcp
+```
+
+You can also combine all runtime-facing surfaces:
+
+```bash
+langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui,mcp,odbc --odbc-port 15432
 ```
 
 SQLite metadata stores auto-apply Alembic migrations by default on startup. For

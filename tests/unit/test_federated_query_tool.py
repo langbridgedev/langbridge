@@ -4,6 +4,7 @@ import uuid
 import pytest
 
 from langbridge.connectors.base.connector import ApiExtractResult
+from langbridge.connectors.base import BaseConnectorConfig, StorageConnector
 from langbridge.runtime.models import (
     ConnectorCapabilities,
     ConnectorMetadata,
@@ -14,7 +15,7 @@ from langbridge.runtime.execution.federated_query_tool import (
     FederatedQueryTool,
 )
 from langbridge.runtime.providers import MemoryConnectorProvider
-from langbridge.federation.connectors import ApiConnectorRemoteSource, DuckDbFileRemoteSource
+from langbridge.federation.connectors import DuckDbFileRemoteSource
 from langbridge.federation.models import (
     DatasetExecutionDescriptor,
     FederationWorkflow,
@@ -48,6 +49,20 @@ class _FakeApiConnector:
             records=list(self._payloads.get(resource_name, [])),
             child_records={},
         )
+
+
+class StubStorageConnector(StorageConnector):
+    def __init__(self) -> None:
+        super().__init__(config=BaseConnectorConfig())
+
+    async def list_buckets(self) -> list[str]:
+        return []
+
+    async def list_objects(self, bucket: str) -> list[str]:
+        return []
+
+    async def get_object(self, bucket: str, key: str) -> bytes:
+        raise NotImplementedError
 
 
 @pytest.mark.anyio
@@ -122,6 +137,81 @@ async def test_build_sources_uses_descriptor_for_saas_parquet_dataset() -> None:
 
     assert "file_source_shop_orders" in sources
     assert isinstance(sources["file_source_shop_orders"], DuckDbFileRemoteSource)
+
+
+@pytest.mark.anyio
+async def test_build_sources_uses_parquet_remote_source_for_distributed_parquet_workflow() -> None:
+    workspace_id = str(uuid.uuid4())
+    workflow = FederationWorkflow(
+        id="workflow_remote_parquet_test",
+        workspace_id=workspace_id,
+        dataset=VirtualDataset(
+            id="dataset_remote_parquet_test",
+            name="Remote Parquet Orders",
+            workspace_id=workspace_id,
+            tables={
+                "orders": VirtualTableBinding(
+                    table_key="orders",
+                    source_id="parquet_source_orders",
+                    connector_id=None,
+                    table="orders",
+                    metadata={
+                        "source_kind": "file",
+                        "storage_kind": "parquet",
+                        "file_format": "parquet",
+                        "storage_uri": "s3://acme-bucket/orders/*.parquet",
+                    },
+                )
+            },
+            relationships=[],
+        ),
+    )
+    tool = FederatedQueryTool(connector_provider=MemoryConnectorProvider())
+
+    sources = await tool._build_sources(workflow)
+
+    assert "parquet_source_orders" in sources
+    assert isinstance(sources["parquet_source_orders"], DuckDbParquetRemoteSource)
+
+
+@pytest.mark.anyio
+async def test_build_sources_passes_storage_connector_to_parquet_remote_source() -> None:
+    workspace_id = str(uuid.uuid4())
+    workflow = FederationWorkflow(
+        id="workflow_remote_parquet_with_storage_test",
+        workspace_id=workspace_id,
+        dataset=VirtualDataset(
+            id="dataset_remote_parquet_with_storage_test",
+            name="Remote Parquet Orders",
+            workspace_id=workspace_id,
+            tables={
+                "orders": VirtualTableBinding(
+                    table_key="orders",
+                    source_id="parquet_source_orders",
+                    connector_id=None,
+                    table="orders",
+                    metadata={
+                        "source_kind": "file",
+                        "storage_kind": "parquet",
+                        "file_format": "parquet",
+                        "storage_uri": "s3://acme-bucket/orders/*.parquet",
+                    },
+                )
+            },
+            relationships=[],
+        ),
+    )
+    storage_connector = StubStorageConnector()
+    tool = FederatedQueryTool(
+        connector_provider=MemoryConnectorProvider(),
+        storage_connector=storage_connector,
+    )
+
+    sources = await tool._build_sources(workflow)
+    source = sources["parquet_source_orders"]
+
+    assert isinstance(source, DuckDbParquetRemoteSource)
+    assert source._storage_connector is storage_connector
 
 
 @pytest.mark.anyio

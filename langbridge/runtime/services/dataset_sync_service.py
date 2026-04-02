@@ -9,6 +9,7 @@ from typing import Any, Mapping
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from langbridge.connectors.base.connector import ApiConnector
 from langbridge.runtime.utils.lineage import (
     LineageEdgeType,
     LineageNodeType,
@@ -20,7 +21,7 @@ from langbridge.runtime.utils.datasets import (
     build_dataset_execution_capabilities,
     build_dataset_relation_identity,
 )
-from langbridge.connectors.base import ApiResource
+from langbridge.connectors.base.connector import ApiResource
 from langbridge.connectors.base.config import ConnectorRuntimeType, ConnectorSyncStrategy
 from langbridge.runtime.models import (
     ConnectorSyncState,
@@ -44,6 +45,7 @@ from langbridge.runtime.ports import (
     LineageEdgeStore,
 )
 from langbridge.runtime.models.metadata import (
+    ConnectorMetadata,
     DatasetSourceKind,
     DatasetStorageKind,
     LifecycleState,
@@ -137,16 +139,17 @@ class ConnectorSyncRuntime:
         workspace_id: uuid.UUID,
         actor_id: uuid.UUID,
         connection_id: uuid.UUID,
-        connector_record,
+        connector_record: ConnectorMetadata,
         connector_type: ConnectorRuntimeType,
         resource: ApiResource,
-        api_connector,
+        api_connector: ApiConnector,
         state: ConnectorSyncState,
-        sync_mode: Any,
+        sync_mode: ConnectorSyncMode,
+        max_sync_retry: int = 3,
+        flattern_into_datasets: bool = False,
     ) -> dict[str, Any]:
-        sync_mode_value = ConnectorSyncMode(_enum_value(sync_mode).upper())
-        effective_sync_mode = sync_mode_value
-        if sync_mode_value == ConnectorSyncMode.INCREMENTAL and not resource.supports_incremental:
+        effective_sync_mode = sync_mode
+        if sync_mode == ConnectorSyncMode.INCREMENTAL and not resource.supports_incremental:
             effective_sync_mode = ConnectorSyncMode.FULL_REFRESH
 
         since = None
@@ -159,7 +162,7 @@ class ConnectorSyncRuntime:
         child_rows: dict[str, list[dict[str, Any]]] = {}
         checkpoint_cursor = state.last_cursor
 
-        while True:
+        for _ in range(max_sync_retry):
             extract_result = await api_connector.extract_resource(
                 resource.name,
                 since=since,
@@ -167,8 +170,9 @@ class ConnectorSyncRuntime:
                 limit=None,
             )
             parent_rows.extend(list(extract_result.records or []))
-            for child_name, rows in (extract_result.child_records or {}).items():
-                child_rows.setdefault(child_name, []).extend(list(rows or []))
+            if flattern_into_datasets:
+                for child_name, rows in (extract_result.child_records or {}).items():
+                    child_rows.setdefault(child_name, []).extend(list(rows or []))
             checkpoint_cursor = self._pick_newer_cursor(checkpoint_cursor, extract_result.checkpoint_cursor)
             page_count += 1
             page_cursor = extract_result.next_cursor
@@ -254,6 +258,19 @@ class ConnectorSyncRuntime:
             "dataset_names": [item.dataset_name for item in materialized],
         }
 
+    async def sync_dataset(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        actor_id: uuid.UUID,
+        connection_id: uuid.UUID,
+        connector_record: ConnectorMetadata,
+        connector_type: ConnectorRuntimeType,
+        dataset_id: uuid.UUID,
+        sync_mode: ConnectorSyncMode,
+    ):
+        pass
+
     async def mark_failed(self, *, state: ConnectorSyncState, error_message: str) -> None:
         state.status = ConnectorSyncStatus.FAILED
         state.error_message = error_message
@@ -266,7 +283,7 @@ class ConnectorSyncRuntime:
         workspace_id: uuid.UUID,
         actor_id: uuid.UUID,
         connection_id: uuid.UUID,
-        connector_record,
+        connector_record: ConnectorMetadata,
         connector_type: ConnectorRuntimeType,
         root_resource_name: str,
         resource_name: str,

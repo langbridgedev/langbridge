@@ -27,8 +27,10 @@ if TYPE_CHECKING:
         ApiConnector,
         Connector,
         ManagedVectorDB,
+        ManagedStorageConnector,
         NoSqlConnector,
         SqlConnector,
+        StorageConnector,
         VecotorDBConnector,
     )
 
@@ -44,6 +46,10 @@ _BUILTIN_PLUGIN_MODULES = (
     "langbridge.connectors.sql.sqlserver",
     "langbridge.connectors.vector.faiss",
     "langbridge.connectors.vector.qdrant",
+    "langbridge.connectors.storage.local",
+    "langbridge.connectors.storage.s3",
+    "langbridge.connectors.storage.gcs",
+    "langbridge.connectors.storage.azure_blob",
 )
 
 _BUILTIN_CONNECTOR_MODULES = (
@@ -58,6 +64,10 @@ _BUILTIN_CONNECTOR_MODULES = (
     "langbridge.connectors.sql.sqlserver.connector",
     "langbridge.connectors.vector.faiss.connector",
     "langbridge.connectors.vector.qdrant.connector",
+    "langbridge.connectors.storage.local.connector",
+    "langbridge.connectors.storage.s3.connector",
+    "langbridge.connectors.storage.gcs.connector",
+    "langbridge.connectors.storage.azure_blob.connector",
     *_BUILTIN_PLUGIN_MODULES,
 )
 
@@ -444,6 +454,57 @@ class VectorDBConnectorFactory:
         return connector_class(config=config, logger=logger)
 
 
+class StorageConnectorFactory:
+    """Factory for creating storage connectors."""
+
+    @staticmethod
+    def get_storage_connector_class_reference(
+        connector_type: ConnectorRuntimeType,
+    ) -> Type[StorageConnector]:
+        from langbridge.connectors.base.connector import StorageConnector
+
+        ensure_builtin_connectors_loaded()
+        subclasses = _iter_subclasses(StorageConnector)
+        for subclass in subclasses:
+            if getattr(subclass, "RUNTIME_TYPE", None) == connector_type:
+                return subclass
+        raise ValueError(f"No storage connector found for runtime type: {connector_type}")
+
+    @staticmethod
+    def get_managed_storage_connector_class_reference(
+        connector_type: ConnectorRuntimeType,
+    ) -> Type[ManagedStorageConnector]:
+        from langbridge.connectors.base.connector import ManagedStorageConnector
+
+        ensure_builtin_connectors_loaded()
+        subclasses = _iter_subclasses(ManagedStorageConnector)
+        for subclass in subclasses:
+            if getattr(subclass, "RUNTIME_TYPE", None) == connector_type:
+                return subclass
+        raise ValueError(f"No managed storage connector found for runtime type: {connector_type}")
+
+    @staticmethod
+    def create_storage_connector(
+        connector_type: ConnectorRuntimeType,
+        config: BaseConnectorConfig,
+        logger: Logger,
+    ) -> StorageConnector:
+        connector_class = StorageConnectorFactory.get_storage_connector_class_reference(
+            connector_type
+        )
+        return connector_class(config=config, logger=logger)
+
+
+def _iter_subclasses(base_class: type) -> list[type]:
+    discovered: list[type] = []
+    stack = list(base_class.__subclasses__())
+    while stack:
+        subclass = stack.pop()
+        discovered.append(subclass)
+        stack.extend(subclass.__subclasses__())
+    return discovered
+
+
 class ConnectorInstanceRegistry:
     """Registry for managing connector instances."""
 
@@ -467,6 +528,7 @@ __all__ = [
     "ConnectorPluginRegistry",
     "NoSqlConnectorFactory",
     "SqlConnectorFactory",
+    "StorageConnectorFactory",
     "VectorDBConnectorFactory",
     "ensure_builtin_connectors_loaded",
     "ensure_entrypoint_plugins_loaded",

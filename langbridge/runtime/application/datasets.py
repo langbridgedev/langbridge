@@ -386,6 +386,7 @@ class DatasetApplication:
             change_summary=summary,
         )
         await self._host.services.dataset_query._replace_dataset_lineage(dataset)
+    
     @staticmethod
     def _require_runtime_managed_dataset(dataset: DatasetMetadata) -> None:
         management_mode = str(getattr(dataset.management_mode, "value", dataset.management_mode)).lower()

@@ -627,7 +627,7 @@ class ConnectorApplication:
                 discovered_resources=discovered_resources,
             )
 
-        normalized_sync_mode = self._host._normalize_sync_mode(sync_mode)
+        normalized_sync_mode: ConnectorSyncMode = sync_mode
         summaries: list[dict[str, Any]] = []
         active_state: ConnectorSyncState | None = None
         try:
@@ -653,7 +653,8 @@ class ConnectorApplication:
                         resource=resolved_resources[resource_name],
                         api_connector=api_connector,
                         state=active_state,
-                        sync_mode=("FULL_REFRESH" if force_full_refresh else normalized_sync_mode),
+                        sync_mode=(ConnectorSyncMode.FULL_REFRESH if force_full_refresh else normalized_sync_mode),
+                        flattern_into_datasets=False # TODO: add flattern_into_datasets as a parameter to this method and pass it down to the sync_dataset call
                     )
                     summaries.append(summary)
                 if uow is not None:

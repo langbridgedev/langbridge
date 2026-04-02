@@ -46,8 +46,10 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--features",
         default="",
-        help="Comma-separated runtime features to enable. Currently supported: mcp, ui",
+        help="Comma-separated runtime features to enable. Currently supported: mcp, odbc, ui",
     )
+    serve.add_argument("--odbc-host", default=None, help="Optional bind host for the ODBC endpoint.")
+    serve.add_argument("--odbc-port", type=int, default=None, help="Optional bind port for the ODBC endpoint.")
     serve.add_argument("--debug", action="store_true", help="Enable verbose runtime and MCP debug logging")
     serve.add_argument("--reload", action="store_true", help="Enable auto reload")
     serve.set_defaults(handler=_handle_serve)
@@ -176,6 +178,8 @@ def _handle_serve(args: argparse.Namespace) -> int:
         features=_parse_feature_flags(args.features),
         debug=bool(args.debug),
         reload=bool(args.reload),
+        odbc_host=args.odbc_host,
+        odbc_port=args.odbc_port,
     )
     return 0
 
@@ -375,7 +379,7 @@ def _parse_semantic_filter(value: str) -> dict[str, Any]:
 
 
 def _parse_feature_flags(value: str | None) -> list[str]:
-    supported = {"mcp", "ui"}
+    supported = {"mcp", "odbc", "ui"}
     normalized: list[str] = []
     for raw_feature in str(value or "").split(","):
         feature = raw_feature.strip().lower()

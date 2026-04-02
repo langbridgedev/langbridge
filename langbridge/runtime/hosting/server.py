@@ -10,6 +10,8 @@ from langbridge.runtime.hosting.app import (
     _CONFIG_PATH_ENV,
     _DEBUG_ENV,
     _FEATURES_ENV,
+    _ODBC_HOST_ENV,
+    _ODBC_PORT_ENV,
     create_runtime_api_app,
 )
 
@@ -22,6 +24,8 @@ def run_runtime_api(
     features: Iterable[str] = (),
     debug: bool = False,
     reload: bool = False,
+    odbc_host: str | None = None,
+    odbc_port: int | None = None,
 ) -> None:
     _configure_windows_event_loop_policy()
     normalized_features = [str(feature).strip().lower() for feature in features if str(feature).strip()]
@@ -29,6 +33,14 @@ def run_runtime_api(
         os.environ[_CONFIG_PATH_ENV] = str(Path(config_path).resolve())
         os.environ[_FEATURES_ENV] = ",".join(normalized_features)
         os.environ[_DEBUG_ENV] = "true" if debug else "false"
+        if odbc_host is not None:
+            os.environ[_ODBC_HOST_ENV] = str(odbc_host)
+        else:
+            os.environ.pop(_ODBC_HOST_ENV, None)
+        if odbc_port is not None:
+            os.environ[_ODBC_PORT_ENV] = str(odbc_port)
+        else:
+            os.environ.pop(_ODBC_PORT_ENV, None)
         uvicorn.run(
             "langbridge.runtime.hosting.app:create_runtime_api_app_from_env",
             host=host,
@@ -44,6 +56,8 @@ def run_runtime_api(
         config_path=config_path,
         features=normalized_features,
         debug=debug,
+        odbc_host=odbc_host,
+        odbc_port=odbc_port,
     )
     uvicorn.run(
         app,

@@ -37,6 +37,7 @@ class ConnectorRuntimeType(str, Enum):
     SALESFORCE = "SALESFORCE"
     
     LOCAL_FILESYSTEM = "LOCAL_FILESYSTEM"
+    S3 = "S3"
     _S3 = "S3"
     GCS = "GCS"
     AZURE_BLOB = "AZURE_BLOB"

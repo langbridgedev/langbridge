@@ -56,13 +56,13 @@ ResolveConnectorConfig = Callable[[ConnectorMetadata], dict[str, Any]]
 class SqlQueryService:
     def __init__(
         self,
-        sql_job_result_artifact_store: SqlJobArtifactStore | None,
-        dataset_repository: DatasetCatalogStore | None = None,
-        secret_provider_registry: SecretProviderRegistry | None = None,
-        federated_query_tool: FederatedQueryTool | None = None,
-        connector_provider: ConnectorMetadataProvider | None = None,
-        dataset_provider: DatasetMetadataProvider | None = None,
-        credential_provider: CredentialProvider | None = None,
+        dataset_repository: DatasetCatalogStore,
+        secret_provider_registry: SecretProviderRegistry,
+        federated_query_tool: FederatedQueryTool,
+        connector_provider: ConnectorMetadataProvider,
+        dataset_provider: DatasetMetadataProvider,
+        credential_provider: CredentialProvider,
+        sql_job_result_artifact_store: SqlJobArtifactStore | None = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
         self._sql_job_result_artifact_store = sql_job_result_artifact_store

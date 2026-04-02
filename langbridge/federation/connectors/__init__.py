@@ -1,6 +1,7 @@
 from langbridge.federation.connectors.base import RemoteExecutionResult, RemoteSource, SourceCapabilities
 from langbridge.federation.connectors.api import ApiConnectorRemoteSource
 from langbridge.federation.connectors.file import DuckDbFileRemoteSource
+from langbridge.federation.connectors.parquet import DuckDbParquetRemoteSource
 from langbridge.federation.connectors.sql import (
     SqlConnectorRemoteSource,
     estimate_bytes,
@@ -8,10 +9,11 @@ from langbridge.federation.connectors.sql import (
 
 __all__ = [
     "RemoteExecutionResult",
+    "ApiConnectorRemoteSource",
     "RemoteSource",
     "SourceCapabilities",
-    "ApiConnectorRemoteSource",
     "DuckDbFileRemoteSource",
+    "DuckDbParquetRemoteSource",
     "SqlConnectorRemoteSource",
     "estimate_bytes",
 ]

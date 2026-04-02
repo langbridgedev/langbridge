@@ -10,6 +10,7 @@ _CANONICAL_PACKAGES = {
     "nosql": "langbridge.connectors.nosql",
     "saas": "langbridge.connectors.saas",
     "sql": "langbridge.connectors.sql",
+    "storage": "langbridge.connectors.storage",
     "vector": "langbridge.connectors.vector",
 }
 

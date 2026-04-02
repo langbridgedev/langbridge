@@ -5,16 +5,14 @@ from uuid import UUID
 from pydantic import BaseModel
 
 import pyarrow as pa
-from langbridge.connectors.base import (
-    ApiConnectorFactory,
-    SqlConnectorFactory,
-    get_connector_config_factory,
-)
+from langbridge.connectors.base import get_connector_config_factory
+from langbridge.federation.connectors.api import ApiConnectorRemoteSource
+from langbridge.plugins.connectors import ApiConnectorFactory, StorageConnectorFactory, SqlConnectorFactory
 from langbridge.connectors.base.config import ConnectorRuntimeType
-from langbridge.connectors.base.connector import ApiConnector, SqlConnector
+from langbridge.connectors.base.connector import ApiConnector, SqlConnector, StorageConnector
 from langbridge.federation.connectors import (
-    ApiConnectorRemoteSource,
     DuckDbFileRemoteSource,
+    DuckDbParquetRemoteSource,
     RemoteSource,
     SqlConnectorRemoteSource,
 )
@@ -53,10 +51,10 @@ class FederatedQueryTool:
         self._logger = logging.getLogger(__name__)
         self._api_connector_factory = ApiConnectorFactory()
         self._sql_connector_factory = SqlConnectorFactory()
+        self._storage_connector_factory = StorageConnectorFactory()
         self._service = FederatedQueryService(
             artifact_store=ArtifactStore(base_dir=settings.FEDERATION_ARTIFACT_DIR),
         )
-
     async def execute_federated_query(self, query_payload: dict[str, Any]) -> dict[str, Any]:
         request = FederatedQueryToolRequest.model_validate(query_payload)
         sources = await self._build_sources(request.workflow)
@@ -163,7 +161,7 @@ class FederatedQueryTool:
                     connector,
                     source_id=source_id,
                 )
-                api_connector = await self._create_api_connector(
+                api_connector = self._create_api_connector(
                     connector_type=runtime_type,
                     connector_config=resolved_config,
                 )
@@ -171,6 +169,39 @@ class FederatedQueryTool:
                     source_id=source_id,
                     connector=api_connector,
                     bindings=bindings,
+                    logger=self._logger,
+                )
+                continue
+            if self._is_distributed_parquet_source(bindings):
+                connector_id = binding.connector_id
+                if connector_id is None and descriptor_payload.get("connector_id"):
+                    connector_id = UUID(str(descriptor_payload["connector_id"]))
+                if connector_id is None:
+                    raise ValueError(f"Parquet source '{source_id}' is missing connector_id.")
+                for extra_binding in bindings[1:]:
+                    if extra_binding.connector_id != connector_id:
+                        raise ValueError(
+                            f"Source id '{binding.source_id}' maps to multiple connector ids in workflow '{workflow.id}'."
+                        )
+                connector = await self._require_connector(
+                    workflow=workflow,
+                    source_id=source_id,
+                    connector_id=connector_id,
+                )
+                resolved_config = self._resolve_connector_config(connector)
+                runtime_type = self._resolve_storage_connector_type(
+                    connector,
+                    source_id=source_id,
+                )
+                storage_connector = await self._create_storage_connector(
+                    connector_type=runtime_type,
+                    connector_config=resolved_config,
+                )
+
+                sources[source_id] = DuckDbParquetRemoteSource(
+                    source_id=source_id,
+                    bindings=bindings,
+                    storage_connector=storage_connector,
                     logger=self._logger,
                 )
                 continue
@@ -202,7 +233,7 @@ class FederatedQueryTool:
                 connector,
                 source_id=source_id,
             )
-            sql_connector = await self._create_sql_connector(
+            sql_connector = self._create_sql_connector(
                 connector_type=runtime_type,
                 connector_config=resolved_config,
             )
@@ -230,6 +261,13 @@ class FederatedQueryTool:
         if connector is None:
             raise ValueError(f"Connector '{connector_id}' not found for source '{source_id}'.")
         return connector
+
+    @staticmethod
+    def _is_distributed_parquet_source(bindings: list[Any]) -> bool:
+        return any(
+            DuckDbParquetRemoteSource.is_remote_binding(binding)
+            for binding in bindings
+        )
 
     def _resolve_sql_connector_type(
         self,
@@ -268,8 +306,27 @@ class FederatedQueryTool:
                 f"Connector '{connector.id}' for source '{source_id}' does not support live API federation."
             ) from exc
         return runtime_type
+    
+    def _resolve_storage_connector_type(
+        self,
+        connector: ConnectorMetadata,
+        *,
+        source_id: str,
+    ) -> ConnectorRuntimeType:
+        if connector.connector_type is None:
+            raise ValueError(
+                f"Connector '{connector.id}' for source '{source_id}' is missing connector_type."
+            )
+        runtime_type = connector.connector_type
+        try:
+            self._storage_connector_factory.get_storage_connector_class_reference(runtime_type)
+        except ValueError as exc:
+            raise ValueError(
+                f"Connector '{connector.id}' for source '{source_id}' does not support storage federation."
+            ) from exc
+        return runtime_type
 
-    async def _create_sql_connector(
+    def _create_sql_connector(
         self,
         *,
         connector_type: ConnectorRuntimeType,
@@ -288,10 +345,9 @@ class FederatedQueryTool:
             config_instance,
             logger=self._logger,
         )
-        await sql_connector.test_connection()
         return sql_connector
 
-    async def _create_api_connector(
+    def _create_api_connector(
         self,
         *,
         connector_type: ConnectorRuntimeType,
@@ -310,8 +366,28 @@ class FederatedQueryTool:
             config_instance,
             logger=self._logger,
         )
-        await api_connector.test_connection()
         return api_connector
+    
+    async def _create_storage_connector(
+        self,    
+        *,
+        connector_type: ConnectorRuntimeType,
+        connector_config: dict[str, Any],
+    ) -> StorageConnector:
+        try:
+            self._storage_connector_factory.get_storage_connector_class_reference(connector_type)
+        except ValueError as exc:
+            raise ValueError(
+                f"Connector type {connector_type.value} does not support storage operations for federation."
+            ) from exc
+        config_factory = get_connector_config_factory(connector_type)
+        config_instance = config_factory.create(connector_config.get("config", {}))
+        storage_connector = self._storage_connector_factory.create_storage_connector(
+            connector_type,
+            config_instance,
+            logger=self._logger,
+        )
+        return storage_connector
 
     def _resolve_connector_config(self, connector: ConnectorMetadata) -> dict[str, Any]:
         resolved_payload = dict(connector.config or {})

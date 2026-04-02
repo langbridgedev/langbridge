@@ -39,10 +39,6 @@ def __getattr__(name: str) -> Any:
         from langbridge.runtime.hosting.background import RuntimeBackgroundTaskManager
 
         return RuntimeBackgroundTaskManager
-    if name == "build_connector_sync_default_task":
-        from langbridge.runtime.hosting.background import build_connector_sync_default_task
-
-        return build_connector_sync_default_task
     if name == "build_semantic_vector_refresh_default_task":
         from langbridge.runtime.hosting.background import build_semantic_vector_refresh_default_task
 
