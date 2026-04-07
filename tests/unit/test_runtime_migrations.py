@@ -15,6 +15,7 @@ from langbridge.runtime.persistence.migrations import (
     RuntimeMetadataMigrationRequiredError,
     build_runtime_metadata_alembic_config,
     migrate_runtime_metadata_store,
+    resolve_runtime_repo_root,
 )
 
 
@@ -122,6 +123,14 @@ def test_runtime_metadata_migrations_use_normalized_postgres_sync_url() -> None:
 
     assert metadata_store.sync_url == "postgresql+psycopg://langbridge:secret@db.example.com:5432/langbridge"
     assert alembic_config.get_main_option("sqlalchemy.url") == metadata_store.sync_url
+
+
+def test_runtime_metadata_uses_packaged_alembic_assets() -> None:
+    repo_root = resolve_runtime_repo_root()
+
+    assert repo_root.name == "persistence"
+    assert (repo_root / "alembic.ini").exists()
+    assert (repo_root / "alembic" / "env.py").exists()
 
 
 def test_runtime_host_auto_migrates_sqlite_metadata_store_by_default(tmp_path: Path) -> None:

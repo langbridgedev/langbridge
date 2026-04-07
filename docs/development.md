@@ -20,6 +20,21 @@ pip install -r requirements/dev.txt
 pip install -e .
 ```
 
+Build the Python package artifacts:
+
+```bash
+python -m build --no-isolation
+```
+
+Or use the repository `Makefile` to build the runtime package, the SDK package,
+or both:
+
+```bash
+make build-runtime
+make build-sdk
+make build
+```
+
 Run the runtime host:
 
 ```bash

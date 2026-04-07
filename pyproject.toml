@@ -59,3 +59,9 @@ exclude = ["venv*", "__pycache__*", "tests*"]
   "static/assets/*.css",
   "static/assets/*.js",
 ]
+"langbridge.runtime.persistence" = [
+  "alembic.ini",
+  "alembic/env.py",
+  "alembic/script.py.mako",
+  "alembic/versions/*.py",
+]

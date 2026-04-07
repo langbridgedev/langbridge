@@ -30,6 +30,13 @@ pip install -r requirements/dev.txt
 pip install -e .
 ```
 
+The dev requirements also include packaging tools for release work. To build the
+runtime package locally:
+
+```bash
+python -m build --no-isolation
+```
+
 Seed the local demo data:
 
 ```bash
@@ -106,6 +113,46 @@ cd apps/runtime_ui
 npm install
 npm run build
 ```
+
+## Packaging And CodeArtifact
+
+Build both Python distributions from the repo root:
+
+```bash
+make build
+```
+
+Build only the runtime package:
+
+```bash
+make build-runtime
+```
+
+Build only the SDK package:
+
+```bash
+make build-sdk
+```
+
+Publish the runtime package to AWS CodeArtifact with GNU Make after configuring
+an IAM user or role that can call `codeartifact:GetAuthorizationToken`,
+`codeartifact:PublishPackageVersion`, and `sts:GetServiceBearerToken`. The
+`aws` CLI command must already be installed on your machine:
+
+```bash
+make publish-codeartifact \
+  CODEARTIFACT_DOMAIN=langbridge \
+  CODEARTIFACT_DOMAIN_OWNER=060795918689 \
+  CODEARTIFACT_REPOSITORY=langbridge \
+  AWS_REGION=eu-west-2
+```
+
+Use `aws codeartifact login --tool twine` for publishing. `--tool pip` rewrites
+your pip index configuration for package installs, so if the CodeArtifact
+repository does not proxy public PyPI, local installs such as `pip install -r
+requirements/dev.txt` will fail until pip is pointed back at PyPI or the
+repository is configured with an upstream. Once the dev environment is already
+provisioned, `python -m build --no-isolation` avoids that isolated-env fetch.
 
 ## Docker
 
