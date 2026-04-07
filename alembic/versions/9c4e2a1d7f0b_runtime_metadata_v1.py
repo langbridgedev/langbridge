@@ -1,8 +1,8 @@
-"""initial runtime metadata schema
+"""runtime metadata v1 baseline
 
-Revision ID: 8230e54e4fec
+Revision ID: 9c4e2a1d7f0b
 Revises: 
-Create Date: 2026-03-27 22:55:24.125253
+Create Date: 2026-04-05 00:00:00.000000
 """
 
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '8230e54e4fec'
+revision = '9c4e2a1d7f0b'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -105,14 +105,18 @@ def upgrade() -> None:
     sa.Column('supported_resources_json', sa.JSON(), nullable=True),
     sa.Column('sync_strategy', sa.String(length=50), nullable=True),
     sa.Column('capabilities_json', sa.JSON(), nullable=True),
+    sa.Column('created_by_actor_id', sa.Uuid(), nullable=True),
+    sa.Column('updated_by_actor_id', sa.Uuid(), nullable=True),
     sa.Column('is_managed', sa.Boolean(), nullable=False),
     sa.Column('management_mode', sa.String(length=50), nullable=False),
     sa.Column('lifecycle_state', sa.String(length=50), nullable=False),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index(op.f('ix_connectors_created_by_actor_id'), 'connectors', ['created_by_actor_id'], unique=False)
     op.create_index(op.f('ix_connectors_id'), 'connectors', ['id'], unique=False)
     op.create_index(op.f('ix_connectors_name'), 'connectors', ['name'], unique=True)
+    op.create_index(op.f('ix_connectors_updated_by_actor_id'), 'connectors', ['updated_by_actor_id'], unique=False)
     op.create_index(op.f('ix_connectors_workspace_id'), 'connectors', ['workspace_id'], unique=False)
     op.create_table('conversation_memory_items',
     sa.Column('id', sa.Uuid(), nullable=False),
@@ -239,7 +243,9 @@ def upgrade() -> None:
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('workspace_id', sa.Uuid(), nullable=False),
     sa.Column('subject', sa.String(length=255), nullable=True),
+    sa.Column('username', sa.String(length=64), nullable=True),
     sa.Column('actor_type', sa.String(length=64), nullable=False),
+    sa.Column('status', sa.String(length=32), nullable=False),
     sa.Column('email', sa.String(length=320), nullable=True),
     sa.Column('display_name', sa.String(length=255), nullable=True),
     sa.Column('roles_json', sa.JSON(), nullable=False),
@@ -249,10 +255,12 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('workspace_id', 'subject', name='uq_runtime_actors_workspace_subject')
+    sa.UniqueConstraint('workspace_id', 'subject', name='uq_runtime_actors_workspace_subject'),
+    sa.UniqueConstraint('workspace_id', 'username', name='uq_runtime_actors_workspace_username')
     )
     op.create_index(op.f('ix_runtime_actors_email'), 'runtime_actors', ['email'], unique=False)
     op.create_index(op.f('ix_runtime_actors_subject'), 'runtime_actors', ['subject'], unique=False)
+    op.create_index(op.f('ix_runtime_actors_username'), 'runtime_actors', ['username'], unique=False)
     op.create_index(op.f('ix_runtime_actors_workspace_id'), 'runtime_actors', ['workspace_id'], unique=False)
     op.create_table('runtime_local_auth_state',
     sa.Column('workspace_id', sa.Uuid(), nullable=False),
@@ -300,7 +308,9 @@ def upgrade() -> None:
     sa.Column('workspace_id', sa.Uuid(), nullable=False),
     sa.Column('connection_id', sa.Uuid(), nullable=False),
     sa.Column('connector_type', sa.String(length=64), nullable=False),
-    sa.Column('resource_name', sa.String(length=255), nullable=False),
+    sa.Column('source_key', sa.String(length=255), nullable=False),
+    sa.Column('source_kind', sa.String(length=32), nullable=True),
+    sa.Column('source_json', sa.JSON(), nullable=False),
     sa.Column('sync_mode', sa.String(length=32), nullable=False),
     sa.Column('last_cursor', sa.String(length=255), nullable=True),
     sa.Column('last_sync_at', sa.DateTime(timezone=True), nullable=True),
@@ -315,13 +325,13 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['connection_id'], ['connectors.id'], ondelete='cascade'),
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('workspace_id', 'connection_id', 'resource_name', name='uq_connector_sync_states_workspace_connection_resource')
+    sa.UniqueConstraint('workspace_id', 'connection_id', 'source_key', name='uq_connector_sync_states_workspace_connection_source')
     )
     op.create_index(op.f('ix_connector_sync_states_connection_id'), 'connector_sync_states', ['connection_id'], unique=False)
     op.create_index(op.f('ix_connector_sync_states_updated_at'), 'connector_sync_states', ['updated_at'], unique=False)
     op.create_index('ix_connector_sync_states_workspace_connection_updated', 'connector_sync_states', ['workspace_id', 'connection_id', 'updated_at'], unique=False)
     op.create_index(op.f('ix_connector_sync_states_workspace_id'), 'connector_sync_states', ['workspace_id'], unique=False)
-    op.create_index('ix_connector_sync_states_workspace_resource', 'connector_sync_states', ['workspace_id', 'resource_name'], unique=False)
+    op.create_index('ix_connector_sync_states_workspace_source', 'connector_sync_states', ['workspace_id', 'source_key'], unique=False)
     op.create_table('database_connectors',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.ForeignKeyConstraint(['id'], ['connectors.id'], ),
@@ -339,6 +349,8 @@ def upgrade() -> None:
     sa.Column('tags_json', sa.JSON(), nullable=False),
     sa.Column('dataset_type', sa.String(length=32), nullable=False),
     sa.Column('materialization_mode', sa.String(length=32), nullable=True),
+    sa.Column('source_json', sa.JSON(), nullable=True),
+    sa.Column('sync_json', sa.JSON(), nullable=True),
     sa.Column('source_kind', sa.String(length=32), nullable=True),
     sa.Column('connector_kind', sa.String(length=64), nullable=True),
     sa.Column('storage_kind', sa.String(length=32), nullable=True),
@@ -419,6 +431,9 @@ def upgrade() -> None:
     sa.Column('actor_id', sa.Uuid(), nullable=False),
     sa.Column('workspace_id', sa.Uuid(), nullable=False),
     sa.Column('password_hash', sa.String(length=512), nullable=False),
+    sa.Column('password_algorithm', sa.String(length=64), nullable=False),
+    sa.Column('password_updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('must_rotate_password', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.ForeignKeyConstraint(['actor_id'], ['runtime_actors.id'], ),
@@ -430,6 +445,8 @@ def upgrade() -> None:
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('connector_id', sa.Uuid(), nullable=True),
     sa.Column('workspace_id', sa.Uuid(), nullable=False),
+    sa.Column('created_by_actor_id', sa.Uuid(), nullable=True),
+    sa.Column('updated_by_actor_id', sa.Uuid(), nullable=True),
     sa.Column('name', sa.String(length=255), nullable=False),
     sa.Column('description', sa.String(length=1024), nullable=True),
     sa.Column('content_yaml', sa.Text(), nullable=False),
@@ -442,6 +459,8 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['workspace_id'], ['workspaces.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index(op.f('ix_semantic_models_created_by_actor_id'), 'semantic_models', ['created_by_actor_id'], unique=False)
+    op.create_index(op.f('ix_semantic_models_updated_by_actor_id'), 'semantic_models', ['updated_by_actor_id'], unique=False)
     op.create_index(op.f('ix_semantic_models_workspace_id'), 'semantic_models', ['workspace_id'], unique=False)
     op.create_table('sql_job',
     sa.Column('id', sa.Uuid(), nullable=False),
@@ -736,6 +755,8 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_sql_job_actor_id'), table_name='sql_job')
     op.drop_table('sql_job')
     op.drop_index(op.f('ix_semantic_models_workspace_id'), table_name='semantic_models')
+    op.drop_index(op.f('ix_semantic_models_updated_by_actor_id'), table_name='semantic_models')
+    op.drop_index(op.f('ix_semantic_models_created_by_actor_id'), table_name='semantic_models')
     op.drop_table('semantic_models')
     op.drop_index(op.f('ix_runtime_local_auth_credentials_workspace_id'), table_name='runtime_local_auth_credentials')
     op.drop_table('runtime_local_auth_credentials')
@@ -761,7 +782,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_datasets_connection_id'), table_name='datasets')
     op.drop_table('datasets')
     op.drop_table('database_connectors')
-    op.drop_index('ix_connector_sync_states_workspace_resource', table_name='connector_sync_states')
+    op.drop_index('ix_connector_sync_states_workspace_source', table_name='connector_sync_states')
     op.drop_index(op.f('ix_connector_sync_states_workspace_id'), table_name='connector_sync_states')
     op.drop_index('ix_connector_sync_states_workspace_connection_updated', table_name='connector_sync_states')
     op.drop_index(op.f('ix_connector_sync_states_updated_at'), table_name='connector_sync_states')
@@ -773,6 +794,7 @@ def downgrade() -> None:
     op.drop_table('thread_messages')
     op.drop_table('runtime_local_auth_state')
     op.drop_index(op.f('ix_runtime_actors_workspace_id'), table_name='runtime_actors')
+    op.drop_index(op.f('ix_runtime_actors_username'), table_name='runtime_actors')
     op.drop_index(op.f('ix_runtime_actors_subject'), table_name='runtime_actors')
     op.drop_index(op.f('ix_runtime_actors_email'), table_name='runtime_actors')
     op.drop_table('runtime_actors')
@@ -810,8 +832,10 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_conversation_memory_items_actor_id'), table_name='conversation_memory_items')
     op.drop_table('conversation_memory_items')
     op.drop_index(op.f('ix_connectors_workspace_id'), table_name='connectors')
+    op.drop_index(op.f('ix_connectors_updated_by_actor_id'), table_name='connectors')
     op.drop_index(op.f('ix_connectors_name'), table_name='connectors')
     op.drop_index(op.f('ix_connectors_id'), table_name='connectors')
+    op.drop_index(op.f('ix_connectors_created_by_actor_id'), table_name='connectors')
     op.drop_table('connectors')
     op.drop_index(op.f('ix_workspaces_name'), table_name='workspaces')
     op.drop_table('workspaces')

@@ -1435,6 +1435,10 @@ def test_runtime_host_api_supports_connectorless_file_datasets(
     assert payload["connector_id"] is None
     assert payload["source_kind"] == "file"
     assert payload["storage_kind"] == "csv"
+    assert [column["name"] for column in payload["columns"]] == [
+        "order_id",
+        "customer_name",
+    ]
 
     preview = client.post(
         f"/api/runtime/v1/datasets/{payload['id']}/preview",
@@ -1453,6 +1457,10 @@ def test_runtime_host_api_supports_connectorless_file_datasets(
     assert updated.status_code == 200
     assert updated.json()["connector"] is None
     assert updated.json()["description"] == "Uploaded file dataset"
+    assert [column["name"] for column in updated.json()["columns"]] == [
+        "order_id",
+        "customer_name",
+    ]
 
 
 def test_runtime_host_api_rejects_mutating_config_managed_resources(

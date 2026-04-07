@@ -7,6 +7,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from langbridge.orchestrator.agents.analyst.agent import AnalystAgent  # noqa: E402
+from langbridge.orchestrator.runtime.access_policy import (  # noqa: E402
+    AnalyticalAccessScope,
+    AnalyticalDeniedAsset,
+)
 from langbridge.orchestrator.tools.sql_analyst.interfaces import (  # noqa: E402
     AnalyticalContext,
     AnalyticalDatasetBinding,
@@ -227,3 +231,34 @@ def test_analyst_agent_stops_on_terminal_query_error_after_bounded_retry() -> No
     assert response.outcome.retry_attempted is True
     assert response.outcome.retry_count == 1
     assert len(tool.calls) == 2
+
+
+def test_analyst_agent_returns_access_denied_for_explicit_denied_asset_request() -> None:
+    tool = _StubTool([_response(status=AnalystOutcomeStatus.success, rows=[("US", 10)])])
+    access_scope = AnalyticalAccessScope(
+        policy_enforced=True,
+        authorized_asset_count=1,
+        denied_assets=(
+            AnalyticalDeniedAsset(
+                asset_type="dataset",
+                asset_id="dataset-blocked",
+                asset_name="payroll_dataset",
+                dataset_names=("payroll_dataset",),
+                sql_aliases=("payroll",),
+                policy_rule="denied_connectors",
+                policy_rationale="Connector is explicitly denied.",
+            ),
+        ),
+    )
+    agent = AnalystAgent(_RewriteLLM(), [tool], access_scope=access_scope)
+
+    response = agent.answer("Show payroll_dataset revenue by region")
+
+    assert response.outcome is not None
+    assert response.outcome.status == AnalystOutcomeStatus.access_denied
+    assert response.outcome.stage == AnalystOutcomeStage.authorization
+    assert response.outcome.terminal is True
+    assert response.outcome.recoverable is False
+    assert response.outcome.selected_asset_name == "payroll_dataset"
+    assert response.outcome.metadata["policy_rule"] == "denied_connectors"
+    assert tool.calls == []

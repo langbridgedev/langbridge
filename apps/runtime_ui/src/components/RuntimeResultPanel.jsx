@@ -1,3 +1,7 @@
+import { Maximize2, X } from "lucide-react";
+import { useEffect, useId, useState } from "react";
+import { createPortal } from "react-dom";
+
 import { formatValue } from "../lib/format";
 import {
   buildDiagnosticsHighlights,
@@ -97,6 +101,8 @@ export function RuntimeResultPanel({
     visualization: normalizedVisualization,
     diagnostics,
   });
+  const [diagnosticsFullscreen, setDiagnosticsFullscreen] = useState(false);
+  const diagnosticsDialogTitleId = useId();
   const showChart =
     Boolean(normalizedResult) &&
     Boolean(normalizedVisualization) &&
@@ -105,6 +111,50 @@ export function RuntimeResultPanel({
   const showTable =
     Boolean(normalizedResult) &&
     (state.showTable || normalizedVisualization?.chartType === "table");
+
+  useEffect(() => {
+    if (!diagnosticsFullscreen) {
+      return undefined;
+    }
+
+    const originalOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setDiagnosticsFullscreen(false);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [diagnosticsFullscreen]);
+
+  const diagnosticsContent = (
+    <>
+      {diagnosticsHighlights.length > 0 ? (
+        <div className="diagnostics-highlight-grid">
+          {diagnosticsHighlights.map((item) => (
+            <div key={`${item.label}-${item.value}`} className="diagnostics-highlight-card">
+              <span>{item.label}</span>
+              <strong>{toTitleCase(item.value)}</strong>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {diagnosticsNotes.length > 0 ? (
+        <div className="diagnostics-note-list">
+          {diagnosticsNotes.map((note) => (
+            <p key={note}>{note}</p>
+          ))}
+        </div>
+      ) : null}
+      <pre className="code-block compact">{renderJson(diagnostics)}</pre>
+    </>
+  );
 
   return (
     <div className="runtime-result-stack">
@@ -175,27 +225,65 @@ export function RuntimeResultPanel({
       ) : null}
 
       {diagnostics && typeof diagnostics === "object" ? (
-        <details className="diagnostics-disclosure">
-          <summary>{diagnosticsLabel}</summary>
-          {diagnosticsHighlights.length > 0 ? (
-            <div className="diagnostics-highlight-grid">
-              {diagnosticsHighlights.map((item) => (
-                <div key={`${item.label}-${item.value}`} className="diagnostics-highlight-card">
-                  <span>{item.label}</span>
-                  <strong>{toTitleCase(item.value)}</strong>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {diagnosticsNotes.length > 0 ? (
-            <div className="diagnostics-note-list">
-              {diagnosticsNotes.map((note) => (
-                <p key={note}>{note}</p>
-              ))}
-            </div>
-          ) : null}
-          <pre className="code-block compact">{renderJson(diagnostics)}</pre>
-        </details>
+        <>
+          <details className="diagnostics-disclosure">
+            <summary>
+              <span className="diagnostics-summary-label">{diagnosticsLabel}</span>
+              <span className="diagnostics-summary-actions">
+                <button
+                  type="button"
+                  className="diagnostics-fullscreen-button"
+                  aria-label="Open execution diagnostics fullscreen"
+                  title="Open execution diagnostics fullscreen"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setDiagnosticsFullscreen(true);
+                  }}
+                >
+                  <Maximize2 className="button-icon" aria-hidden="true" />
+                </button>
+              </span>
+            </summary>
+            {diagnosticsContent}
+          </details>
+          {diagnosticsFullscreen && typeof document !== "undefined"
+            ? createPortal(
+                <div
+                  className="diagnostics-fullscreen-overlay"
+                  role="presentation"
+                  onClick={() => setDiagnosticsFullscreen(false)}
+                >
+                  <div
+                    className="diagnostics-fullscreen-dialog"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby={diagnosticsDialogTitleId}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <div className="diagnostics-fullscreen-header">
+                      <div className="diagnostics-fullscreen-copy">
+                        <p className="eyebrow">Execution</p>
+                        <h3 id={diagnosticsDialogTitleId}>{diagnosticsLabel}</h3>
+                        <p>Expanded runtime diagnostics for debugging this execution path.</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="diagnostics-fullscreen-button diagnostics-fullscreen-close"
+                        aria-label="Close execution diagnostics fullscreen"
+                        title="Close execution diagnostics fullscreen"
+                        onClick={() => setDiagnosticsFullscreen(false)}
+                      >
+                        <X className="button-icon" aria-hidden="true" />
+                      </button>
+                    </div>
+                    <div className="diagnostics-fullscreen-body">{diagnosticsContent}</div>
+                  </div>
+                </div>,
+                document.body,
+              )
+            : null}
+        </>
       ) : null}
     </div>
   );

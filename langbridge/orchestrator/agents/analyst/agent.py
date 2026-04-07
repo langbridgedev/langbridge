@@ -10,6 +10,10 @@ import re
 from typing import Any, Optional, Sequence
 
 from langbridge.orchestrator.llm.provider import LLMProvider
+from langbridge.orchestrator.runtime.access_policy import (
+    AnalyticalAccessScope,
+    build_access_denied_response,
+)
 from langbridge.orchestrator.tools.sql_analyst.interfaces import (
     AnalystExecutionOutcome,
     AnalystOutcomeStage,
@@ -40,6 +44,7 @@ class AnalystAgent:
         llm: LLMProvider,
         tools: Sequence[SqlAnalystTool],
         *,
+        access_scope: AnalyticalAccessScope | None = None,
         logger: Optional[logging.Logger] = None,
         max_retries: int = 1,
     ) -> None:
@@ -47,6 +52,7 @@ class AnalystAgent:
         self._tools = list(tools)
         if not self._tools:
             raise ValueError("At least one analytical tool must be provided to AnalystAgent.")
+        self._access_scope = access_scope or AnalyticalAccessScope()
         self.selector = AnalyticalContextSelector(self.llm, self._tools)
         self.logger = logger or logging.getLogger(__name__)
         self.max_retries = max(0, int(max_retries))
@@ -99,6 +105,17 @@ class AnalystAgent:
         prepared_request, recovery_actions, invalid_response = self._prepare_request(working_request)
         if invalid_response is not None:
             return invalid_response
+        denied_asset = self._access_scope.match_denied_request(
+            question=prepared_request.question,
+            filters=prepared_request.filters,
+        )
+        if denied_asset is not None:
+            return build_access_denied_response(
+                request=prepared_request,
+                access_scope=self._access_scope,
+                denied_asset=denied_asset,
+                recovery_actions=recovery_actions,
+            )
 
         try:
             tool = self.selector.select(prepared_request)

@@ -6,8 +6,6 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from langbridge.orchestrator.agents.deep_research import DeepResearchResult
-from langbridge.orchestrator.agents.web_search import WebSearchResult
 from langbridge.orchestrator.definitions import (
     AgentDefinitionModel,
     GuardrailConfig,
@@ -154,7 +152,11 @@ class ResponseFormatter:
             prompt_sections.append("Assumptions applied:\n" + "\n".join(f"- {item}" for item in assumptions))
 
         if analyst_result and analyst_result.outcome:
-            if analyst_result.outcome.status == AnalystOutcomeStatus.empty_result:
+            if analyst_result.outcome.status == AnalystOutcomeStatus.access_denied:
+                prompt_sections.append(
+                    "Explain clearly that analytical access was blocked by policy and do not imply that any data was returned."
+                )
+            elif analyst_result.outcome.status == AnalystOutcomeStatus.empty_result:
                 prompt_sections.append("State clearly that no rows matched and do not invent findings.")
             elif analyst_result.outcome.is_error:
                 prompt_sections.append("Explain the analytical failure succinctly and do not claim results were returned.")
@@ -177,14 +179,14 @@ class ResponseFormatter:
         assumptions = self._coerce_assumptions(response_payload.get("assumptions"))
 
         research_result = response_payload.get("research_result")
-        if isinstance(research_result, DeepResearchResult):
+        if self._is_deep_research_result(research_result):
             return self._enforce_guardrails(
                 self._append_assumptions(self._format_research_summary(research_result, user_query=question), assumptions),
                 presentation.guardrails,
             )
 
         web_search_result = response_payload.get("web_search_result")
-        if isinstance(web_search_result, WebSearchResult) and not result_payload:
+        if self._is_web_search_result(web_search_result) and not result_payload:
             if web_search_result.answer:
                 summary = web_search_result.answer
             elif web_search_result.results:
@@ -326,11 +328,21 @@ class ResponseFormatter:
             lines.append(f"retry_rationale={outcome.retry_rationale}")
         if outcome.recovery_actions:
             lines.append("recovery_actions=" + ", ".join(action.action for action in outcome.recovery_actions))
+        metadata = outcome.metadata if isinstance(outcome.metadata, dict) else {}
+        policy_rationale = metadata.get("policy_rationale")
+        if isinstance(policy_rationale, str) and policy_rationale.strip():
+            lines.append(f"policy_rationale={policy_rationale.strip()}")
+        recovery_hint = metadata.get("recovery_hint")
+        if isinstance(recovery_hint, str) and recovery_hint.strip():
+            lines.append(f"recovery_hint={recovery_hint.strip()}")
+        requested_asset = metadata.get("requested_asset_name")
+        if isinstance(requested_asset, str) and requested_asset.strip():
+            lines.append(f"requested_asset={requested_asset.strip()}")
         return "\n".join(lines)
 
     @staticmethod
     def _render_research_context(value: Any) -> str:
-        if not isinstance(value, DeepResearchResult):
+        if not ResponseFormatter._is_deep_research_result(value):
             return ""
         if value.report:
             lines = [f"Executive summary: {value.report.executive_summary.strip()}"]
@@ -343,7 +355,7 @@ class ResponseFormatter:
 
     @staticmethod
     def _render_web_context(value: Any) -> str:
-        if not isinstance(value, WebSearchResult):
+        if not ResponseFormatter._is_web_search_result(value):
             return ""
         lines = [f"query={value.query}", f"weak_results={str(value.weak_results).lower()}"]
         if value.answer:
@@ -431,6 +443,21 @@ class ResponseFormatter:
             retry_note += "."
         if outcome.status == AnalystOutcomeStatus.invalid_request:
             return f"I could not run that analysis because the request was not specific enough. {outcome.message or ''}".strip()
+        if outcome.status == AnalystOutcomeStatus.access_denied:
+            recovery_hint = ""
+            if isinstance(outcome.metadata, dict):
+                raw_recovery_hint = outcome.metadata.get("recovery_hint")
+                if isinstance(raw_recovery_hint, str) and raw_recovery_hint.strip():
+                    recovery_hint = f" {raw_recovery_hint.strip()}"
+            if asset_name == "the selected asset":
+                return (
+                    "I could not access the requested analytical data because it is outside this agent's "
+                    f"connector access policy. {outcome.message or ''}{recovery_hint}"
+                ).strip()
+            return (
+                f"I could not access the requested analytical data for {asset_name} because it is outside "
+                f"this agent's connector access policy. {outcome.message or ''}{recovery_hint}"
+            ).strip()
         if outcome.status == AnalystOutcomeStatus.selection_error:
             return f"I could not map that request to an analytical context. {outcome.message or ''}".strip()
         if outcome.status == AnalystOutcomeStatus.query_error:
@@ -503,7 +530,17 @@ class ResponseFormatter:
         return None
 
     @staticmethod
-    def _format_research_summary(result: DeepResearchResult, *, user_query: str) -> str:
+    def _is_deep_research_result(value: Any) -> bool:
+        return hasattr(value, "synthesis") and (
+            hasattr(value, "findings") or hasattr(value, "report")
+        )
+
+    @staticmethod
+    def _is_web_search_result(value: Any) -> bool:
+        return hasattr(value, "query") and hasattr(value, "results")
+
+    @staticmethod
+    def _format_research_summary(result: Any, *, user_query: str) -> str:
         if not result.report:
             return result.synthesis or f"Completed deep research for '{user_query}'."
         report = result.report

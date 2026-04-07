@@ -103,6 +103,7 @@ from langbridge.runtime.providers import (
 )
 from langbridge.runtime.security import SecretProviderRegistry
 from langbridge.runtime.services.agent_execution_service import AgentExecutionService
+from langbridge.runtime.services.dataset_execution import describe_file_source_schema
 from langbridge.runtime.services.dataset_query_service import DatasetQueryService
 from langbridge.runtime.services.dataset_sync_service import ConnectorSyncRuntime
 from langbridge.runtime.services.runtime_host import (
@@ -2822,6 +2823,41 @@ class ConfiguredLocalRuntimeHostFactory:
         return normalized_values
 
     @staticmethod
+    def _build_file_dataset_bootstrap_columns(
+        *,
+        dataset: DatasetMetadata,
+    ) -> list[DatasetColumnMetadata]:
+        if dataset.dataset_type != DatasetType.FILE or not dataset.storage_uri:
+            return []
+        try:
+            described_columns = describe_file_source_schema(
+                storage_uri=str(dataset.storage_uri),
+                file_config=dict(dataset.file_config_json or {}),
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Failed to infer file columns for dataset %s during bootstrap: %s",
+                dataset.name,
+                exc,
+            )
+            return []
+
+        return [
+            DatasetColumnMetadata(
+                id=_stable_uuid("dataset-column", f"{dataset.id}:{column.name}"),
+                dataset_id=dataset.id,
+                workspace_id=dataset.workspace_id,
+                name=column.name,
+                data_type=column.data_type,
+                nullable=column.nullable,
+                ordinal_position=index,
+                created_at=dataset.created_at,
+                updated_at=dataset.updated_at,
+            )
+            for index, column in enumerate(described_columns)
+        ]
+
+    @staticmethod
     def _build_dataset_repository_records(
         *,
         datasets: dict[str, DatasetMetadata],
@@ -2857,9 +2893,13 @@ class ConfiguredLocalRuntimeHostFactory:
             policies_by_dataset[dataset.id] = policy_record
 
             seen_columns: set[str] = set()
-            dataset_columns: list[DatasetColumnMetadata] = []
-            ordinal = 0
-            if str(dataset.source_kind or "").lower() != "file":
+            dataset_columns = ConfiguredLocalRuntimeHostFactory._build_file_dataset_bootstrap_columns(
+                dataset=dataset
+            )
+            for column in dataset_columns:
+                seen_columns.add(column.name.lower())
+            ordinal = len(dataset_columns)
+            if not dataset_columns:
                 for semantic_model in semantic_models.values():
                     if semantic_model.semantic_model is None:
                         continue

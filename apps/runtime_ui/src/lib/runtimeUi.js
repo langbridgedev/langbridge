@@ -508,6 +508,17 @@ export function deriveRuntimeResultState({
   }
 
   switch (outcome?.status) {
+    case "access_denied":
+      return {
+        kind: "access_denied",
+        tone: "danger",
+        label: "Access denied",
+        title: "The runtime blocked this request",
+        description:
+          message || "The current actor or agent could not access the requested analytical data.",
+        showChart: false,
+        showTable: false,
+      };
     case "success":
       return {
         kind: hasChart ? "success_chart" : "success_rows",
@@ -684,6 +695,9 @@ export function buildDiagnosticsNotes(diagnostics, visualization) {
   }
   if (outcome?.retryRationale) {
     notes.push(outcome.retryRationale);
+  }
+  if (typeof outcome?.metadata?.recovery_hint === "string" && outcome.metadata.recovery_hint.trim()) {
+    notes.push(outcome.metadata.recovery_hint.trim());
   }
   if (Array.isArray(outcome?.recoveryActions) && outcome.recoveryActions.length > 0) {
     notes.push(

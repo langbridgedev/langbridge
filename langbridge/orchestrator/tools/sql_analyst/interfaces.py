@@ -48,6 +48,7 @@ class QueryResult(BaseModel):
 class AnalystOutcomeStatus(str, Enum):
     success = "success"
     empty_result = "empty_result"
+    access_denied = "access_denied"
     invalid_request = "invalid_request"
     query_error = "query_error"
     selection_error = "selection_error"
@@ -57,6 +58,7 @@ class AnalystOutcomeStatus(str, Enum):
 
 class AnalystOutcomeStage(str, Enum):
     request = "request"
+    authorization = "authorization"
     selection = "selection"
     query = "query"
     execution = "execution"
@@ -91,6 +93,7 @@ class AnalystExecutionOutcome(BaseModel):
     @property
     def is_error(self) -> bool:
         return self.status in {
+            AnalystOutcomeStatus.access_denied,
             AnalystOutcomeStatus.invalid_request,
             AnalystOutcomeStatus.query_error,
             AnalystOutcomeStatus.selection_error,
@@ -209,6 +212,19 @@ class AnalystQueryResponse(BaseModel):
 
     def _infer_outcome(self) -> AnalystExecutionOutcome:
         if self.error:
+            lowered_error = str(self.error).strip().lower()
+            if any(
+                token in lowered_error
+                for token in ("access denied", "forbidden", "unauthor", "blocked by policy")
+            ):
+                return AnalystExecutionOutcome(
+                    status=AnalystOutcomeStatus.access_denied,
+                    stage=AnalystOutcomeStage.authorization,
+                    message=self.error,
+                    original_error=self.error,
+                    recoverable=False,
+                    terminal=True,
+                )
             return AnalystExecutionOutcome(
                 status=AnalystOutcomeStatus.query_error,
                 stage=AnalystOutcomeStage.query,

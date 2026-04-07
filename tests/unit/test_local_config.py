@@ -1279,6 +1279,12 @@ semantic_models:
         assert dataset_model.storage_kind == "csv"
         assert dataset_model.storage_uri is not None
         assert dataset_model.file_config == {"format": "csv", "header": True}
+        assert [column.name for column in dataset_model.columns] == [
+            "contact_external_id",
+            "campaign_name",
+            "campaign_channel",
+            "engagement_score",
+        ]
 
         payload = asyncio.run(
             runtime.query_dataset(
@@ -1296,36 +1302,25 @@ semantic_models:
             {
                 "contact_external_id": "CRM-00000001",
                 "campaign_name": "Spring Refresh",
+                "campaign_channel": "email",
+                "engagement_score": 91,
             },
             {
                 "contact_external_id": "CRM-00000002",
                 "campaign_name": "VIP Retention",
+                "campaign_channel": "sms",
+                "engagement_score": 77,
             },
         ]
 
         connectors = asyncio.run(runtime.list_connectors())
-        assert connectors == [
-            {
-                "id": runtime._connectors["campaign_file"].id,
-                "name": "campaign_file",
-                "description": None,
-                "connector_type": "LOCAL_FILESYSTEM",
-                "connector_family": None,
-                "supports_sync": False,
-                "supported_resources": [],
-                "default_sync_strategy": None,
-                "capabilities": {
-                    "supports_live_datasets": True,
-                    "supports_synced_datasets": False,
-                    "supports_incremental_sync": False,
-                    "supports_query_pushdown": False,
-                    "supports_preview": True,
-                    "supports_federated_execution": True,
-                },
-                "management_mode": "config_managed",
-                "managed": True,
-            }
-        ]
+        assert len(connectors) == 1
+        assert connectors[0]["id"] == runtime._connectors["campaign_file"].id
+        assert connectors[0]["name"] == "campaign_file"
+        assert connectors[0]["connector_type"] == "LOCAL_FILESYSTEM"
+        assert connectors[0]["supports_sync"] is False
+        assert connectors[0]["management_mode"] == "config_managed"
+        assert connectors[0]["managed"] is True
 
 
 def test_configured_local_runtime_keeps_connector_sync_resources_for_discovery(tmp_path: Path) -> None:

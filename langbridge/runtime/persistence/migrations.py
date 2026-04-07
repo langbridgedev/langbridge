@@ -5,7 +5,7 @@ import importlib
 import sys
 from typing import Any
 
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 from langbridge.runtime.config import load_runtime_config, resolve_metadata_store_config
 from langbridge.runtime.config.models import ResolvedLocalRuntimeMetadataStoreConfig
@@ -21,6 +21,15 @@ class RuntimeMetadataMigrationError(RuntimeError):
 
 class RuntimeMetadataMigrationRequiredError(RuntimeMetadataMigrationError):
     """Raised when the runtime metadata schema is behind and auto-apply is disabled."""
+
+
+SUPERSEDED_RUNTIME_METADATA_REVISIONS = frozenset(
+    {
+        "8230e54e4fec",
+        "67a2742aa6ff",
+        "5b3a2f6e1c9d",
+    }
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -61,7 +70,10 @@ def migrate_runtime_metadata_store(
 
     stamped_legacy_schema = _stamp_unversioned_current_schema_if_possible(
         metadata_store=metadata_store,
-        config=config,
+        head_revision=head_revision,
+    )
+    _restamp_superseded_current_schema_if_possible(
+        metadata_store=metadata_store,
         head_revision=head_revision,
     )
     status = get_runtime_metadata_schema_status(metadata_store)
@@ -194,7 +206,6 @@ def build_runtime_metadata_alembic_config(
 def _stamp_unversioned_current_schema_if_possible(
     *,
     metadata_store: ResolvedLocalRuntimeMetadataStoreConfig,
-    config: Any,
     head_revision: str,
 ) -> bool:
     status = get_runtime_metadata_schema_status(metadata_store)
@@ -207,9 +218,76 @@ def _stamp_unversioned_current_schema_if_possible(
             "the current baseline schema. Back up the database and align it manually before running migrations."
         )
 
-    command_module, _, _, _ = _load_alembic_modules()
-    command_module.stamp(config, head_revision)
+    _force_set_runtime_metadata_revision(
+        metadata_store=metadata_store,
+        revision=head_revision,
+    )
     return True
+
+
+def _force_set_runtime_metadata_revision(
+    *,
+    metadata_store: ResolvedLocalRuntimeMetadataStoreConfig,
+    revision: str,
+) -> None:
+    engine = create_engine_for_url(
+        metadata_store.sync_url or "",
+        metadata_store.echo,
+        pool_size=metadata_store.pool_size,
+        max_overflow=metadata_store.max_overflow,
+        pool_timeout=metadata_store.pool_timeout,
+    )
+    try:
+        with engine.begin() as connection:
+            inspector = inspect(connection)
+            table_names = set(inspector.get_table_names())
+            if "alembic_version" not in table_names:
+                connection.execute(
+                    text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
+                )
+                connection.execute(
+                    text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
+                    {"revision": revision},
+                )
+                return
+
+            existing_count = connection.execute(
+                text("SELECT COUNT(*) FROM alembic_version")
+            ).scalar_one()
+            if existing_count:
+                connection.execute(
+                    text("UPDATE alembic_version SET version_num = :revision"),
+                    {"revision": revision},
+                )
+            else:
+                connection.execute(
+                    text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
+                    {"revision": revision},
+                )
+    finally:
+        engine.dispose()
+
+
+def _restamp_superseded_current_schema_if_possible(
+    *,
+    metadata_store: ResolvedLocalRuntimeMetadataStoreConfig,
+    head_revision: str,
+) -> None:
+    status = get_runtime_metadata_schema_status(metadata_store)
+    if (
+        status.current_revision is None
+        or status.current_revision == head_revision
+        or status.current_revision not in SUPERSEDED_RUNTIME_METADATA_REVISIONS
+    ):
+        return
+
+    if not _database_matches_current_runtime_metadata_schema(metadata_store):
+        return
+
+    _force_set_runtime_metadata_revision(
+        metadata_store=metadata_store,
+        revision=head_revision,
+    )
 
 
 def _database_matches_current_runtime_metadata_schema(

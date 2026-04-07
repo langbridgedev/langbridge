@@ -518,7 +518,7 @@ agents:
         bi_copilot_enabled: false
         deep_research_enabled: false
         visualization_enabled: true
-        mcp_enabled: false
+        mcp_enabled: true
       tools:
         - name: commerce_semantic_sql
           tool_type: sql
@@ -566,7 +566,7 @@ agents:
         bi_copilot_enabled: false
         deep_research_enabled: false
         visualization_enabled: true
-        mcp_enabled: false
+        mcp_enabled: true
       tools:
         - name: growth_semantic_sql
           tool_type: sql

@@ -28,6 +28,7 @@ from langbridge.orchestrator.agents.planner import (
     PlanningConstraints,
     RouteName,
 )
+from langbridge.orchestrator.agents.planner.router import _extract_signals
 from langbridge.orchestrator.agents.supervisor.clarification_manager import (
     ClarificationManager,
 )
@@ -53,6 +54,10 @@ from langbridge.orchestrator.tools.semantic_query_builder import (
 from langbridge.orchestrator.runtime.analysis_grounding import (
     build_analyst_grounding,
 )
+from langbridge.orchestrator.runtime.access_policy import (
+    AnalyticalAccessScope,
+    build_access_denied_response,
+)
 from langbridge.orchestrator.runtime.response_formatter import (
     ResponseFormatter,
     ResponsePresentation,
@@ -61,6 +66,7 @@ from langbridge.orchestrator.tools.sql_analyst.interfaces import (
     AnalystExecutionOutcome,
     AnalystOutcomeStage,
     AnalystOutcomeStatus,
+    AnalystQueryRequest,
     AnalystQueryResponse,
 )
 
@@ -101,6 +107,7 @@ class SupervisorOrchestrator:
         entity_resolver: Optional[EntityResolver] = None,
         clarification_manager: Optional[ClarificationManager] = None,
         response_formatter: Optional[ResponseFormatter] = None,
+        analytical_access_scope: AnalyticalAccessScope | None = None,
         response_presentation: Optional[ResponsePresentation] = None,
         response_mode: ResponseMode = ResponseMode.analyst,
     ) -> None:
@@ -118,6 +125,7 @@ class SupervisorOrchestrator:
         self.entity_resolver = entity_resolver or EntityResolver(llm=llm, logger=self.logger)
         self.clarification_manager = clarification_manager or ClarificationManager(default_max_turns=2)
         self.response_formatter = response_formatter or ResponseFormatter(logger=self.logger)
+        self.analytical_access_scope = analytical_access_scope or AnalyticalAccessScope()
         self.response_presentation = response_presentation or ResponsePresentation(response_mode=response_mode)
         self.response_mode = self.response_presentation.response_mode
 
@@ -162,6 +170,27 @@ class SupervisorOrchestrator:
         clarification_state = preflight.clarification_decision.updated_state
         assumptions_applied = list(preflight.clarification_decision.assumptions)
         extra_context = self._merge_context(extra_context, preflight.context_updates)
+
+        if self._should_block_analytical_request_due_to_access_scope(
+            user_query=user_query,
+            classification=classification,
+        ):
+            await self._emit_event(
+                event_type="AnalyticalAccessDenied",
+                message="Analytical access is blocked by the agent access policy.",
+                visibility=AgentEventVisibility.public,
+                source="supervisor",
+                details=self.analytical_access_scope.to_metadata(),
+            )
+            return await self._build_access_denied_result(
+                user_query=user_query,
+                filters=filters,
+                limit=limit,
+                classification=classification,
+                resolved_entities=resolved_entities,
+                clarification_state=clarification_state,
+                assumptions_applied=assumptions_applied,
+            )
 
         if preflight.clarification_decision.requires_clarification:
             clarifying_question = preflight.clarification_decision.clarifying_question or (
@@ -615,6 +644,19 @@ class SupervisorOrchestrator:
                     "data_payload": data_payload,
                     "analyst_grounding": analyst_grounding,
                 }
+                if (
+                    analyst_result.outcome
+                    and analyst_result.outcome.status == AnalystOutcomeStatus.access_denied
+                    and analyst_result.outcome.terminal
+                ):
+                    await self._emit_event(
+                        event_type="AnalyticalAccessDenied",
+                        message="Analytical access was blocked by agent policy.",
+                        visibility=AgentEventVisibility.public,
+                        source="agent:Analyst",
+                        details={"step_id": step.id, "outcome": analyst_result.outcome.model_dump(mode="json")},
+                    )
+                    break
                 await self._emit_event(
                     event_type="AgentStepCompleted",
                     message="Analyst step completed.",
@@ -1451,6 +1493,102 @@ class SupervisorOrchestrator:
         if isinstance(web_search_result, WebSearchResult):
             return web_search_result.to_documents()
         return None
+
+    def _should_block_analytical_request_due_to_access_scope(
+        self,
+        *,
+        user_query: str,
+        classification: ClassifiedQuestion,
+    ) -> bool:
+        if not self.analytical_access_scope.all_configured_assets_denied:
+            return False
+
+        route_hint = str(classification.route_hint or "").strip()
+        if route_hint in {RouteName.SIMPLE_ANALYST.value, RouteName.ANALYST_THEN_VISUAL.value}:
+            return True
+
+        signals = _extract_signals(user_query)
+        return bool(
+            signals.has_sql_signals
+            or signals.chartable
+            or signals.has_entity_reference
+            or signals.has_time_reference
+        )
+
+    async def _build_access_denied_result(
+        self,
+        *,
+        user_query: str,
+        filters: Optional[Dict[str, Any]],
+        limit: Optional[int],
+        classification: ClassifiedQuestion,
+        resolved_entities: ResolvedEntities,
+        clarification_state: ClarificationState,
+        assumptions_applied: list[str],
+    ) -> Dict[str, Any]:
+        analyst_result = build_access_denied_response(
+            request=AnalystQueryRequest(
+                question=user_query,
+                filters=filters,
+                limit=limit,
+            ),
+            access_scope=self.analytical_access_scope,
+        )
+        diagnostics: Dict[str, Any] = {
+            "execution_time_ms": analyst_result.execution_time_ms,
+            "total_elapsed_ms": None,
+            "sql_executable": analyst_result.sql_executable,
+            "sql_canonical": analyst_result.sql_canonical,
+            "error": analyst_result.error,
+            "analyst_outcome": analyst_result.outcome.model_dump(mode="json") if analyst_result.outcome else None,
+            "dialect": analyst_result.dialect,
+            "analysis_path": analyst_result.analysis_path,
+            "execution_mode": analyst_result.execution_mode,
+            "asset_type": analyst_result.asset_type,
+            "asset_name": analyst_result.asset_name,
+            "selected_datasets": [],
+            "iterations_diagnostics": [],
+            "plan": None,
+            "classification": classification.model_dump(),
+            "resolved_entities": resolved_entities.model_dump(),
+            "clarification_state": clarification_state.model_dump(),
+            "assumptions_applied": assumptions_applied,
+            "response_mode": getattr(self.response_mode, "value", None) or str(self.response_mode or "analyst"),
+            "analytical_access": self.analytical_access_scope.to_metadata(),
+            "reasoning": {
+                "iterations": 0,
+                "final_rationale": "Analytical execution blocked by connector access policy before planning.",
+            },
+        }
+        summary = await self.response_formatter.summarize_response(
+            self.llm,
+            user_query,
+            {
+                "analyst_result": analyst_result,
+                "result": {},
+                "visualization": None,
+                "clarifying_question": None,
+                "web_search_result": None,
+                "research_result": None,
+                "assumptions": assumptions_applied,
+                "diagnostics": diagnostics,
+            },
+            presentation=self.response_presentation,
+        )
+        return {
+            "sql_canonical": analyst_result.sql_canonical,
+            "sql_executable": analyst_result.sql_executable,
+            "dialect": analyst_result.dialect,
+            "asset": analyst_result.asset_name,
+            "asset_type": analyst_result.asset_type,
+            "analysis_path": analyst_result.analysis_path,
+            "execution_mode": analyst_result.execution_mode,
+            "result": {},
+            "visualization": None,
+            "summary": summary,
+            "diagnostics": diagnostics,
+            "tool_calls": [],
+        }
 
     @staticmethod
     def _build_empty_analyst_response(*, error_message: str) -> AnalystQueryResponse:

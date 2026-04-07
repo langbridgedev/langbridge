@@ -89,3 +89,19 @@ def test_reasoning_agent_stops_on_terminal_analyst_failure() -> None:
 
     assert decision.continue_planning is False
     assert "terminal outcome" in (decision.rationale or "").lower()
+
+
+def test_reasoning_agent_stops_on_terminal_access_denied() -> None:
+    agent = ReasoningAgent(max_iterations=2)
+    decision = agent.evaluate(
+        iteration=0,
+        plan=_plan(),
+        artifacts=PlanExecutionArtifacts(
+            analyst_result=_response(AnalystOutcomeStatus.access_denied, terminal=True, rows=None)
+        ),
+        diagnostics={"extra_context": {}},
+        user_query="Revenue by payroll dataset",
+    )
+
+    assert decision.continue_planning is False
+    assert "access_denied" in (decision.rationale or "")

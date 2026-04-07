@@ -24,6 +24,10 @@ from langbridge.orchestrator.definitions import (  # noqa: E402
     PromptContract,
     ResponseMode,
 )
+from langbridge.orchestrator.runtime.access_policy import (  # noqa: E402
+    AnalyticalAccessScope,
+    AnalyticalDeniedAsset,
+)
 from langbridge.orchestrator.runtime.response_formatter import ResponsePresentation  # noqa: E402
 from langbridge.orchestrator.tools.sql_analyst.interfaces import (  # noqa: E402
     AnalystExecutionOutcome,
@@ -201,3 +205,40 @@ def test_supervisor_applies_definition_response_config_on_live_summary_path() ->
     assert "Keep it board-ready." in system_prompt
     assert "Markdown template:\n## Summary" in human_prompt
     assert "executive briefing assistant" in human_prompt
+
+
+def test_supervisor_returns_access_denied_summary_when_all_analytical_assets_are_blocked() -> None:
+    llm = _StubLLM("Access is blocked by policy.")
+    supervisor = SupervisorOrchestrator(
+        llm=llm,  # type: ignore[arg-type]
+        question_classifier=_StubQuestionClassifier(),
+        entity_resolver=_StubEntityResolver(),
+        clarification_manager=_StubClarificationManager(),
+        analytical_access_scope=AnalyticalAccessScope(
+            policy_enforced=True,
+            authorized_asset_count=0,
+            denied_assets=(
+                AnalyticalDeniedAsset(
+                    asset_type="dataset",
+                    asset_id="dataset-blocked",
+                    asset_name="payroll_dataset",
+                    dataset_names=("payroll_dataset",),
+                    sql_aliases=("payroll",),
+                    policy_rule="denied_connectors",
+                    policy_rationale="Connector is explicitly denied.",
+                ),
+            ),
+        ),
+        response_presentation=ResponsePresentation(
+            prompt_contract=PromptContract(system_prompt="System prompt"),
+            output_schema=OutputSchema(format=OutputFormat.text),
+            guardrails=GuardrailConfig(),
+            response_mode=ResponseMode.analyst,
+        ),
+    )
+
+    result = asyncio.run(supervisor.handle("Revenue by payroll_dataset"))
+
+    assert result["summary"] == "Access is blocked by policy."
+    assert result["diagnostics"]["analyst_outcome"]["status"] == "access_denied"
+    assert result["diagnostics"]["analytical_access"]["denied_assets_count"] == 1

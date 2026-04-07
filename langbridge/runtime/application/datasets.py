@@ -21,6 +21,7 @@ from langbridge.runtime.config.models import (
 )
 from langbridge.runtime.models import (
     ConnectorMetadata,
+    DatasetColumnMetadata,
     DatasetMetadata,
     DatasetPolicyMetadata,
     DatasetSource,
@@ -44,6 +45,7 @@ from langbridge.runtime.utils.datasets import (
     resolve_dataset_materialization_mode,
 )
 from langbridge.runtime.utils.lineage import stable_payload_hash
+from langbridge.runtime.services.dataset_execution import describe_file_source_schema
 
 if TYPE_CHECKING:
     from langbridge.runtime.bootstrap.configured_runtime import ConfiguredLocalRuntimeHost
@@ -1172,6 +1174,62 @@ class DatasetApplication:
         policy.updated_at = now
         return policy
 
+    def _build_file_dataset_columns(
+        self,
+        *,
+        dataset: DatasetMetadata | None,
+        dataset_id: uuid.UUID,
+        dataset_name: str,
+        definition: _DatasetDefinition,
+        now: datetime,
+    ) -> list[DatasetColumnMetadata]:
+        if definition.dataset_type != DatasetType.FILE or definition.storage_uri is None:
+            return []
+        try:
+            described_columns = describe_file_source_schema(
+                storage_uri=definition.storage_uri,
+                file_config=definition.file_config,
+            )
+        except Exception as exc:  # pragma: no cover - surfaced as validation error
+            raise BusinessValidationError(
+                f"Dataset '{dataset_name}' file source could not be inspected for schema inference: {exc}"
+            ) from exc
+
+        workspace_id = (
+            dataset.workspace_id
+            if dataset is not None
+            else self._host.context.workspace_id
+        )
+        created_at = dataset.created_at if dataset is not None else now
+        return [
+            DatasetColumnMetadata(
+                id=uuid.uuid4(),
+                dataset_id=dataset_id,
+                workspace_id=workspace_id,
+                name=column.name,
+                data_type=column.data_type,
+                nullable=column.nullable,
+                ordinal_position=index,
+                created_at=created_at,
+                updated_at=now,
+            )
+            for index, column in enumerate(described_columns)
+        ]
+
+    async def _replace_dataset_columns(
+        self,
+        *,
+        dataset: DatasetMetadata,
+        columns: list[DatasetColumnMetadata],
+    ) -> None:
+        await self._host._dataset_column_repository.delete_for_dataset(dataset_id=dataset.id)
+        flush = getattr(self._host._dataset_column_repository, "flush", None)
+        if flush is not None:
+            await flush()
+        for column in columns:
+            self._host._dataset_column_repository.add(column)
+        dataset.columns = list(columns)
+
     async def _assert_dataset_name_is_available(
         self,
         *,
@@ -1308,6 +1366,17 @@ class DatasetApplication:
             policy_config=normalized_request.policy,
             now=now,
         )
+        inferred_columns = (
+            self._build_file_dataset_columns(
+                dataset=None,
+                dataset_id=dataset_id,
+                dataset_name=dataset_name,
+                definition=definition,
+                now=now,
+            )
+            if materialization_mode == DatasetMaterializationMode.LIVE
+            else []
+        )
 
         dataset = DatasetMetadata(
             id=dataset_id,
@@ -1380,6 +1449,8 @@ class DatasetApplication:
                 )
             dataset = self._host._dataset_repository.add(dataset)
             policy = self._host._dataset_policy_repository.add(policy)
+            if inferred_columns:
+                await self._replace_dataset_columns(dataset=dataset, columns=inferred_columns)
             await self._create_dataset_revision_and_lineage(
                 dataset=dataset,
                 policy=policy,
@@ -1400,6 +1471,7 @@ class DatasetApplication:
             dataset = await self._host._resolve_dataset_record(dataset_ref)
             self._require_runtime_managed_dataset(dataset)
             existing_policy = await self._host._dataset_policy_repository.get_for_dataset(dataset_id=dataset.id)
+            existing_columns = await self._host._dataset_column_repository.list_for_dataset(dataset_id=dataset.id)
             connector = self._host._connector_for_id(dataset.connection_id)
 
             fields_set = set(getattr(request, "model_fields_set", set()))
@@ -1494,6 +1566,25 @@ class DatasetApplication:
                 now=now,
                 existing_policy=existing_policy,
             )
+            next_columns: list[DatasetColumnMetadata] | None = None
+            if materialization_mode == DatasetMaterializationMode.SYNCED:
+                next_columns = []
+            elif definition.dataset_type == DatasetType.FILE:
+                if (
+                    "source" in fields_set
+                    or "materialization_mode" in fields_set
+                    or dataset.dataset_type != DatasetType.FILE
+                    or not existing_columns
+                ):
+                    next_columns = self._build_file_dataset_columns(
+                        dataset=dataset,
+                        dataset_id=dataset.id,
+                        dataset_name=dataset.name,
+                        definition=definition,
+                        now=now,
+                    )
+            elif "source" in fields_set or "materialization_mode" in fields_set:
+                next_columns = []
             dataset.description = self._dataset_description(
                 description=normalized_request.description,
                 materialization_mode=materialization_mode,
@@ -1550,7 +1641,8 @@ class DatasetApplication:
                 self._host._dataset_policy_repository.add(policy)
             else:
                 await self._host._dataset_policy_repository.save(policy)
-            await self._host._dataset_column_repository.delete_for_dataset(dataset_id=dataset.id)
+            if next_columns is not None:
+                await self._replace_dataset_columns(dataset=dataset, columns=next_columns)
             await self._create_dataset_revision_and_lineage(
                 dataset=dataset,
                 policy=policy,

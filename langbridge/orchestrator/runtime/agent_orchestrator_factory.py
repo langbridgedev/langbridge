@@ -3,7 +3,9 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+import sqlglot
 import yaml
+from sqlglot import exp
 
 from langbridge.runtime.embeddings import EmbeddingProvider
 from langbridge.orchestrator.errors import AgentError
@@ -29,8 +31,12 @@ from langbridge.orchestrator.agents.supervisor.orchestrator import SupervisorOrc
 from langbridge.orchestrator.agents.visual import VisualAgent
 from langbridge.orchestrator.agents.web_search import WebSearchAgent
 from langbridge.orchestrator.definitions import AgentDefinitionModel, ExecutionMode
-from langbridge.orchestrator.definitions.model import ToolType
+from langbridge.orchestrator.definitions.model import DataAccessPolicy, ToolType
 from langbridge.orchestrator.llm.provider import LLMProvider
+from langbridge.orchestrator.runtime.access_policy import (
+    AnalyticalAccessScope,
+    ConnectorAccessPolicyEvaluator,
+)
 from langbridge.orchestrator.runtime.response_formatter import ResponsePresentation
 from langbridge.orchestrator.tools.sql_analyst import SqlAnalystTool
 from langbridge.orchestrator.tools.sql_analyst.interfaces import (
@@ -42,6 +48,7 @@ from langbridge.orchestrator.tools.sql_analyst.interfaces import (
     QueryResult,
 )
 from langbridge.runtime.settings import runtime_settings
+from langbridge.runtime.utils.sql import normalize_sql_dialect
 from langbridge.federation.models import FederationWorkflow, VirtualDataset
 from langbridge.semantic.loader import load_semantic_model
 from langbridge.semantic.model import Dimension, Measure, Metric, SemanticModel, Table
@@ -64,6 +71,13 @@ class AgentToolConfig:
     allow_visualization: bool
     analyst_bindings: list[AnalystBinding] = field(default_factory=list)
     web_search_defaults: dict[str, Any] = field(default_factory=dict)
+    analytical_access_scope: AnalyticalAccessScope | None = None
+
+
+@dataclass(slots=True)
+class AnalystToolBuildResult:
+    tools: list[SqlAnalystTool]
+    access_scope: AnalyticalAccessScope
 
 
 @dataclass(slots=True)
@@ -166,29 +180,43 @@ class AgentOrchestratorFactory:
         event_emitter: Optional[AgentEventEmitter] = None,
     ) -> AgentRuntime:
         tool_config = self._build_agent_tool_config(definition)
-        analyst_tools = await self._build_analyst_tools(
+        analyst_tool_build = await self._build_analyst_tools(
             tool_config=tool_config,
+            access_policy=definition.access_policy,
             llm_provider=llm_provider,
             embedding_provider=embedding_provider,
             event_emitter=event_emitter,
         )
+        analyst_tools = analyst_tool_build.tools
+        tool_config.analytical_access_scope = analyst_tool_build.access_scope
 
         if tool_config.allow_sql and not analyst_tools:
-            self._logger.warning(
-                "No analytical tools could be created from the selected asset ids; disabling analyst route."
-            )
+            if (
+                tool_config.analytical_access_scope is not None
+                and tool_config.analytical_access_scope.all_configured_assets_denied
+            ):
+                self._logger.info(
+                    "All configured analytical assets were excluded by connector access policy; "
+                    "supervisor will return access_denied for analytical requests."
+                )
+            else:
+                self._logger.warning(
+                    "No analytical tools could be created from the selected asset ids; disabling analyst route."
+                )
             tool_config.allow_sql = False
 
         planning_constraints = self._build_planning_constraints(tool_config, definition)
         planning_context = self._build_planner_tool_context(
             tool_config=tool_config,
             analyst_tools=analyst_tools,
+            access_scope=tool_config.analytical_access_scope,
         )
         supervisor = self._build_supervisor_orchestrator(
             definition=definition,
             llm_provider=llm_provider,
             planning_constraints=planning_constraints,
             analyst_tools=analyst_tools,
+            analytical_access_scope=tool_config.analytical_access_scope,
             event_emitter=event_emitter,
         )
 
@@ -253,6 +281,7 @@ class AgentOrchestratorFactory:
         *,
         tool_config: AgentToolConfig,
         analyst_tools: list[SqlAnalystTool],
+        access_scope: AnalyticalAccessScope | None,
     ) -> Dict[str, Any] | None:
         available_agents = [
             {
@@ -310,6 +339,8 @@ class AgentOrchestratorFactory:
             "analytical_assets": analytical_assets,
             "analytical_assets_count": len(analytical_assets),
         }
+        if access_scope is not None and access_scope.policy_enforced:
+            context["analytical_access"] = access_scope.to_metadata()
         if tool_config.web_search_defaults:
             context.update(tool_config.web_search_defaults)
 
@@ -319,20 +350,54 @@ class AgentOrchestratorFactory:
         self,
         *,
         tool_config: AgentToolConfig,
+        access_policy: DataAccessPolicy,
         llm_provider: LLMProvider,
         embedding_provider: Optional[EmbeddingProvider],
         event_emitter: Optional[AgentEventEmitter],
-    ) -> list[SqlAnalystTool]:
+    ) -> AnalystToolBuildResult:
         if not tool_config.allow_sql or not tool_config.analyst_bindings:
-            return []
+            return AnalystToolBuildResult(
+                tools=[],
+                access_scope=AnalyticalAccessScope(),
+            )
         if self._federated_query_tool is None:
             self._logger.warning("Federated query tool is not configured; analyst route cannot be built.")
-            return []
+            return AnalystToolBuildResult(
+                tools=[],
+                access_scope=AnalyticalAccessScope(),
+            )
 
+        access_policy_evaluator = ConnectorAccessPolicyEvaluator(access_policy)
         sql_tools: list[SqlAnalystTool] = []
+        denied_assets = []
         for binding in tool_config.analyst_bindings:
             if binding.dataset_ids:
                 datasets = await self._load_datasets(binding.dataset_ids)
+                dataset_asset_id, dataset_asset_name = self._resolve_dataset_asset_identity(
+                    asset_dataset=datasets[0],
+                    selected_datasets=datasets,
+                    binding=binding,
+                )
+                access_decision = access_policy_evaluator.evaluate_asset_connectors(
+                    connector_ids=[dataset.connection_id for dataset in datasets],
+                )
+                if not access_decision.allowed:
+                    self._logger.info(
+                        "Excluded dataset analytical asset '%s' from agent scope: %s",
+                        dataset_asset_name,
+                        access_decision.policy_rationale,
+                    )
+                    denied_assets.append(
+                        access_policy_evaluator.build_denied_asset(
+                            asset_type="dataset",
+                            asset_id=dataset_asset_id,
+                            asset_name=dataset_asset_name,
+                            dataset_names=[dataset.name for dataset in datasets],
+                            sql_aliases=[str(dataset.sql_alias or "") for dataset in datasets],
+                            decision=access_decision,
+                        )
+                    )
+                    continue
                 sql_tools.append(
                     await self._build_dataset_tool(
                         dataset=datasets[0],
@@ -354,17 +419,85 @@ class AgentOrchestratorFactory:
                         binding.name,
                     )
                     continue
+                semantic_model = load_semantic_model(semantic_model_entry.content_yaml)
+                raw_model_payload = self._parse_yaml_payload(semantic_model_entry.content_yaml)
+                workflow, _workflow_dialect = await self._dataset_execution_resolver.build_semantic_workflow(
+                    workspace_id=semantic_model_entry.workspace_id,
+                    workflow_id=f"workflow_semantic_agent_{semantic_model_entry.id.hex[:12]}",
+                    dataset_name=semantic_model_entry.name or f"semantic_model_{semantic_model_entry.id.hex[:8]}",
+                    semantic_model=semantic_model,
+                    raw_datasets_payload=(
+                        raw_model_payload.get("datasets")
+                        if isinstance(raw_model_payload.get("datasets"), dict)
+                        else (
+                            raw_model_payload.get("tables")
+                            if isinstance(raw_model_payload.get("tables"), dict)
+                            else None
+                        )
+                    ),
+                )
+                dataset_records_by_id = await self._load_workflow_dataset_records(
+                    workspace_id=semantic_model_entry.workspace_id,
+                    workflow=workflow,
+                )
+                access_decision = access_policy_evaluator.evaluate_asset_connectors(
+                    connector_ids=[
+                        getattr(table_binding, "connector_id", None)
+                        for table_binding in workflow.dataset.tables.values()
+                    ],
+                )
+                semantic_asset_name = semantic_model_entry.name or semantic_model.name or binding.name
+                if not access_decision.allowed:
+                    self._logger.info(
+                        "Excluded semantic analytical asset '%s' from agent scope: %s",
+                        semantic_asset_name,
+                        access_decision.policy_rationale,
+                    )
+                    denied_assets.append(
+                        access_policy_evaluator.build_denied_asset(
+                            asset_type="semantic_model",
+                            asset_id=str(semantic_model_entry.id),
+                            asset_name=semantic_asset_name,
+                            dataset_names=[
+                                dataset_records_by_id.get(dataset_id).name
+                                if dataset_id in dataset_records_by_id
+                                else str(table_binding.table)
+                                for dataset_id, table_binding in [
+                                    (
+                                        self._extract_dataset_id_from_table_binding(table_binding),
+                                        table_binding,
+                                    )
+                                    for table_binding in workflow.dataset.tables.values()
+                                ]
+                            ],
+                            sql_aliases=[
+                                str(table_binding.table_key)
+                                for table_binding in workflow.dataset.tables.values()
+                            ],
+                            decision=access_decision,
+                        )
+                    )
+                    continue
                 sql_tools.append(
                     await self._build_semantic_model_tool(
                         semantic_model_entry=semantic_model_entry,
+                        semantic_model=semantic_model,
                         binding=binding,
+                        workflow=workflow,
                         llm_provider=llm_provider,
                         embedding_provider=embedding_provider,
                         event_emitter=event_emitter,
                     )
                 )
 
-        return sql_tools
+        return AnalystToolBuildResult(
+            tools=sql_tools,
+            access_scope=AnalyticalAccessScope(
+                policy_enforced=access_policy_evaluator.has_restrictions,
+                authorized_asset_count=len(sql_tools),
+                denied_assets=tuple(denied_assets),
+            ),
+        )
 
     async def _build_dataset_tool(
         self,
@@ -404,28 +537,13 @@ class AgentOrchestratorFactory:
         self,
         *,
         semantic_model_entry: SemanticModelMetadata,
+        semantic_model: SemanticModel,
         binding: AnalystBinding,
+        workflow: FederationWorkflow,
         llm_provider: LLMProvider,
         embedding_provider: Optional[EmbeddingProvider],
         event_emitter: Optional[AgentEventEmitter],
     ) -> SqlAnalystTool:
-        semantic_model = load_semantic_model(semantic_model_entry.content_yaml)
-        raw_model_payload = self._parse_yaml_payload(semantic_model_entry.content_yaml)
-        workflow, _workflow_dialect = await self._dataset_execution_resolver.build_semantic_workflow(
-            workspace_id=semantic_model_entry.workspace_id,
-            workflow_id=f"workflow_semantic_agent_{semantic_model_entry.id.hex[:12]}",
-            dataset_name=semantic_model_entry.name or f"semantic_model_{semantic_model_entry.id.hex[:8]}",
-            semantic_model=semantic_model,
-            raw_datasets_payload=(
-                raw_model_payload.get("datasets")
-                if isinstance(raw_model_payload.get("datasets"), dict)
-                else (
-                    raw_model_payload.get("tables")
-                    if isinstance(raw_model_payload.get("tables"), dict)
-                    else None
-                )
-            ),
-        )
         context = await self._build_semantic_model_context(
             binding=binding,
             semantic_model_entry=semantic_model_entry,
@@ -580,17 +698,14 @@ class AgentOrchestratorFactory:
                     measures.append(AnalyticalField(name=field_name, expression=column.name))
 
         relationships = [self._format_virtual_relationship(item) for item in workflow.dataset.relationships]
-        context_name = asset_dataset.name
-        if len(selected_datasets) > 1:
-            context_name = binding.description or ", ".join(dataset.name for dataset in selected_datasets)
+        asset_id, context_name = self._resolve_dataset_asset_identity(
+            asset_dataset=asset_dataset,
+            selected_datasets=selected_datasets,
+            binding=binding,
+        )
         return AnalyticalContext(
             asset_type="dataset",
-            asset_id=str(asset_dataset.id) if len(selected_datasets) == 1 else str(
-                uuid.uuid5(
-                    uuid.NAMESPACE_DNS,
-                    "langbridge-analyst-datasets:" + ",".join(sorted(str(dataset.id) for dataset in selected_datasets)),
-                )
-            ),
+            asset_id=asset_id,
             asset_name=context_name,
             description=asset_dataset.description,
             tags=list(asset_dataset.tags_json or []),
@@ -602,6 +717,29 @@ class AgentOrchestratorFactory:
             measures=measures,
             metrics=[AnalyticalMetric(name="row_count", expression="COUNT(*)", description="Count of rows")],
             relationships=relationships,
+        )
+
+    @staticmethod
+    def _resolve_dataset_asset_identity(
+        *,
+        asset_dataset: DatasetMetadata,
+        selected_datasets: list[DatasetMetadata],
+        binding: AnalystBinding,
+    ) -> tuple[str, str]:
+        context_name = asset_dataset.name
+        if len(selected_datasets) > 1:
+            context_name = binding.description or ", ".join(dataset.name for dataset in selected_datasets)
+        if len(selected_datasets) == 1:
+            return str(asset_dataset.id), context_name
+        return (
+            str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_DNS,
+                    "langbridge-analyst-datasets:"
+                    + ",".join(sorted(str(dataset.id) for dataset in selected_datasets)),
+                )
+            ),
+            context_name,
         )
 
     async def _build_semantic_model_context(
@@ -684,6 +822,11 @@ class AgentOrchestratorFactory:
                 dataset_id = None
             dataset_record = dataset_records_by_id.get(dataset_id) if dataset_id is not None else None
             columns = await self._list_dataset_columns(dataset_id) if dataset_id is not None else []
+            if not columns:
+                columns = self._infer_dataset_columns_from_sql(
+                    dataset_record=dataset_record,
+                    table_binding=table_binding,
+                )
             bindings.append(
                 AnalyticalDatasetBinding(
                     dataset_id=str(dataset_record.id if dataset_record is not None else dataset_id or ""),
@@ -733,6 +876,17 @@ class AgentOrchestratorFactory:
         )
         return {row.id: row for row in rows}
 
+    @staticmethod
+    def _extract_dataset_id_from_table_binding(table_binding: Any) -> uuid.UUID | None:
+        metadata = table_binding.metadata if isinstance(table_binding.metadata, dict) else {}
+        dataset_id_raw = metadata.get("dataset_id")
+        if not dataset_id_raw:
+            return None
+        try:
+            return uuid.UUID(str(dataset_id_raw))
+        except (TypeError, ValueError):
+            return None
+
     async def _list_dataset_columns(self, dataset_id: uuid.UUID) -> list[AnalyticalColumn]:
         if self._dataset_column_repository is None:
             return []
@@ -745,6 +899,74 @@ class AgentOrchestratorFactory:
             )
             for row in rows
         ]
+
+    @staticmethod
+    def _infer_dataset_columns_from_sql(
+        *,
+        dataset_record: Any | None,
+        table_binding: Any,
+    ) -> list[AnalyticalColumn]:
+        sql_text, dialect = AgentOrchestratorFactory._dataset_sql_projection_source(
+            dataset_record=dataset_record,
+            table_binding=table_binding,
+        )
+        if not sql_text:
+            return []
+        try:
+            expression = sqlglot.parse_one(
+                sql_text,
+                read=normalize_sql_dialect(dialect, default="tsql"),
+            )
+        except sqlglot.ParseError:
+            return []
+
+        select_expr = expression if isinstance(expression, exp.Select) else expression.find(exp.Select)
+        if not isinstance(select_expr, exp.Select):
+            return []
+
+        columns: list[AnalyticalColumn] = []
+        seen: set[str] = set()
+        for projection in select_expr.expressions or []:
+            output_name = str(getattr(projection, "output_name", "") or "").strip()
+            if not output_name or output_name == "*":
+                continue
+            normalized = output_name.lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            columns.append(AnalyticalColumn(name=output_name))
+        return columns
+
+    @staticmethod
+    def _dataset_sql_projection_source(
+        *,
+        dataset_record: Any | None,
+        table_binding: Any,
+    ) -> tuple[str | None, str | None]:
+        metadata = table_binding.metadata if isinstance(table_binding.metadata, dict) else {}
+        if dataset_record is not None:
+            sql_text = str(getattr(dataset_record, "sql_text", None) or "").strip()
+            if sql_text:
+                return sql_text, getattr(dataset_record, "dialect", None)
+
+            source_payload = getattr(dataset_record, "source_json", None)
+            if isinstance(source_payload, dict):
+                source_sql = str(source_payload.get("sql") or "").strip()
+                if source_sql:
+                    return source_sql, getattr(dataset_record, "dialect", None)
+
+            sync_payload = getattr(dataset_record, "sync_json", None)
+            if isinstance(sync_payload, dict):
+                sync_source = sync_payload.get("source")
+                if isinstance(sync_source, dict):
+                    sync_sql = str(sync_source.get("sql") or "").strip()
+                    if sync_sql:
+                        return sync_sql, getattr(dataset_record, "dialect", None)
+
+        physical_sql = str(metadata.get("physical_sql") or "").strip()
+        if physical_sql:
+            return physical_sql, metadata.get("sql_dialect")
+        return None, None
 
     @staticmethod
     def _parse_yaml_payload(content_yaml: str) -> dict[str, Any]:
@@ -800,6 +1022,7 @@ class AgentOrchestratorFactory:
         llm_provider: LLMProvider,
         planning_constraints: PlanningConstraints,
         analyst_tools: list[SqlAnalystTool],
+        analytical_access_scope: AnalyticalAccessScope | None,
         event_emitter: Optional[AgentEventEmitter],
     ) -> SupervisorOrchestrator:
         analyst_agent = None
@@ -807,6 +1030,7 @@ class AgentOrchestratorFactory:
             analyst_agent = AnalystAgent(
                 llm=llm_provider,
                 tools=analyst_tools,
+                access_scope=analytical_access_scope,
                 logger=self._logger,
             )
 
@@ -830,6 +1054,7 @@ class AgentOrchestratorFactory:
             web_search_agent=web_search_agent,
             logger=self._logger,
             event_emitter=event_emitter,
+            analytical_access_scope=analytical_access_scope,
             response_presentation=ResponsePresentation.from_definition(definition),
             response_mode=definition.execution.response_mode,
         )

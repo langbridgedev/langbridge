@@ -551,6 +551,7 @@ class ReasoningAgent:
             analyst_outcome
             and analyst_outcome.terminal
             and analyst_outcome.status in {
+                AnalystOutcomeStatus.access_denied,
                 AnalystOutcomeStatus.invalid_request,
                 AnalystOutcomeStatus.selection_error,
                 AnalystOutcomeStatus.query_error,
@@ -698,6 +699,7 @@ class ReasoningAgent:
             analyst_outcome
             and analyst_outcome.terminal
             and analyst_outcome.status in {
+                AnalystOutcomeStatus.access_denied,
                 AnalystOutcomeStatus.invalid_request,
                 AnalystOutcomeStatus.selection_error,
                 AnalystOutcomeStatus.query_error,
