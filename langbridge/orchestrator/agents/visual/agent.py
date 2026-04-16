@@ -11,6 +11,10 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 import pandas as pd
 
 from langbridge.orchestrator.llm.provider import LLMProvider
+from .titles import (
+    is_placeholder_visualization_title,
+    suggest_visualization_title,
+)
 
 TabularInput = Union[Dict[str, Any], List[Dict[str, Any]], "pd.DataFrame"]  # type: ignore[name-defined]
 
@@ -673,7 +677,7 @@ class VisualAgent:
             x=x,
             y=y,
             group_by=group_by,
-            title=None,
+            title=payload.get("title") or base_spec.title,
             options=options,
         )
 
@@ -837,10 +841,15 @@ class VisualAgent:
         self.logger.info("VisualAgent.run invoked with data type %s", type(data).__name__)
         df = _to_dataframe(data)
         spec = self._choose_chart(df, question=question, user_intent=user_intent)
-        if title:
-            spec.title = title
-        elif spec.chart_type != "table":
-            spec.title = "Automated insight"
+        if not is_placeholder_visualization_title(title, question=question):
+            spec.title = str(title).strip()
+        elif is_placeholder_visualization_title(spec.title, question=question):
+            spec.title = suggest_visualization_title(
+                chart_type=spec.chart_type,
+                x=spec.x,
+                y=spec.y,
+                group_by=spec.group_by,
+            )
         return spec.to_dict()
 
 

@@ -31,6 +31,10 @@ from langbridge.runtime.ports import (
     ThreadStore,
 )
 from langbridge.orchestrator.agents.supervisor.memory_manager import MemoryManager
+from langbridge.orchestrator.agents.visual import (
+    is_placeholder_visualization_title,
+    suggest_visualization_title,
+)
 from langbridge.orchestrator.definitions import (
     AgentDefinitionModel,
 )
@@ -388,6 +392,7 @@ class AgentExecutionService:
             columns=[str(column) for column in columns],
             rows=rows,
             title=f"Visualization for '{user_query}'",
+            question=user_query,
         )
         if generated is None:
             return payload
@@ -439,6 +444,7 @@ class AgentExecutionService:
         columns: list[str],
         rows: list[Any],
         title: str,
+        question: str | None = None,
     ) -> dict[str, Any] | None:
         sample_rows = rows[: min(20, len(rows))]
 
@@ -474,22 +480,36 @@ class AgentExecutionService:
         if chart_type in {"pie", "bar", "line"}:
             if dimension_idx is None:
                 return None
+            resolved_title = title
+            if is_placeholder_visualization_title(resolved_title, question=question):
+                resolved_title = suggest_visualization_title(
+                    chart_type=chart_type,
+                    x=columns[dimension_idx],
+                    y=columns[measure_idx],
+                )
             return {
                 "chart_type": chart_type,
                 "x": columns[dimension_idx],
                 "y": columns[measure_idx],
-                "title": title,
+                "title": resolved_title,
                 "options": {"row_count": len(rows)},
             }
 
         if chart_type == "scatter":
             if len(numeric_indexes) < 2:
                 return None
+            resolved_title = title
+            if is_placeholder_visualization_title(resolved_title, question=question):
+                resolved_title = suggest_visualization_title(
+                    chart_type="scatter",
+                    x=columns[numeric_indexes[0]],
+                    y=columns[numeric_indexes[1]],
+                )
             return {
                 "chart_type": "scatter",
                 "x": columns[numeric_indexes[0]],
                 "y": columns[numeric_indexes[1]],
-                "title": title,
+                "title": resolved_title,
                 "options": {"row_count": len(rows)},
             }
 

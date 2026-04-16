@@ -66,3 +66,16 @@ def test_set_thread_awaiting_user_input_sets_runtime_state() -> None:
     AgentExecutionService._set_thread_awaiting_user_input(thread)
 
     assert thread.state == RuntimeThreadState.awaiting_user_input
+
+
+def test_build_chart_spec_generates_descriptive_title_for_requested_chart() -> None:
+    spec = AgentExecutionService._build_chart_spec(
+        chart_type="bar",
+        columns=["region", "revenue"],
+        rows=[("US", 2200), ("EMEA", 1200), ("APAC", 900)],
+        title="Visualization for 'Show me a bar chart of revenue by region'",
+        question="Show me a bar chart of revenue by region",
+    )
+
+    assert spec is not None
+    assert spec["title"] == "Revenue by Region"

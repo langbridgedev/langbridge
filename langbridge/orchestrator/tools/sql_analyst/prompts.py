@@ -18,6 +18,7 @@ SEMANTIC_SQL_ORCHESTRATION_INSTRUCTION = (
     "- Do not reference physical dataset aliases or raw table names in the SQL.\n"
     "- Do not use JOIN, HAVING, DISTINCT, CTEs, UNION, or SELECT *.\n"
     "- Use DATE_TRUNC or TIMESTAMP_TRUNC only for semantic time dimensions when a time bucket is needed.\n"
+    "- If query has a time dimension, unless specified, add a ordering by the time dimension in ascending order as the last clause.\n"
     "- Group only by selected non-aggregated semantic dimensions or selected time buckets. Do not include extra GROUP BY members.\n"
     "- If the requested business concept is not available as a semantic member or named metric, do not approximate it with raw SQL. Return the closest valid semantic query shape over the governed members instead.\n"
     "- Use search hints only when they ground an explicit filter.\n"

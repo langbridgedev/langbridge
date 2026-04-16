@@ -8,6 +8,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from langbridge.orchestrator.agents.reasoning.agent import ReasoningDecision  # noqa: E402
+from langbridge.orchestrator.agents.visual import VisualAgent  # noqa: E402
 from langbridge.orchestrator.agents.supervisor.orchestrator import SupervisorOrchestrator  # noqa: E402
 from langbridge.orchestrator.agents.supervisor.schemas import (  # noqa: E402
     ClarificationDecision,
@@ -79,6 +80,23 @@ class _StubPlanningAgent:
             steps=[PlanStep(id="step_1", agent="Analyst", input={"question": request.question})],
             justification="Use analyst.",
             user_summary="Run analysis.",
+        )
+
+
+class _StubAnalystThenVisualPlanningAgent:
+    def plan(self, request: Any) -> Plan:
+        return Plan(
+            route="AnalystThenVisual",
+            steps=[
+                PlanStep(id="step_1", agent="Analyst", input={"question": request.question}),
+                PlanStep(
+                    id="step_2",
+                    agent="Visual",
+                    input={"rows_ref": "step_1", "user_intent": "insight_visualization"},
+                ),
+            ],
+            justification="Use analyst and visualization.",
+            user_summary="Run analysis and render a chart.",
         )
 
 
@@ -242,3 +260,27 @@ def test_supervisor_returns_access_denied_summary_when_all_analytical_assets_are
     assert result["summary"] == "Access is blocked by policy."
     assert result["diagnostics"]["analyst_outcome"]["status"] == "access_denied"
     assert result["diagnostics"]["analytical_access"]["denied_assets_count"] == 1
+
+
+def test_supervisor_visual_step_uses_generated_chart_title_instead_of_raw_query() -> None:
+    llm = _StubLLM("US leads revenue.")
+    supervisor = SupervisorOrchestrator(
+        llm=llm,  # type: ignore[arg-type]
+        analyst_agent=_StubAnalystAgent(_success_response()),
+        visual_agent=VisualAgent(),
+        planning_agent=_StubAnalystThenVisualPlanningAgent(),
+        reasoning_agent=_StubReasoningAgent(),
+        question_classifier=_StubQuestionClassifier(),
+        entity_resolver=_StubEntityResolver(),
+        clarification_manager=_StubClarificationManager(),
+        response_presentation=ResponsePresentation(
+            prompt_contract=PromptContract(system_prompt="System prompt"),
+            output_schema=OutputSchema(format=OutputFormat.text),
+            guardrails=GuardrailConfig(),
+            response_mode=ResponseMode.analyst,
+        ),
+    )
+
+    result = asyncio.run(supervisor.handle("Show me a chart of revenue by region"))
+
+    assert result["visualization"]["title"] == "Revenue by Region"

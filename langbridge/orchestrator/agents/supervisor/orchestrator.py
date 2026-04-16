@@ -343,7 +343,7 @@ class SupervisorOrchestrator:
                 visualization = await asyncio.to_thread(
                     self.visual_agent.run,
                     data_payload,
-                    title=f"Visualization for '{user_query}'",
+                    title=title,
                     question=user_query,
                 )
                 await self._emit_event(
@@ -914,20 +914,20 @@ class SupervisorOrchestrator:
         reference_id = step.input.get("rows_ref")
         referenced_payload = self._resolve_rows_reference(reference_id, step_outputs)
         data = referenced_payload or fallback_payload or {"columns": [], "rows": []}
-        viz_title = title or f"Visualization for '{user_query}'"
         user_intent = step.input.get("user_intent")
         visualization = await asyncio.to_thread(
             self.visual_agent.run,
             data,
-            title=viz_title,
+            title=title,
             question=user_query,
             user_intent=user_intent,
         )
+        resolved_title = visualization.get("title") if isinstance(visualization, dict) else title
         tool_args: Dict[str, Any] = {
             "step_id": step.id,
             "input": step.input,
             "question": user_query,
-            "title": viz_title,
+            "title": resolved_title,
             "data_summary": self._summarize_tabular_payload(data),
         }
         if reference_id:
