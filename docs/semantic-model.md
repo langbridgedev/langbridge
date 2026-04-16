@@ -122,18 +122,34 @@ Fields:
 - `expression`
 - `description`
 
-## Unified Semantic Models
+## Semantic Graphs
 
-Unified semantic models are a separate contract loaded through:
+Semantic graphs are the canonical composition contract loaded through:
+
+- `load_semantic_graph(...)`
+- `parse_semantic_graph_payload(...)`
+
+The graph model lives in `langbridge.semantic.graph` and uses `source_models`
+instead of embedded datasets.
+
+Semantic graphs are intentionally bounded in V1:
+
+- they reference concrete semantic models
+- they define inter-model relationships
+- they define graph-level metrics
+- they compile into one executable `SemanticModel`
+
+Compilation is explicit through `compile_semantic_graph(...)` in
+`langbridge.semantic.graph_compiler`.
+
+Legacy unified loader names remain available as compatibility aliases:
 
 - `load_unified_semantic_model(...)`
 - `parse_unified_semantic_model_payload(...)`
-
-Those models live in `langbridge.semantic.unified_model` and use `source_models`
-instead of embedded datasets.
 
 ## Rules
 
 - use the loader to normalize incoming semantic payloads
 - prefer `datasets` over `tables` in new documentation and examples
+- prefer semantic graphs over unified semantic model terminology in new documentation and examples
 - treat runtime dataset bindings as the primary execution path

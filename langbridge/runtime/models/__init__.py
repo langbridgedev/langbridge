@@ -81,6 +81,10 @@ from langbridge.runtime.models.llm import (
     LLMProvider,
 )
 from langbridge.runtime.models.semantic import (
+    SemanticGraphMetricRequest,
+    SemanticGraphQueryResponse,
+    SemanticGraphRelationshipRequest,
+    SemanticGraphSourceModelRequest,
     SemanticQueryMetaResponse,
     SemanticQueryRequest,
     SemanticQueryResponse,
@@ -161,6 +165,10 @@ __all__ = [
     "RuntimeJob",
     "RuntimeJobStatus",
     "RuntimeMessageRole",
+    "SemanticGraphMetricRequest",
+    "SemanticGraphQueryResponse",
+    "SemanticGraphRelationshipRequest",
+    "SemanticGraphSourceModelRequest",
     "SemanticQueryMetaResponse",
     "SemanticQueryRequest",
     "SemanticQueryResponse",

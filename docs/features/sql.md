@@ -16,10 +16,11 @@ Langbridge supports an explicit three-scope SQL model in the runtime.
 1. A SQL request enters the runtime with an explicit `query_scope`.
 2. `query_scope: "semantic"` parses a governed SQL subset whose `FROM` target is one semantic model name.
 3. Semantic SQL compiles into the existing semantic query path rather than falling through to direct connector SQL.
-4. `query_scope: "dataset"` uses dataset-backed runtime SQL over runtime datasets.
-5. `selected_datasets` is only valid for dataset scope and narrows planner scope by dataset id.
-6. `query_scope: "source"` uses direct connector or source SQL and requires `connection_name` or `connection_id`.
-7. The runtime returns rows plus scope-aware execution metadata.
+4. Semantic graphs are not direct semantic SQL targets in V1; semantic SQL still requires an executable semantic model.
+5. `query_scope: "dataset"` uses dataset-backed runtime SQL over runtime datasets.
+6. `selected_datasets` is only valid for dataset scope and narrows planner scope by dataset id.
+7. `query_scope: "source"` uses direct connector or source SQL and requires `connection_name` or `connection_id`.
+8. The runtime returns rows plus scope-aware execution metadata.
 
 ## Semantic SQL Shape
 

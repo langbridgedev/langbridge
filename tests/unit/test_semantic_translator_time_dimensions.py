@@ -135,6 +135,31 @@ def test_time_typed_dimension_is_cast_before_date_comparison() -> None:
     assert "0 + INTERVAL" not in sql
 
 
+def test_sqlite_time_dimension_year_bucket_uses_portable_date_trunc() -> None:
+    model = SemanticModel(
+        version="1.0",
+        tables={
+            "orders": Table(
+                name="orders",
+                dimensions=[Dimension(name="order_date", type="time")],
+                measures=[Measure(name="amount", type="number", aggregation="sum")],
+            )
+        },
+    )
+    query = SemanticQuery.model_validate(
+        {
+            "measures": ["orders.amount"],
+            "timeDimensions": [{"dimension": "orders.order_date", "granularity": "year"}],
+        }
+    )
+
+    sql = SemanticQueryEngine().compile(query, model, dialect="sqlite").sql
+
+    assert 'DATE_TRUNC(\'YEAR\', CAST(t0."order_date" AS TIMESTAMP))' in sql
+    assert "JULIANDAY" not in sql
+    assert "DATE(0" not in sql
+
+
 def test_time_dimension_uses_underlying_column_expression_in_snowflake() -> None:
     model = SemanticModel.model_validate(
         {
@@ -178,9 +203,109 @@ def test_time_dimension_uses_underlying_column_expression_in_snowflake() -> None
 
     sql = SemanticQueryEngine().compile(query, model, dialect="snowflake").sql
 
+    assert 'DATE_TRUNC(\'YEAR\', CAST(t0."STRIKE_DATE" AS TIMESTAMP))' in sql
     assert 'CAST(t0."STRIKE_DATE" AS TIMESTAMP)' in sql
     assert 't0."STRIKE_DATE" <= \'2025-12-31\'' in sql
     assert 't0."strike_date"' not in sql
+
+
+def test_snowflake_year_bucket_compiles_portably_for_benchmark_annualised_metric() -> None:
+    model = SemanticModel.model_validate(
+        {
+            "version": "1.0",
+            "name": "product_performance",
+            "datasets": {
+                "benchmark_stream": {
+                    "relation_name": "benchmark_stream",
+                    "dimensions": [
+                        {
+                            "name": "benchmark_stream_bk_key",
+                            "expression": "BENCHMARK_STREAM_BK_KEY",
+                            "type": "number",
+                        },
+                        {
+                            "name": "benchmark_stream_name",
+                            "expression": "BENCHMARK_STREAM_NAME",
+                            "type": "string",
+                        },
+                    ],
+                },
+                "benchmark_returns": {
+                    "relation_name": "benchmark_returns",
+                    "dimensions": [
+                        {
+                            "name": "benchmark_stream_bk_key",
+                            "expression": "BENCHMARK_STREAM_BK_KEY",
+                            "type": "number",
+                        },
+                        {
+                            "name": "strike_date",
+                            "expression": "STRIKE_DATE",
+                            "type": "time",
+                        },
+                    ],
+                    "measures": [
+                        {
+                            "name": "benchmark_return",
+                            "expression": "RETURN",
+                            "type": "number",
+                            "aggregation": "avg",
+                        }
+                    ],
+                },
+            },
+            "relationships": [
+                {
+                    "name": "benchmark_returns_to_benchmark_stream",
+                    "source_dataset": "benchmark_returns",
+                    "source_field": "benchmark_stream_bk_key",
+                    "target_dataset": "benchmark_stream",
+                    "target_field": "benchmark_stream_bk_key",
+                    "type": "many_to_one",
+                }
+            ],
+            "metrics": {
+                "benchmark_annualised_return": {
+                    "expression": (
+                        "CASE "
+                        "WHEN DATEDIFF('month', MIN(benchmark_returns.STRIKE_DATE), MAX(benchmark_returns.STRIKE_DATE)) + 1 > 0 "
+                        "THEN POWER(1 + (EXP(SUM(LN(1 + benchmark_returns.RETURN))) - 1), "
+                        "12.0 / (DATEDIFF('month', MIN(benchmark_returns.STRIKE_DATE), MAX(benchmark_returns.STRIKE_DATE)) + 1)) - 1 "
+                        "ELSE NULL END"
+                    )
+                }
+            },
+        }
+    )
+    query = SemanticQuery.model_validate(
+        {
+            "measures": ["benchmark_annualised_return"],
+            "timeDimensions": [{"dimension": "benchmark_returns.strike_date", "granularity": "year"}],
+            "filters": [
+                {
+                    "member": "benchmark_stream.benchmark_stream_name",
+                    "operator": "ilike",
+                    "values": ["MSCI India NR USD"],
+                },
+                {
+                    "member": "benchmark_returns.strike_date",
+                    "operator": "gte",
+                    "values": ["2020-01-01"],
+                },
+                {
+                    "member": "benchmark_returns.strike_date",
+                    "operator": "lt",
+                    "values": ["2026-01-01"],
+                },
+            ],
+        }
+    )
+
+    sql = SemanticQueryEngine().compile(query, model, dialect="snowflake").sql
+
+    assert 'DATE_TRUNC(\'YEAR\', CAST(t0."STRIKE_DATE" AS TIMESTAMP))' in sql
+    assert "DATEADD(YEAR, DATEDIFF(YEAR, 0" not in sql
+    assert "CASE WHEN DATEDIFF(MONTH, MIN(t0.STRIKE_DATE), MAX(t0.STRIKE_DATE)) + 1 > 0" in sql
 
 
 def test_measure_expression_uses_underlying_column_name_not_measure_name() -> None:

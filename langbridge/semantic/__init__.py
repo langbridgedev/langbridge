@@ -9,12 +9,18 @@ from .model import (
     Relationship,
     Metric,
 )
-from .unified_query import (
-    WorkspaceAwareQueryContext,
-    UnifiedSourceModel,
-    apply_workspace_aware_context,
-    build_unified_semantic_model,
+from .graph import (
+    SemanticGraph,
+    SemanticGraphRelationship,
+    SemanticGraphSourceModel,
 )
+from .graph_compiler import (
+    SemanticGraphSource,
+    WorkspaceAwareQueryContext,
+    apply_workspace_aware_context,
+    compile_semantic_graph,
+)
+from .unified_query import UnifiedSourceModel, build_unified_semantic_model
 
 __all__ = [
     "SemanticModel",
@@ -26,8 +32,13 @@ __all__ = [
     "TableFilter",
     "Relationship",
     "Metric",
+    "SemanticGraph",
+    "SemanticGraphRelationship",
+    "SemanticGraphSourceModel",
+    "SemanticGraphSource",
     "WorkspaceAwareQueryContext",
     "UnifiedSourceModel",
     "apply_workspace_aware_context",
+    "compile_semantic_graph",
     "build_unified_semantic_model",
 ]

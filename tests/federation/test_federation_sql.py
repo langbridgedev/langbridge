@@ -92,9 +92,9 @@ def test_two_dataset_union_sql_plan_matches_union_two_datasets_golden() -> None:
     )
     assert actual == harness.expected_plan("sql_union_two_datasets")
     
-def test_two_dataset_union_sql_plan_matches_two_datasets_unified_golden() -> None:
+def test_two_dataset_union_sql_plan_matches_two_datasets_semantic_graph_golden() -> None:
     harness = FederationHarness()
-    model = harness.semantic.load_unified_model_fixture("commerce_marketing_unified")
+    model = harness.semantic.load_semantic_graph_fixture("commerce_marketing_graph")
     workflow = harness.build_workflow_for_model(
         model=model,
         source_by_dataset={

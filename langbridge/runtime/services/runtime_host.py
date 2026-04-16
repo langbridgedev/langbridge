@@ -110,10 +110,13 @@ class RuntimeHost:
             raise RuntimeError("SemanticQueryExecutionService is not configured for this runtime host.")
         return await self.services.semantic_query.execute_standard_query(*args, **kwargs)
 
-    async def query_unified_semantic(self, *args: Any, **kwargs: Any) -> Any:
+    async def query_semantic_graph(self, *args: Any, **kwargs: Any) -> Any:
         if self.services.semantic_query is None:
             raise RuntimeError("SemanticQueryExecutionService is not configured for this runtime host.")
-        return await self.services.semantic_query.execute_unified_query(*args, **kwargs)
+        return await self.services.semantic_query.execute_semantic_graph_query(*args, **kwargs)
+
+    async def query_unified_semantic(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.query_semantic_graph(*args, **kwargs)
 
     def parse_semantic_sql_query(self, *args: Any, **kwargs: Any) -> Any:
         service = self.services.semantic_sql_query or SemanticSqlQueryService()

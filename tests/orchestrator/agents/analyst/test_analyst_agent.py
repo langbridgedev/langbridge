@@ -282,6 +282,83 @@ def test_analyst_agent_falls_back_from_semantic_to_dataset_when_policy_allows() 
     assert dataset_tool.calls[0].error_history == ["Semantic SQL scope does not support the requested join."]
 
 
+def test_analyst_agent_rewrites_unsupported_semantic_shape_before_dataset_fallback() -> None:
+    semantic_failure_metadata = {
+        "scope_fallback_eligible": True,
+        "semantic_failure_kind": "unsupported_semantic_sql_shape",
+    }
+    semantic_tool = _StubTool(
+        [
+            _response(
+                status=AnalystOutcomeStatus.query_error,
+                query_scope=SqlQueryScope.semantic,
+                asset_type="semantic_model",
+                asset_id="semantic-model-1",
+                asset_name="sales_governed",
+                message="Semantic SQL filters only support literal values.",
+                metadata=semantic_failure_metadata,
+            ),
+            _response(
+                status=AnalystOutcomeStatus.query_error,
+                query_scope=SqlQueryScope.semantic,
+                asset_type="semantic_model",
+                asset_id="semantic-model-1",
+                asset_name="sales_governed",
+                message="Semantic SQL filters only support literal values.",
+                metadata=semantic_failure_metadata,
+            ),
+        ],
+        asset_type="semantic_model",
+        asset_id="semantic-model-1",
+        asset_name="sales_governed",
+        binding_name="sales",
+        query_scope=SqlQueryScope.semantic,
+        query_scope_policy=AnalystQueryScopePolicy.semantic_preferred,
+        keywords={"sales", "revenue", "region"},
+    )
+    dataset_tool = _StubTool(
+        [
+            _response(
+                status=AnalystOutcomeStatus.success,
+                query_scope=SqlQueryScope.dataset,
+                asset_type="dataset",
+                asset_id="dataset-1",
+                asset_name="sales_dataset",
+                rows=[("US", 10)],
+            )
+        ],
+        binding_name="sales",
+        query_scope=SqlQueryScope.dataset,
+        query_scope_policy=AnalystQueryScopePolicy.semantic_preferred,
+        keywords={"sales", "revenue", "region"},
+    )
+    llm = _RewriteLLM("Revenue by region from 2021-01-01 to 2025-12-31")
+    agent = AnalystAgent(llm, [semantic_tool, dataset_tool], max_retries=1)
+
+    response = agent.answer("Revenue by region over the last five years")
+
+    assert response.outcome is not None
+    assert response.outcome.status == AnalystOutcomeStatus.success
+    assert response.outcome.attempted_query_scope == SqlQueryScope.semantic
+    assert response.outcome.final_query_scope == SqlQueryScope.dataset
+    assert response.outcome.fallback_from_query_scope == SqlQueryScope.semantic
+    assert response.outcome.fallback_to_query_scope == SqlQueryScope.dataset
+    assert response.outcome.retry_attempted is True
+    assert response.outcome.rewrite_attempted is True
+    assert len(semantic_tool.calls) == 2
+    assert semantic_tool.calls[1].question == "Revenue by region from 2021-01-01 to 2025-12-31"
+    assert len(dataset_tool.calls) == 1
+    assert dataset_tool.calls[0].error_history == [
+        "Semantic SQL filters only support literal values.",
+        "Semantic SQL filters only support literal values.",
+    ]
+    assert [action.action for action in response.outcome.recovery_actions] == [
+        "retry_query",
+        "rewrite_question",
+        "fallback_query_scope",
+    ]
+
+
 def test_analyst_agent_does_not_fallback_when_policy_forbids_it() -> None:
     semantic_tool = _StubTool(
         [

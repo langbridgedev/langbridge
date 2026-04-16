@@ -138,7 +138,7 @@ def seed_commerce_database(db_path: Path, *, customers: list[Customer]) -> dict[
         """
         CREATE TABLE orders (
             order_id TEXT PRIMARY KEY,
-            order_date TEXT NOT NULL,
+            order_date DATE NOT NULL,
             customer_id INTEGER NOT NULL,
             order_channel TEXT NOT NULL,
             fulfillment_region TEXT NOT NULL,
@@ -364,14 +364,14 @@ def seed_growth_database(
             acquisition_source TEXT NOT NULL,
             region TEXT NOT NULL,
             country TEXT NOT NULL,
-            signup_date TEXT NOT NULL,
+            signup_date DATE NOT NULL,
             account_manager TEXT NOT NULL
         );
 
         CREATE TABLE campaign_attribution_monthly (
             customer_month_channel_key TEXT PRIMARY KEY,
             customer_id INTEGER NOT NULL,
-            attribution_month TEXT NOT NULL,
+            attribution_month DATE NOT NULL,
             acquisition_channel TEXT NOT NULL,
             channel_month_key TEXT NOT NULL,
             primary_campaign TEXT NOT NULL,
@@ -384,7 +384,7 @@ def seed_growth_database(
         CREATE TABLE support_tickets (
             ticket_id TEXT PRIMARY KEY,
             customer_id INTEGER NOT NULL,
-            opened_date TEXT NOT NULL,
+            opened_date DATE NOT NULL,
             ticket_type TEXT NOT NULL,
             severity TEXT NOT NULL,
             resolution_hours REAL NOT NULL

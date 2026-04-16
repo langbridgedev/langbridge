@@ -188,7 +188,7 @@ async def test_runtime_semantic_query_service_path_builds_dataset_backed_workflo
 
 
 @pytest.mark.anyio
-async def test_runtime_unified_semantic_query_path_builds_multi_model_workflow() -> None:
+async def test_runtime_semantic_graph_query_path_builds_multi_model_workflow() -> None:
     harness = SemanticHarness()
     workspace_id = uuid.uuid4()
     commerce_model_id = uuid.uuid4()
@@ -251,7 +251,7 @@ async def test_runtime_unified_semantic_query_path_builds_multi_model_workflow()
         semantic_model_provider=_FakeSemanticModelProvider(model_records),
     )
 
-    result = await service.execute_unified_query(
+    result = await service.execute_semantic_graph_query(
         workspace_id=workspace_id,
         semantic_model_ids=[commerce_model_id, marketing_model_id],
         semantic_query=harness.load_query_fixture(
@@ -272,7 +272,7 @@ async def test_runtime_unified_semantic_query_path_builds_multi_model_workflow()
 
     assert result.response.data == harness.expected_rows("federated_three_dataset_smq")
     assert result.response.semantic_model_ids == [commerce_model_id, marketing_model_id]
-    assert result.response.connector_id == SemanticQueryExecutionService.build_unified_execution_connector_id(
+    assert result.response.connector_id == SemanticQueryExecutionService.build_semantic_graph_execution_connector_id(
         workspace_id=workspace_id
     )
     assert "Marketing__campaigns__spend" in result.compiled_sql

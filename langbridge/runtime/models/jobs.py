@@ -13,9 +13,9 @@ from langbridge.runtime.models.metadata import (
     _normalize_enum_value,
 )
 from langbridge.runtime.models.semantic import (
-    UnifiedSemanticMetricRequest,
-    UnifiedSemanticRelationshipRequest,
-    UnifiedSemanticSourceModelRequest,
+    SemanticGraphMetricRequest,
+    SemanticGraphRelationshipRequest,
+    SemanticGraphSourceModelRequest,
 )
 from langbridge.runtime.models.state import ConnectorSyncMode
 
@@ -253,14 +253,22 @@ class CreateSemanticQueryJobRequest(RuntimeJobRequestModel):
     job_type: JobType = JobType.SEMANTIC_QUERY
     workspace_id: uuid.UUID
     actor_id: uuid.UUID = _actor_id_field()
-    query_scope: Literal["semantic_model", "unified"] = "semantic_model"
+    query_scope: Literal["semantic_model", "semantic_graph"] = "semantic_model"
     semantic_model_id: uuid.UUID | None = None
     connector_id: uuid.UUID | None = None
     semantic_model_ids: list[uuid.UUID] | None = None
-    source_models: list[UnifiedSemanticSourceModelRequest] | None = None
-    relationships: list[UnifiedSemanticRelationshipRequest] | None = None
-    metrics: dict[str, UnifiedSemanticMetricRequest] | None = None
+    source_models: list[SemanticGraphSourceModelRequest] | None = None
+    relationships: list[SemanticGraphRelationshipRequest] | None = None
+    metrics: dict[str, SemanticGraphMetricRequest] | None = None
     query: dict[str, Any]
+
+    @field_validator("query_scope", mode="before")
+    @classmethod
+    def _normalize_query_scope(cls, value: Any) -> str:
+        normalized = str(getattr(value, "value", value) or "").strip().lower()
+        if normalized == "unified":
+            return "semantic_graph"
+        return normalized or "semantic_model"
 
     @model_validator(mode="after")
     def _validate_scope_payload(self) -> "CreateSemanticQueryJobRequest":
@@ -269,10 +277,10 @@ class CreateSemanticQueryJobRequest(RuntimeJobRequestModel):
                 raise ValueError("semantic_model_id is required for semantic_model query scope.")
             return self
 
-        if self.query_scope == "unified":
+        if self.query_scope == "semantic_graph":
             if not self.semantic_model_ids:
                 raise ValueError(
-                    "semantic_model_ids must include at least one model id for unified query scope."
+                    "semantic_model_ids must include at least one model id for semantic_graph query scope."
                 )
             return self
 

@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import duckdb
 import yaml
 
 from langbridge.client import LangbridgeClient
@@ -23,6 +24,32 @@ def test_complex_runtime_example_boots_and_executes_queries(tmp_path: Path) -> N
 
     source_config_path = example_dir / "langbridge_config.yml"
     config_payload = yaml.safe_load(source_config_path.read_text(encoding="utf-8"))
+    growth_agent = next(agent for agent in config_payload["agents"] if agent["name"] == "growth_analyst")
+    growth_tools = growth_agent["definition"]["tools"]
+    assert len(growth_tools) == 1
+    growth_tool = growth_tools[0]
+    assert growth_tool["name"] == "growth_analytical_sql"
+    assert growth_tool["config"]["semantic_model_ids"] == ["growth_performance"]
+    assert growth_tool["config"]["dataset_ids"] == [
+        "customer_month_revenue",
+        "campaign_attribution",
+        "channel_spend_targets",
+        "customer_month_support",
+        "customer_profiles",
+    ]
+    assert growth_tool["config"]["query_scope_policy"] == "semantic_preferred"
+
+    growth_db_path = example_dir / "data" / "growth_ops.db"
+    duckdb_conn = duckdb.connect()
+    try:
+        column_type = duckdb_conn.execute(
+            "SELECT typeof(attribution_month) FROM sqlite_scan(?, 'campaign_attribution_monthly') LIMIT 1",
+            [str(growth_db_path)],
+        ).fetchone()
+        assert column_type == ("DATE",)
+    finally:
+        duckdb_conn.close()
+
     runtime_payload = config_payload.setdefault("runtime", {})
     runtime_payload["metadata_store"] = {"type": "in_memory"}
     runtime_payload["migrations"] = {"auto_apply": False}
@@ -115,6 +142,25 @@ def test_complex_runtime_example_boots_and_executes_queries(tmp_path: Path) -> N
             first_growth_row = growth_result.rows[0]
             assert "customer_month_revenue.monthly_net_revenue" in first_growth_row
             assert "campaign_attribution.assisted_signups" in first_growth_row
+
+            growth_by_year = client.semantic.query(
+                "growth_performance",
+                measures=["customer_month_revenue.monthly_net_revenue"],
+                dimensions=["customer_month_revenue.order_channel"],
+                time_dimensions=[
+                    {
+                        "dimension": "customer_month_revenue.revenue_month",
+                        "granularity": "year",
+                    }
+                ],
+                order={"customer_month_revenue.revenue_month": "asc"},
+                limit=20,
+            )
+            assert growth_by_year.status == "succeeded"
+            assert growth_by_year.rows
+            first_growth_year_row = growth_by_year.rows[0]
+            assert "customer_month_revenue.monthly_net_revenue" in first_growth_year_row
+            assert "customer_month_revenue.revenue_month_year" in first_growth_year_row
 
             support_preview = client.datasets.query("customer_month_support", limit=5)
             assert support_preview.status == "succeeded"

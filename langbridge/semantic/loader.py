@@ -6,12 +6,12 @@ from typing import Any
 import yaml
 
 from langbridge.semantic.errors import SemanticModelError
-from langbridge.semantic.model import Metric, Relationship, SemanticModel
-from langbridge.semantic.unified_model import (
-    UnifiedSemanticModel,
-    UnifiedSemanticModelSource,
-    UnifiedSemanticRelationship,
+from langbridge.semantic.graph import (
+    SemanticGraph,
+    SemanticGraphRelationship,
+    SemanticGraphSourceModel,
 )
+from langbridge.semantic.model import Metric, Relationship, SemanticModel
 
 
 def load_semantic_model(source: str | Mapping[str, Any] | Path) -> SemanticModel:
@@ -19,9 +19,13 @@ def load_semantic_model(source: str | Mapping[str, Any] | Path) -> SemanticModel
     return parse_semantic_model_payload(payload)
 
 
-def load_unified_semantic_model(source: str | Mapping[str, Any] | Path) -> UnifiedSemanticModel:
+def load_semantic_graph(source: str | Mapping[str, Any] | Path) -> SemanticGraph:
     payload = _load_mapping(source)
-    return parse_unified_semantic_model_payload(payload)
+    return parse_semantic_graph_payload(payload)
+
+
+def load_unified_semantic_model(source: str | Mapping[str, Any] | Path) -> SemanticGraph:
+    return load_semantic_graph(source)
 
 
 def parse_semantic_model_payload(payload: Mapping[str, Any]) -> SemanticModel:
@@ -31,32 +35,32 @@ def parse_semantic_model_payload(payload: Mapping[str, Any]) -> SemanticModel:
         or "semantic_models" in payload
     ):
         raise SemanticModelError(
-            "Unified semantic model payloads must be loaded with load_unified_semantic_model()."
+            "Semantic graph payloads must be loaded with load_semantic_graph()."
         )
     if "datasets" in payload or "tables" in payload:
         return _parse_standard_payload(payload)
     raise SemanticModelError("Semantic model payload must define datasets.")
 
 
-def parse_unified_semantic_model_payload(payload: Mapping[str, Any]) -> UnifiedSemanticModel:
+def parse_semantic_graph_payload(payload: Mapping[str, Any]) -> SemanticGraph:
     if "datasets" in payload or "tables" in payload:
         raise SemanticModelError(
-            "Unified semantic models cannot define datasets, tables, dimensions, or measures."
+            "Semantic graphs cannot define datasets, tables, dimensions, or measures."
         )
     if "joins" in payload:
         raise SemanticModelError(
-            "Unified semantic models must define relationships instead of joins."
+            "Semantic graphs must define relationships instead of joins."
         )
     if "semantic_models" in payload:
         raise SemanticModelError(
-            "Unified semantic models must reference source_models instead of embedding semantic_models."
+            "Semantic graphs must reference source_models instead of embedding semantic_models."
         )
 
     source_models_raw = payload.get("source_models") or payload.get("sourceModels")
     if not isinstance(source_models_raw, list) or not source_models_raw:
-        raise SemanticModelError("Unified semantic model must define at least one source model.")
+        raise SemanticModelError("Semantic graph must define at least one source model.")
 
-    relationships = _parse_unified_relationships(payload.get("relationships"))
+    relationships = _parse_semantic_graph_relationships(payload.get("relationships"))
     metrics = _parse_metrics(payload.get("metrics"))
 
     normalized = {
@@ -68,9 +72,13 @@ def parse_unified_semantic_model_payload(payload: Mapping[str, Any]) -> UnifiedS
         "metrics": metrics,
     }
     try:
-        return UnifiedSemanticModel.model_validate(normalized)
+        return SemanticGraph.model_validate(normalized)
     except Exception as exc:
-        raise SemanticModelError(f"Invalid unified semantic model: {exc}") from exc
+        raise SemanticModelError(f"Invalid semantic graph: {exc}") from exc
+
+
+def parse_unified_semantic_model_payload(payload: Mapping[str, Any]) -> SemanticGraph:
+    return parse_semantic_graph_payload(payload)
 
 
 def _load_mapping(source: str | Mapping[str, Any] | Path) -> dict[str, Any]:
@@ -103,15 +111,15 @@ def _parse_standard_payload(payload: Mapping[str, Any]) -> SemanticModel:
     return SemanticModel.model_validate(normalized)
 
 
-def _parse_source_models(source_models_raw: list[Any]) -> list[UnifiedSemanticModelSource]:
-    parsed: list[UnifiedSemanticModelSource] = []
+def _parse_source_models(source_models_raw: list[Any]) -> list[SemanticGraphSourceModel]:
+    parsed: list[SemanticGraphSourceModel] = []
     for entry in source_models_raw:
         if not isinstance(entry, Mapping):
             continue
         try:
-            parsed.append(UnifiedSemanticModelSource.model_validate(dict(entry)))
+            parsed.append(SemanticGraphSourceModel.model_validate(dict(entry)))
         except Exception as exc:
-            raise SemanticModelError(f"Invalid unified source model: {exc}") from exc
+            raise SemanticModelError(f"Invalid semantic graph source model: {exc}") from exc
     return parsed
 
 
@@ -140,18 +148,22 @@ def _parse_relationships(value: Any) -> list[Relationship]:
     return relationships
 
 
-def _parse_unified_relationships(value: Any) -> list[UnifiedSemanticRelationship]:
+def _parse_semantic_graph_relationships(value: Any) -> list[SemanticGraphRelationship]:
     if not isinstance(value, list):
         return []
-    relationships: list[UnifiedSemanticRelationship] = []
+    relationships: list[SemanticGraphRelationship] = []
     for item in value:
         if not isinstance(item, Mapping):
             continue
         try:
-            relationships.append(UnifiedSemanticRelationship.model_validate(dict(item)))
+            relationships.append(SemanticGraphRelationship.model_validate(dict(item)))
         except Exception as exc:
-            raise SemanticModelError(f"Invalid unified semantic relationship: {exc}") from exc
+            raise SemanticModelError(f"Invalid semantic graph relationship: {exc}") from exc
     return relationships
+
+
+def _parse_unified_relationships(value: Any) -> list[SemanticGraphRelationship]:
+    return _parse_semantic_graph_relationships(value)
 
 
 def _parse_metrics(value: Any) -> dict[str, Metric]:

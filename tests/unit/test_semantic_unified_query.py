@@ -8,15 +8,15 @@ from langbridge.semantic.model import (
     Table,
 )
 from langbridge.semantic.query import SemanticQuery, SemanticQueryEngine
-from langbridge.semantic.unified_query import (
+from langbridge.semantic.graph_compiler import (
+    SemanticGraphSource,
     WorkspaceAwareQueryContext,
-    UnifiedSourceModel,
     apply_workspace_aware_context,
-    build_unified_semantic_model,
+    compile_semantic_graph,
 )
 
 
-def test_build_unified_semantic_model_resolves_graph_relationships_and_metric_references() -> None:
+def test_compile_semantic_graph_resolves_graph_relationships_and_metric_references() -> None:
     sales_model_id = uuid.uuid4()
     marketing_model_id = uuid.uuid4()
     connector_a = uuid.uuid4()
@@ -50,10 +50,10 @@ def test_build_unified_semantic_model_resolves_graph_relationships_and_metric_re
         },
     )
 
-    unified_model, table_connector_map = build_unified_semantic_model(
+    compiled_model, table_connector_map = compile_semantic_graph(
         source_models=[
-            UnifiedSourceModel(model_id=sales_model_id, model=sales_model, connector_id=connector_a, key="Sales"),
-            UnifiedSourceModel(model_id=marketing_model_id, model=marketing_model, connector_id=connector_b, key="Marketing"),
+            SemanticGraphSource(model_id=sales_model_id, model=sales_model, connector_id=connector_a, key="Sales"),
+            SemanticGraphSource(model_id=marketing_model_id, model=marketing_model, connector_id=connector_b, key="Marketing"),
         ],
         relationships=[
             {
@@ -73,8 +73,8 @@ def test_build_unified_semantic_model_resolves_graph_relationships_and_metric_re
         },
     )
 
-    assert sorted(unified_model.tables.keys()) == ["Marketing__campaigns", "Sales__orders"]
-    assert unified_model.relationships == [
+    assert sorted(compiled_model.tables.keys()) == ["Marketing__campaigns", "Sales__orders"]
+    assert compiled_model.relationships == [
         Relationship(
             name="sales_to_marketing",
             source_dataset="Sales__orders",
@@ -85,8 +85,8 @@ def test_build_unified_semantic_model_resolves_graph_relationships_and_metric_re
             type="left",
         )
     ]
-    assert unified_model.metrics is not None
-    assert unified_model.metrics["marketing_roi"].expression == "Sales__orders.revenue / Marketing__campaigns.spend"
+    assert compiled_model.metrics is not None
+    assert compiled_model.metrics["marketing_roi"].expression == "Sales__orders.revenue / Marketing__campaigns.spend"
     assert table_connector_map["Sales__orders"] == connector_a
     assert table_connector_map["Marketing__campaigns"] == connector_b
 

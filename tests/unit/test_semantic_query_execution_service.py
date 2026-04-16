@@ -12,11 +12,11 @@ import pytest
 from langbridge.runtime.persistence.db.dataset import DatasetRecord
 from langbridge.runtime.services.semantic_query_execution_service import (
     SemanticQueryExecutionService,
-    _normalize_unified_relationship_payload,
+    _normalize_semantic_graph_relationship_payload,
 )
 from langbridge.runtime.services.errors import ExecutionValidationError
 from langbridge.runtime.models import (
-    UnifiedSemanticRelationshipRequest,
+    SemanticGraphRelationshipRequest,
 )
 from langbridge.semantic.model import Dimension, SemanticModel, Table
 from langbridge.semantic.query import SemanticQuery
@@ -37,7 +37,7 @@ class _ModelRecord:
     connector_id: uuid.UUID | None = None
 
 
-def test_parse_unified_model_config_from_record_reads_source_models() -> None:
+def test_parse_semantic_graph_config_from_record_reads_source_models() -> None:
     source_model_id = uuid.uuid4()
     target_model_id = uuid.uuid4()
     payload = {
@@ -57,7 +57,7 @@ def test_parse_unified_model_config_from_record_reads_source_models() -> None:
     }
     record = _ModelRecord(id=uuid.uuid4(), content_json=json.dumps(payload))
 
-    config = SemanticQueryExecutionService.parse_unified_model_config_from_record(record)
+    config = SemanticQueryExecutionService.parse_semantic_graph_config_from_record(record)
 
     assert config is not None
     assert config.semantic_model_ids == [source_model_id]
@@ -70,21 +70,21 @@ def test_parse_unified_model_config_from_record_reads_source_models() -> None:
     assert config.metrics == payload["metrics"]
 
 
-def test_parse_unified_model_config_from_record_returns_none_for_standard_model() -> None:
+def test_parse_semantic_graph_config_from_record_returns_none_for_standard_model() -> None:
     record = _ModelRecord(id=uuid.uuid4(), content_json=json.dumps({"version": "1.0", "tables": {}}))
-    assert SemanticQueryExecutionService.parse_unified_model_config_from_record(record) is None
+    assert SemanticQueryExecutionService.parse_semantic_graph_config_from_record(record) is None
 
 
-def test_parse_unified_model_config_from_record_requires_source_models_metadata() -> None:
+def test_parse_semantic_graph_config_from_record_requires_source_models_metadata() -> None:
     payload = {"version": "1.0", "semantic_models": [{"version": "1.0", "tables": {}}]}
     record = _ModelRecord(id=uuid.uuid4(), content_json=json.dumps(payload))
 
     with pytest.raises(ExecutionValidationError, match="source_models"):
-        SemanticQueryExecutionService.parse_unified_model_config_from_record(record)
+        SemanticQueryExecutionService.parse_semantic_graph_config_from_record(record)
 
 
-def test_normalize_unified_relationship_payload_uses_snake_case_field_names() -> None:
-    relationship = UnifiedSemanticRelationshipRequest(
+def test_normalize_semantic_graph_relationship_payload_uses_snake_case_field_names() -> None:
+    relationship = SemanticGraphRelationshipRequest(
         source_semantic_model_id=uuid.uuid4(),
         source_field="sales.customer_id",
         target_semantic_model_id=uuid.uuid4(),
@@ -92,7 +92,7 @@ def test_normalize_unified_relationship_payload_uses_snake_case_field_names() ->
         relationship_type="inner",
     )
 
-    normalized = _normalize_unified_relationship_payload(relationship)
+    normalized = _normalize_semantic_graph_relationship_payload(relationship)
 
     assert "source_semantic_model_id" in normalized
     assert "sourceSemanticModelId" not in normalized
@@ -284,7 +284,7 @@ def _dataset_stub(
 
 
 @pytest.mark.anyio
-async def test_execute_unified_query_routes_through_federated_tool() -> None:
+async def test_execute_semantic_graph_query_routes_through_federated_tool() -> None:
     pytest.importorskip("pyarrow")
 
     workspace_id = uuid.uuid4()
@@ -339,7 +339,7 @@ async def test_execute_unified_query_routes_through_federated_tool() -> None:
         semantic_model_provider=provider,
     )
 
-    result = await service.execute_unified_query(
+    result = await service.execute_semantic_graph_query(
         workspace_id=workspace_id,
         semantic_query=SemanticQuery(dimensions=["Orders__orders.id"], limit=10),
         semantic_model_ids=[model_id],
@@ -354,7 +354,7 @@ async def test_execute_unified_query_routes_through_federated_tool() -> None:
 
 
 @pytest.mark.anyio
-async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() -> None:
+async def test_execute_semantic_graph_query_resolves_dataset_backed_tables_per_table() -> None:
     pytest.importorskip("pyarrow")
 
     workspace_id = uuid.uuid4()
@@ -433,7 +433,7 @@ async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() 
         semantic_model_provider=provider,
     )
 
-    result = await service.execute_unified_query(
+    result = await service.execute_semantic_graph_query(
         workspace_id=workspace_id,
         semantic_query=SemanticQuery(dimensions=["Inventory__orders.id"], limit=10),
         semantic_model_ids=[model_id],
@@ -449,5 +449,104 @@ async def test_execute_unified_query_resolves_dataset_backed_tables_per_table() 
     assert inventory_binding["connector_id"] == str(warehouse_connector_id)
 
 
+@pytest.mark.anyio
+async def test_execute_standard_query_uses_duckdb_semantic_execution_for_sqlite_workflows() -> None:
+    workspace_id = uuid.uuid4()
+    model_id = uuid.uuid4()
+    dataset_id = uuid.uuid4()
+    connector_id = uuid.uuid4()
 
+    semantic_model = SemanticModel.model_validate(
+        {
+            "version": "1.0",
+            "datasets": {
+                "orders": {
+                    "dataset_id": str(dataset_id),
+                    "relation_name": "orders",
+                    "dimensions": [
+                        {"name": "order_date", "expression": "order_date", "type": "time"},
+                        {"name": "order_channel", "expression": "order_channel", "type": "string"},
+                    ],
+                    "measures": [
+                        {
+                            "name": "revenue",
+                            "expression": "revenue",
+                            "type": "number",
+                            "aggregation": "sum",
+                        }
+                    ],
+                }
+            },
+        }
+    )
+    provider = _FakeSemanticModelProvider(
+        {
+            model_id: _ModelRecord(
+                id=model_id,
+                name="Orders",
+                content_yaml=semantic_model.yml_dump(),
+                content_json=semantic_model.model_dump_json(exclude_none=True),
+                connector_id=connector_id,
+            )
+        }
+    )
+    dataset_repo = _FakeDatasetRepository(
+        {
+            dataset_id: _dataset_stub(
+                dataset_id=dataset_id,
+                workspace_id=workspace_id,
+                connection_id=connector_id,
+                name="orders_table",
+                dataset_type="TABLE",
+                source_kind="database",
+                connector_kind="sqlite",
+                storage_kind="table",
+                dialect="sqlite",
+                schema_name=None,
+                table_name="orders",
+                storage_uri=None,
+                file_config_json=None,
+            )
+        }
+    )
+    tool = _FakeFederatedQueryTool(
+        rows=[
+            {
+                "orders__order_channel": "Direct",
+                "orders__order_date_year": "2024-01-01",
+                "orders__revenue": 42,
+            }
+        ]
+    )
+    service = SemanticQueryExecutionService(
+        dataset_repository=dataset_repo,
+        federated_query_tool=tool,
+        logger=logging.getLogger(__name__),
+        semantic_model_provider=provider,
+    )
+
+    result = await service.execute_standard_query(
+        workspace_id=workspace_id,
+        semantic_model_id=model_id,
+        semantic_query=SemanticQuery.model_validate(
+            {
+                "measures": ["orders.revenue"],
+                "dimensions": ["orders.order_channel"],
+                "timeDimensions": [{"dimension": "orders.order_date", "granularity": "year"}],
+                "limit": 20,
+            }
+        ),
+    )
+
+    assert result.response.data == [
+        {
+            "orders__order_channel": "Direct",
+            "orders__order_date_year": "2024-01-01",
+            "orders__revenue": 42,
+        }
+    ]
+    assert result.compiled_sql
+    assert "DATE_TRUNC('YEAR'" in result.compiled_sql
+    assert "JULIANDAY" not in result.compiled_sql
+    assert tool.calls[0]["dialect"] == "duckdb"
 

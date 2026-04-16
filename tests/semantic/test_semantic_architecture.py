@@ -1,7 +1,7 @@
 
 import pytest
 
-from langbridge.semantic.loader import load_unified_semantic_model
+from langbridge.semantic.loader import load_semantic_graph, load_unified_semantic_model
 
 from tests.helpers.semantic_harness import SemanticHarness
 
@@ -45,28 +45,37 @@ def test_vector_dimension_block_is_available_on_fixture_model() -> None:
     assert country.vector.store.type == "managed_faiss"
 
 
-def test_unified_semantic_fixture_loads_and_materializes_joinable_runtime_model() -> None:
+def test_semantic_graph_fixture_loads_and_materializes_joinable_runtime_model() -> None:
     harness = SemanticHarness()
-    raw_unified = load_unified_semantic_model(
-        harness.read_text("semantic_models", "commerce_marketing_unified.yml")
+    semantic_graph = load_semantic_graph(
+        harness.read_text("semantic_models", "commerce_marketing_graph.yml")
     )
-    merged_model = harness.load_unified_model_fixture("commerce_marketing_unified")
+    compiled_model = harness.load_semantic_graph_fixture("commerce_marketing_graph")
 
-    assert [source.alias for source in raw_unified.source_models] == ["Commerce", "Marketing"]
-    assert sorted(merged_model.datasets) == [
+    assert [source.alias for source in semantic_graph.source_models] == ["Commerce", "Marketing"]
+    assert sorted(compiled_model.datasets) == [
         "Commerce__customers",
         "Commerce__orders",
         "Marketing__campaigns",
     ]
-    assert merged_model.relationships is not None
-    assert [relationship.name for relationship in merged_model.relationships] == [
+    assert compiled_model.relationships is not None
+    assert [relationship.name for relationship in compiled_model.relationships] == [
         "Commerce__orders_to_customers",
         "commerce_to_marketing",
     ]
-    assert merged_model.metrics is not None
-    assert merged_model.metrics["revenue_minus_spend"].expression == (
+    assert compiled_model.metrics is not None
+    assert compiled_model.metrics["revenue_minus_spend"].expression == (
         "Commerce__orders.revenue - Marketing__campaigns.spend"
     )
+
+def test_legacy_unified_loader_alias_still_loads_semantic_graph_payloads() -> None:
+    harness = SemanticHarness()
+    semantic_graph = load_unified_semantic_model(
+        harness.read_text("semantic_models", "commerce_marketing_unified.yml")
+    )
+
+    assert semantic_graph.name == "CommerceMarketing"
+    assert [source.alias for source in semantic_graph.source_models] == ["Commerce", "Marketing"]
 
 
 @pytest.mark.parametrize(
@@ -94,13 +103,13 @@ def test_semantic_translation_matches_postgres_goldens(query_name: str) -> None:
     )
 
 
-def test_unified_semantic_translation_matches_postgres_golden() -> None:
+def test_semantic_graph_translation_matches_postgres_golden() -> None:
     harness = SemanticHarness()
     harness.assert_sql_fixture(
-        model_name="commerce_marketing_unified",
+        model_name="commerce_marketing_graph",
         query_name="unified_revenue_by_campaign",
         dialect="postgres",
-        unified=True,
+        semantic_graph=True,
     )
 
 

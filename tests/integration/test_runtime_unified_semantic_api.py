@@ -11,11 +11,11 @@ from langbridge.runtime.hosting.auth import RuntimeAuthConfig, RuntimeAuthMode
 from langbridge.runtime.bootstrap.configured_runtime import _stable_uuid
 
 
-def _build_runtime_with_configured_unified_semantic_models(
+def _build_runtime_with_configured_semantic_graphs(
     tmp_path: Path,
     *,
     include_relationships: bool = True,
-    duplicate_unified_definition: bool = False,
+    duplicate_graph_definition: bool = False,
 ):
     workspace_id = uuid.UUID("00000000-0000-0000-0000-000000000321")
     commerce_model_id = _stable_uuid(
@@ -27,7 +27,7 @@ def _build_runtime_with_configured_unified_semantic_models(
         f"{workspace_id}:marketing_performance",
     )
 
-    db_path = tmp_path / "runtime_unified_semantic.db"
+    db_path = tmp_path / "runtime_semantic_graph.db"
     connection = sqlite3.connect(db_path)
     cursor = connection.cursor()
     cursor.executescript(
@@ -68,9 +68,9 @@ def _build_runtime_with_configured_unified_semantic_models(
     connection.commit()
     connection.close()
 
-    unified_relationships = ""
+    graph_relationships = ""
     if include_relationships:
-        unified_relationships = f"""
+        graph_relationships = f"""
       relationships:
         - name: commerce_to_marketing
           source_semantic_model_id: "{commerce_model_id}"
@@ -80,14 +80,14 @@ def _build_runtime_with_configured_unified_semantic_models(
           relationship_type: left
 """
 
-    duplicate_unified_block = ""
-    if duplicate_unified_definition:
-        duplicate_unified_block = f"""
-  - name: commerce_marketing_unified_duplicate
+    duplicate_graph_block = ""
+    if duplicate_graph_definition:
+        duplicate_graph_block = f"""
+  - name: commerce_marketing_graph_duplicate
     model:
       version: "1.0"
-      name: commerce_marketing_unified_duplicate
-      description: Duplicate unified semantic definition for ambiguity tests.
+      name: commerce_marketing_graph_duplicate
+      description: Duplicate semantic graph definition for ambiguity tests.
       source_models:
         - id: "{commerce_model_id}"
           alias: Commerce
@@ -95,10 +95,10 @@ def _build_runtime_with_configured_unified_semantic_models(
         - id: "{marketing_model_id}"
           alias: Marketing
           name: Marketing
-{unified_relationships.rstrip()}
+{graph_relationships.rstrip()}
 """
 
-    config_path = tmp_path / "langbridge_runtime_unified_semantic.yml"
+    config_path = tmp_path / "langbridge_runtime_semantic_graph.yml"
     config_path.write_text(
         f"""
 version: 1
@@ -201,11 +201,11 @@ semantic_models:
               expression: spend
               type: number
               aggregation: sum
-  - name: commerce_marketing_unified
+  - name: commerce_marketing_graph
     model:
       version: "1.0"
-      name: commerce_marketing_unified
-      description: Configured unified semantic model for runtime API boundary tests.
+      name: commerce_marketing_graph
+      description: Configured semantic graph for runtime API boundary tests.
       source_models:
         - id: "{commerce_model_id}"
           alias: Commerce
@@ -213,8 +213,8 @@ semantic_models:
         - id: "{marketing_model_id}"
           alias: Marketing
           name: Marketing
-{unified_relationships.rstrip()}
-{duplicate_unified_block.rstrip()}
+{graph_relationships.rstrip()}
+{duplicate_graph_block.rstrip()}
 """.strip(),
         encoding="utf-8",
     )
@@ -232,8 +232,8 @@ def _create_runtime_app(runtime):
     )
 
 
-def test_runtime_unified_semantic_query_executes_joined_dimension_query(tmp_path: Path) -> None:
-    runtime = _build_runtime_with_configured_unified_semantic_models(tmp_path)
+def test_runtime_semantic_graph_query_executes_joined_dimension_query(tmp_path: Path) -> None:
+    runtime = _build_runtime_with_configured_semantic_graphs(tmp_path)
     client = TestClient(_create_runtime_app(runtime))
 
     response = client.post(
@@ -276,8 +276,8 @@ def test_runtime_unified_semantic_query_executes_joined_dimension_query(tmp_path
     assert "Marketing__campaign_touchpoints" in payload["generated_sql"]
 
 
-def test_runtime_unified_semantic_query_filters_across_model_boundaries(tmp_path: Path) -> None:
-    runtime = _build_runtime_with_configured_unified_semantic_models(tmp_path)
+def test_runtime_semantic_graph_query_filters_across_model_boundaries(tmp_path: Path) -> None:
+    runtime = _build_runtime_with_configured_semantic_graphs(tmp_path)
     client = TestClient(_create_runtime_app(runtime))
 
     response = client.post(
@@ -317,8 +317,8 @@ def test_runtime_unified_semantic_query_filters_across_model_boundaries(tmp_path
     assert "channel" in payload["generated_sql"]
 
 
-def test_runtime_unified_semantic_query_groups_and_aggregates_across_models(tmp_path: Path) -> None:
-    runtime = _build_runtime_with_configured_unified_semantic_models(tmp_path)
+def test_runtime_semantic_graph_query_groups_and_aggregates_across_models(tmp_path: Path) -> None:
+    runtime = _build_runtime_with_configured_semantic_graphs(tmp_path)
     client = TestClient(_create_runtime_app(runtime))
 
     response = client.post(
@@ -357,8 +357,8 @@ def test_runtime_unified_semantic_query_groups_and_aggregates_across_models(tmp_
     assert "GROUP BY" in payload["generated_sql"]
 
 
-def test_runtime_unified_semantic_query_rejects_missing_cross_model_relationship(tmp_path: Path) -> None:
-    runtime = _build_runtime_with_configured_unified_semantic_models(
+def test_runtime_semantic_graph_query_rejects_missing_cross_model_relationship(tmp_path: Path) -> None:
+    runtime = _build_runtime_with_configured_semantic_graphs(
         tmp_path,
         include_relationships=False,
     )
@@ -377,8 +377,8 @@ def test_runtime_unified_semantic_query_rejects_missing_cross_model_relationship
     assert "No join path" in response.json()["detail"]
 
 
-def test_runtime_unified_semantic_query_rejects_unknown_semantic_model(tmp_path: Path) -> None:
-    runtime = _build_runtime_with_configured_unified_semantic_models(tmp_path)
+def test_runtime_semantic_graph_query_rejects_unknown_semantic_model(tmp_path: Path) -> None:
+    runtime = _build_runtime_with_configured_semantic_graphs(tmp_path)
     client = TestClient(_create_runtime_app(runtime))
 
     response = client.post(
@@ -393,15 +393,15 @@ def test_runtime_unified_semantic_query_rejects_unknown_semantic_model(tmp_path:
     assert response.json()["detail"] == "Unknown semantic model 'unknown_semantic_model'."
 
 
-def test_runtime_unified_semantic_query_rejects_incompatible_unified_request_shape(tmp_path: Path) -> None:
-    runtime = _build_runtime_with_configured_unified_semantic_models(tmp_path)
+def test_runtime_semantic_graph_query_rejects_incompatible_graph_request_shape(tmp_path: Path) -> None:
+    runtime = _build_runtime_with_configured_semantic_graphs(tmp_path)
     client = TestClient(_create_runtime_app(runtime))
 
     response = client.post(
         "/api/runtime/v1/semantic/query",
         json={
             "semantic_models": [
-                "commerce_marketing_unified",
+                "commerce_marketing_graph",
                 "commerce_performance",
             ],
             "dimensions": ["shopify_orders.order_id"],
@@ -412,10 +412,31 @@ def test_runtime_unified_semantic_query_rejects_incompatible_unified_request_sha
     assert "cannot be combined with other semantic_models" in response.json()["detail"]
 
 
-def test_runtime_unified_semantic_query_rejects_ambiguous_configured_unified_match(tmp_path: Path) -> None:
-    runtime = _build_runtime_with_configured_unified_semantic_models(
+def test_runtime_semantic_graph_query_executes_named_configured_graph(tmp_path: Path) -> None:
+    runtime = _build_runtime_with_configured_semantic_graphs(tmp_path)
+    client = TestClient(_create_runtime_app(runtime))
+
+    response = client.post(
+        "/api/runtime/v1/semantic/query",
+        json={
+            "semantic_models": ["commerce_marketing_graph"],
+            "dimensions": ["shopify_orders.order_id", "campaign_touchpoints.channel"],
+            "order": {"shopify_orders.order_id": "asc"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "succeeded"
+    assert payload["semantic_model_id"] is None
+    assert len(payload["semantic_model_ids"]) == 2
+    assert payload["data"][0]["shopify_orders.order_id"] == "O-1"
+
+
+def test_runtime_semantic_graph_query_rejects_ambiguous_configured_graph_match(tmp_path: Path) -> None:
+    runtime = _build_runtime_with_configured_semantic_graphs(
         tmp_path,
-        duplicate_unified_definition=True,
+        duplicate_graph_definition=True,
     )
     client = TestClient(_create_runtime_app(runtime))
 
@@ -428,4 +449,4 @@ def test_runtime_unified_semantic_query_rejects_ambiguous_configured_unified_mat
     )
 
     assert response.status_code == 400
-    assert "Multiple configured unified semantic models match" in response.json()["detail"]
+    assert "Multiple configured semantic graphs match" in response.json()["detail"]

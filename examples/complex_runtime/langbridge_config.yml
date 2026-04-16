@@ -47,6 +47,7 @@ datasets:
           o.order_id,
           o.order_date,
           date(substr(o.order_date, 1, 7) || '-01') AS order_month,
+          CAST(date(substr(o.order_date, 1, 4) || '-01-01') AS INTEGER) AS order_year,
           o.customer_id,
           o.order_channel,
           o.fulfillment_region,
@@ -204,7 +205,10 @@ semantic_models:
               type: time
             - name: order_month
               expression: order_month
-              type: time
+              type: string
+            - name: order_year
+              expression: order_year
+              type: number
             - name: customer_id
               expression: customer_id
               type: number
@@ -571,16 +575,13 @@ agents:
         visualization_enabled: true
         mcp_enabled: true
       tools:
-        - name: growth_semantic_sql
+        - name: growth_analytical_sql
           tool_type: sql
-          description: Governed semantic access to marketing and customer growth performance.
+          description: Layered growth analytics with semantic-first routing and scoped dataset fallback.
           config:
             semantic_model_ids: [growth_performance]
-        - name: growth_dataset_sql
-          tool_type: sql
-          description: Scoped dataset SQL for attribution, spend plans, and support load.
-          config:
             dataset_ids: [customer_month_revenue, campaign_attribution, channel_spend_targets, customer_month_support, customer_profiles]
+            query_scope_policy: semantic_preferred
       access_policy:
         allowed_connectors: [commerce_warehouse, growth_warehouse, planning_files]
         denied_connectors: []

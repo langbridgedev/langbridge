@@ -1,6 +1,6 @@
 version: "1.0"
 name: Marketing
-description: Lightweight marketing semantic model used for unified semantic and federation planning tests.
+description: Lightweight marketing semantic model used for semantic graph and federation planning tests.
 datasets:
   campaigns:
     dataset_id: "33333333-3333-3333-3333-333333333333"
@@ -21,4 +21,3 @@ datasets:
         expression: spend
         type: number
         aggregation: sum
-

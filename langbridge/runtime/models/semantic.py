@@ -32,14 +32,14 @@ class SemanticQueryResponse(RuntimeModel):
     federation_diagnostics: RuntimeFederationDiagnostics | None = None
 
 
-class UnifiedSemanticSourceModelRequest(RuntimeModel):
+class SemanticGraphSourceModelRequest(RuntimeModel):
     id: uuid.UUID
     alias: str
     name: str | None = None
     description: str | None = None
 
 
-class UnifiedSemanticRelationshipRequest(RuntimeRequestModel):
+class SemanticGraphRelationshipRequest(RuntimeRequestModel):
     name: str | None = None
     source_semantic_model_id: uuid.UUID
     source_field: str
@@ -49,12 +49,12 @@ class UnifiedSemanticRelationshipRequest(RuntimeRequestModel):
     operator: str = "="
 
 
-class UnifiedSemanticMetricRequest(RuntimeRequestModel):
+class SemanticGraphMetricRequest(RuntimeRequestModel):
     expression: str
     description: str | None = None
 
 
-class UnifiedSemanticQueryResponse(RuntimeModel):
+class SemanticGraphQueryResponse(RuntimeModel):
     id: uuid.UUID
     workspace_id: uuid.UUID
     connector_id: uuid.UUID
@@ -63,3 +63,9 @@ class UnifiedSemanticQueryResponse(RuntimeModel):
     annotations: list[dict[str, Any]] = Field(default_factory=list)
     metadata: list[dict[str, Any]] | None = None
     federation_diagnostics: RuntimeFederationDiagnostics | None = None
+
+
+UnifiedSemanticSourceModelRequest = SemanticGraphSourceModelRequest
+UnifiedSemanticRelationshipRequest = SemanticGraphRelationshipRequest
+UnifiedSemanticMetricRequest = SemanticGraphMetricRequest
+UnifiedSemanticQueryResponse = SemanticGraphQueryResponse

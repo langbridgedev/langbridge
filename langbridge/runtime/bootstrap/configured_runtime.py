@@ -133,8 +133,8 @@ from langbridge.runtime.settings import runtime_settings as settings
 from langbridge.orchestrator.definitions import AgentDefinitionFactory
 from langbridge.semantic.loader import (
     SemanticModelError,
+    load_semantic_graph,
     load_semantic_model,
-    load_unified_semantic_model,
 )
 from langbridge.semantic.model import SemanticModel
 from langbridge.semantic.query import SemanticQuery
@@ -603,23 +603,23 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
                 "measure_count": measure_count,
             }
 
-        configured_unified = SemanticQueryExecutionService.parse_unified_model_config_from_record(
+        configured_graph = SemanticQueryExecutionService.parse_semantic_graph_config_from_record(
             record
         )
         source_model_names = [
             source.alias or source.name or str(source.id)
-            for source in (configured_unified.source_models or [])
+            for source in (configured_graph.source_models or [])
         ]
         return {
             **summary,
             "description": record.content_json.get("description"),
-            "dataset_count": len(configured_unified.semantic_model_ids),
+            "dataset_count": len(configured_graph.semantic_model_ids),
             "dataset_names": source_model_names,
             "dimension_count": 0,
-            "measure_count": len(configured_unified.metrics or {}),
+            "measure_count": len(configured_graph.metrics or {}),
         }
 
-    def _resolve_configured_unified_model(
+    def _resolve_configured_semantic_graph(
         self,
         *,
         semantic_models: list[LocalRuntimeSemanticModelRecord],
@@ -630,42 +630,49 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         for record in self._semantic_models.values():
             if record.semantic_model is not None:
                 continue
-            configured_unified = (
-                SemanticQueryExecutionService.parse_unified_model_config_from_record(record)
+            configured_graph = (
+                SemanticQueryExecutionService.parse_semantic_graph_config_from_record(record)
             )
-            if set(configured_unified.semantic_model_ids) != selected_model_id_set:
+            if set(configured_graph.semantic_model_ids) != selected_model_id_set:
                 continue
-            if len(configured_unified.semantic_model_ids) != len(selected_model_ids):
+            if len(configured_graph.semantic_model_ids) != len(selected_model_ids):
                 continue
-            matches.append(configured_unified)
+            matches.append(configured_graph)
 
         if len(matches) > 1:
             raise ValueError(
-                "Multiple configured unified semantic models match the selected semantic_models."
+                "Multiple configured semantic graphs match the selected semantic_models."
             )
         return matches[0] if matches else None
 
-    def _rewrite_semantic_query_for_unified_execution(
+    def _resolve_configured_unified_model(
+        self,
+        *,
+        semantic_models: list[LocalRuntimeSemanticModelRecord],
+    ):
+        return self._resolve_configured_semantic_graph(semantic_models=semantic_models)
+
+    def _rewrite_semantic_query_for_semantic_graph_execution(
         self,
         *,
         semantic_query: SemanticQuery,
         semantic_models: list[LocalRuntimeSemanticModelRecord],
-        configured_unified,
+        configured_graph,
     ) -> SemanticQuery:
-        dataset_source_keys = self._build_unified_dataset_source_keys(
+        dataset_source_keys = self._build_semantic_graph_dataset_source_keys(
             semantic_models=semantic_models,
-            configured_unified=configured_unified,
+            configured_graph=configured_graph,
         )
         payload = semantic_query.model_dump(by_alias=True, exclude_none=True)
         payload["measures"] = [
-            self._rewrite_member_for_unified_execution(
+            self._rewrite_member_for_semantic_graph_execution(
                 member=member,
                 dataset_source_keys=dataset_source_keys,
             )
             for member in semantic_query.measures
         ]
         payload["dimensions"] = [
-            self._rewrite_member_for_unified_execution(
+            self._rewrite_member_for_semantic_graph_execution(
                 member=member,
                 dataset_source_keys=dataset_source_keys,
             )
@@ -674,7 +681,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         payload["filters"] = [
             {
                 **item.model_dump(by_alias=True, exclude_none=True),
-                "member": self._rewrite_member_for_unified_execution(
+                "member": self._rewrite_member_for_semantic_graph_execution(
                     member=item.member,
                     dataset_source_keys=dataset_source_keys,
                 ),
@@ -684,30 +691,43 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         payload["timeDimensions"] = [
             {
                 **item.model_dump(by_alias=True, exclude_none=True),
-                "dimension": self._rewrite_member_for_unified_execution(
+                "dimension": self._rewrite_member_for_semantic_graph_execution(
                     member=item.dimension,
                     dataset_source_keys=dataset_source_keys,
                 ),
             }
             for item in semantic_query.time_dimensions
         ]
-        payload["order"] = self._rewrite_order_for_unified_execution(
+        payload["order"] = self._rewrite_order_for_semantic_graph_execution(
             order=semantic_query.order,
             dataset_source_keys=dataset_source_keys,
         )
         return SemanticQuery.model_validate(payload)
 
-    def _build_unified_dataset_source_keys(
+    def _rewrite_semantic_query_for_unified_execution(
+        self,
+        *,
+        semantic_query: SemanticQuery,
+        semantic_models: list[LocalRuntimeSemanticModelRecord],
+        configured_unified,
+    ) -> SemanticQuery:
+        return self._rewrite_semantic_query_for_semantic_graph_execution(
+            semantic_query=semantic_query,
+            semantic_models=semantic_models,
+            configured_graph=configured_unified,
+        )
+
+    def _build_semantic_graph_dataset_source_keys(
         self,
         *,
         semantic_models: list[LocalRuntimeSemanticModelRecord],
-        configured_unified,
+        configured_graph,
     ) -> dict[str, str]:
         configured_source_keys = {}
-        if configured_unified is not None:
+        if configured_graph is not None:
             configured_source_keys = {
                 source.id: str(source.alias or source.name or "").strip() or str(source.id)
-                for source in (configured_unified.source_models or [])
+                for source in (configured_graph.source_models or [])
             }
 
         dataset_source_keys: dict[str, str] = {}
@@ -718,7 +738,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         return dataset_source_keys
 
     @staticmethod
-    def _rewrite_member_for_unified_execution(
+    def _rewrite_member_for_semantic_graph_execution(
         *,
         member: str,
         dataset_source_keys: Mapping[str, str],
@@ -732,7 +752,18 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             return normalized_member
         return f"{source_key}__{dataset_name}.{field_name}"
 
-    def _rewrite_order_for_unified_execution(
+    @staticmethod
+    def _rewrite_member_for_unified_execution(
+        *,
+        member: str,
+        dataset_source_keys: Mapping[str, str],
+    ) -> str:
+        return ConfiguredLocalRuntimeHost._rewrite_member_for_semantic_graph_execution(
+            member=member,
+            dataset_source_keys=dataset_source_keys,
+        )
+
+    def _rewrite_order_for_semantic_graph_execution(
         self,
         *,
         order: dict[str, str] | list[dict[str, str]] | None,
@@ -745,7 +776,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         for entry in entries:
             rewritten.append(
                 {
-                    self._rewrite_member_for_unified_execution(
+                    self._rewrite_member_for_semantic_graph_execution(
                         member=str(member),
                         dataset_source_keys=dataset_source_keys,
                     ): direction
@@ -755,6 +786,17 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         if isinstance(order, dict):
             return rewritten[0] if rewritten else None
         return rewritten
+
+    def _rewrite_order_for_unified_execution(
+        self,
+        *,
+        order: dict[str, str] | list[dict[str, str]] | None,
+        dataset_source_keys: Mapping[str, str],
+    ) -> dict[str, str] | list[dict[str, str]] | None:
+        return self._rewrite_order_for_semantic_graph_execution(
+            order=order,
+            dataset_source_keys=dataset_source_keys,
+        )
 
     async def execute_sql_text(
         self,
@@ -1158,6 +1200,29 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
                 continue
             resolved.append(semantic_model)
             seen_ids.add(semantic_model.id)
+        return resolved
+
+    def _resolve_semantic_models_by_id(
+        self,
+        semantic_model_ids: list[uuid.UUID] | tuple[uuid.UUID, ...],
+    ) -> list[LocalRuntimeSemanticModelRecord]:
+        resolved: list[LocalRuntimeSemanticModelRecord] = []
+        seen_ids: set[uuid.UUID] = set()
+        for semantic_model_id in semantic_model_ids:
+            if semantic_model_id in seen_ids:
+                continue
+            match = next(
+                (
+                    record
+                    for record in self._semantic_models.values()
+                    if record.id == semantic_model_id
+                ),
+                None,
+            )
+            if match is None:
+                raise ValueError(f"Unknown semantic model '{semantic_model_id}'.")
+            resolved.append(match)
+            seen_ids.add(semantic_model_id)
         return resolved
 
     def _normalize_semantic_members(
@@ -1837,7 +1902,7 @@ class ConfiguredLocalRuntimeHostFactory:
             content_yaml = semantic_model.yml_dump()
             content_json = semantic_model.model_dump(exclude_none=True)
         except SemanticModelError:
-            load_unified_semantic_model(copy.deepcopy(content_json))
+            load_semantic_graph(copy.deepcopy(content_json))
             if not content_yaml:
                 content_yaml = yaml.safe_dump(content_json, sort_keys=False).strip()
         return LocalRuntimeSemanticModelRecord(
@@ -2517,7 +2582,7 @@ class ConfiguredLocalRuntimeHostFactory:
                 content_yaml = semantic_model.yml_dump()
                 content_json = semantic_model.model_dump(exclude_none=True)
             except SemanticModelError:
-                load_unified_semantic_model(payload)
+                load_semantic_graph(payload)
                 semantic_model = None
                 content_json = copy.deepcopy(payload)
                 content_yaml = yaml.safe_dump(content_json, sort_keys=False).strip()
@@ -3068,7 +3133,7 @@ class ConfiguredLocalRuntimeHostFactory:
         datasets: dict[str, DatasetMetadata],
     ) -> dict[str, Any]:
         payload = copy.deepcopy(semantic_model.model or {})
-        is_unified_model = bool(
+        is_semantic_graph = bool(
             payload.get("source_models")
             or payload.get("sourceModels")
         )
@@ -3112,7 +3177,7 @@ class ConfiguredLocalRuntimeHostFactory:
             dataset_payload["relation_name"] = relation_name
             normalized_datasets[dataset_name] = dataset_payload
 
-        if is_unified_model:
+        if is_semantic_graph:
             payload.pop("datasets", None)
             payload.pop("tables", None)
         else:

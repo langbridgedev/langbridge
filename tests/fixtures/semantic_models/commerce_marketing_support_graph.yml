@@ -1,6 +1,6 @@
 version: "1.0"
-name: CommerceMarketingSupport
-description: Legacy unified alias fixture that joins commerce, marketing, and support sources by customer.
+name: CommerceMarketingSupportGraph
+description: Semantic graph fixture that joins commerce, marketing, and support sources by customer.
 source_models:
   - id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     alias: Commerce

@@ -19,8 +19,11 @@ from langbridge.runtime.services.semantic_sql_query_service import (
     build_semantic_sql_metadata_columns_by_source,
     resolve_semantic_sql_projection_value,
 )
+from langbridge.runtime.services.semantic_query_execution_service import (
+    SemanticQueryExecutionService,
+)
 from langbridge.semantic.query import SemanticQuery
-from langbridge.semantic.loader import SemanticModelError, load_semantic_model, load_unified_semantic_model
+from langbridge.semantic.loader import SemanticModelError, load_semantic_graph, load_semantic_model
 
 if TYPE_CHECKING:
     from langbridge.runtime.bootstrap.configured_runtime import ConfiguredLocalRuntimeHost
@@ -120,21 +123,21 @@ class SemanticApplication:
                 content_yaml = semantic_model.yml_dump()
             except SemanticModelError:
                 try:
-                    unified_model = load_unified_semantic_model(copy.deepcopy(payload))
+                    semantic_graph = load_semantic_graph(copy.deepcopy(payload))
                 except SemanticModelError as exc:
                     raise ValueError(str(exc)) from exc
                 known_semantic_model_ids = {record.id for record in self._host._semantic_models.values()}
                 missing_source_models = sorted(
                     str(source.id)
-                    for source in unified_model.source_models
+                    for source in semantic_graph.source_models
                     if source.id not in known_semantic_model_ids
                 )
                 if missing_source_models:
                     raise ValueError(
-                        "Unified semantic model references unknown source semantic model ids: "
+                        "Semantic graph references unknown source semantic model ids: "
                         f"{', '.join(missing_source_models)}."
                     )
-                content_json = unified_model.model_dump(mode="json", exclude_none=True)
+                content_json = semantic_graph.model_dump(mode="json", exclude_none=True)
                 content_yaml = yaml.safe_dump(content_json, sort_keys=False).strip()
 
             now = datetime.now(timezone.utc)
@@ -244,21 +247,21 @@ class SemanticApplication:
                 content_yaml = semantic_model.yml_dump()
             except SemanticModelError:
                 try:
-                    unified_model = load_unified_semantic_model(copy.deepcopy(payload))
+                    semantic_graph = load_semantic_graph(copy.deepcopy(payload))
                 except SemanticModelError as exc:
                     raise ValueError(str(exc)) from exc
                 known_semantic_model_ids = {record.id for record in self._host._semantic_models.values()}
                 missing_source_models = sorted(
                     str(source.id)
-                    for source in unified_model.source_models
+                    for source in semantic_graph.source_models
                     if source.id not in known_semantic_model_ids
                 )
                 if missing_source_models:
                     raise ValueError(
-                        "Unified semantic model references unknown source semantic model ids: "
+                        "Semantic graph references unknown source semantic model ids: "
                         f"{', '.join(missing_source_models)}."
                     )
-                content_json = unified_model.model_dump(mode="json", exclude_none=True)
+                content_json = semantic_graph.model_dump(mode="json", exclude_none=True)
                 content_yaml = yaml.safe_dump(content_json, sort_keys=False).strip()
 
             now = datetime.now(timezone.utc)
@@ -344,15 +347,21 @@ class SemanticApplication:
         time_dimensions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         semantic_model_records = self._host._resolve_semantic_models(semantic_models)
-        unified_records = [record for record in semantic_model_records if record.semantic_model is None]
-        if unified_records:
+        selected_graph_record = next(
+            (record for record in semantic_model_records if record.semantic_model is None),
+            None,
+        )
+        configured_graph = None
+        if selected_graph_record is not None:
             if len(semantic_model_records) > 1:
                 raise ValueError(
-                    "Configured unified semantic models cannot be combined with other semantic_models in a single request."
+                    "Configured semantic graphs cannot be combined with other semantic_models in a single request."
                 )
-            raise ValueError(
-                f"Configured unified semantic model '{unified_records[0].name}' "
-                "cannot be queried directly; select its source semantic_models instead."
+            configured_graph = SemanticQueryExecutionService.parse_semantic_graph_config_from_record(
+                selected_graph_record
+            )
+            semantic_model_records = self._host._resolve_semantic_models_by_id(
+                configured_graph.semantic_model_ids
             )
         semantic_query = SemanticQuery(
             measures=self._host._normalize_semantic_members(
@@ -379,7 +388,7 @@ class SemanticApplication:
         )
         execution_query = semantic_query
         async with self._host._runtime_operation_scope() as uow:
-            if len(semantic_model_records) == 1:
+            if selected_graph_record is None and len(semantic_model_records) == 1:
                 semantic_model_record = semantic_model_records[0]
                 result = await self._host._runtime_host.query_semantic(
                     workspace_id=self._host.context.workspace_id,
@@ -390,21 +399,22 @@ class SemanticApplication:
                 semantic_model_id = semantic_model_record.id
                 connector_id = None
             else:
-                configured_unified = self._host._resolve_configured_unified_model(
-                    semantic_models=semantic_model_records,
-                )
-                execution_query = self._host._rewrite_semantic_query_for_unified_execution(
+                if configured_graph is None:
+                    configured_graph = self._host._resolve_configured_semantic_graph(
+                        semantic_models=semantic_model_records,
+                    )
+                execution_query = self._host._rewrite_semantic_query_for_semantic_graph_execution(
                     semantic_query=semantic_query,
                     semantic_models=semantic_model_records,
-                    configured_unified=configured_unified,
+                    configured_graph=configured_graph,
                 )
-                result = await self._host._runtime_host.query_unified_semantic(
+                result = await self._host._runtime_host.query_semantic_graph(
                     workspace_id=self._host.context.workspace_id,
                     semantic_model_ids=[record.id for record in semantic_model_records],
                     semantic_query=execution_query,
-                    source_models=(configured_unified.source_models if configured_unified is not None else None),
-                    relationships=(configured_unified.relationships if configured_unified is not None else None),
-                    metrics=(configured_unified.metrics if configured_unified is not None else None),
+                    source_models=(configured_graph.source_models if configured_graph is not None else None),
+                    relationships=(configured_graph.relationships if configured_graph is not None else None),
+                    metrics=(configured_graph.metrics if configured_graph is not None else None),
                 )
                 semantic_model_ids = list(result.response.semantic_model_ids)
                 semantic_model_id = None
@@ -455,8 +465,8 @@ class SemanticApplication:
         semantic_model_record = self._host._resolve_semantic_model_record(parsed_query.semantic_model_ref)
         if semantic_model_record.semantic_model is None:
             raise ValueError(
-                f"Configured unified semantic model '{semantic_model_record.name}' "
-                "cannot be queried through semantic SQL; select a concrete semantic model instead."
+                f"Configured semantic graph '{semantic_model_record.name}' "
+                "cannot be queried through semantic SQL yet; semantic SQL requires a concrete executable semantic model."
             )
 
         plan = self._host._runtime_host.build_semantic_sql_query(

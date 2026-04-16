@@ -38,12 +38,12 @@ snowflake:
     FROM analytics.orders AS t0 LEFT JOIN analytics.customers AS t1 ON t0.customer_id =
     t1.customer_id GROUP BY t1."region" ORDER BY "orders__revenue" DESC NULLS LAST
   net_revenue_by_month: >
-    SELECT DATEADD(MONTH, DATEDIFF(MONTH, 0, CAST(t0."order_ts" AS TIMESTAMP)), 0) AS
+    SELECT DATE_TRUNC('MONTH', CAST(t0."order_ts" AS TIMESTAMP)) AS
     "orders__order_ts_month", SUM(amount - discount) AS "orders__net_revenue" FROM
     analytics.orders AS t0 WHERE CAST(t0."order_ts" AS TIMESTAMP) >= '2026-01-01' AND
     CAST(t0."order_ts" AS TIMESTAMP) < DATEADD(DAY, 1, CAST('2026-02-28' AS DATE))
-    GROUP BY DATEADD(MONTH, DATEDIFF(MONTH, 0, CAST(t0."order_ts" AS TIMESTAMP)), 0)
-    ORDER BY "orders__order_ts_month" ASC
+    GROUP BY DATE_TRUNC('MONTH', CAST(t0."order_ts" AS TIMESTAMP)) ORDER BY
+    "orders__order_ts_month" ASC
 bigquery:
   grouped_revenue_by_region: >
     SELECT t1.`region` AS `customers__region`, SUM(t0.`amount`) AS `orders__revenue`

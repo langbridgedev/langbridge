@@ -55,7 +55,7 @@
             "args": [
                 "serve",
                 "--config",
-                "examples/sdk/udm_snowflake/langbridge_config.yml",
+                "examples/complex_runtime/langbridge_config.yml",
                 "--host",
                 "127.0.0.1",
                 "--port",

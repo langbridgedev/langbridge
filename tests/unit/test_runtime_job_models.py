@@ -156,7 +156,7 @@ def test_create_connector_sync_job_request_requires_resources() -> None:
         )
 
 
-def test_create_semantic_query_request_accepts_unified_camel_case_payload() -> None:
+def test_create_semantic_query_request_accepts_legacy_unified_camel_case_payload() -> None:
     source_model_id = uuid.uuid4()
     target_model_id = uuid.uuid4()
     request = CreateSemanticQueryJobRequest.model_validate(
@@ -190,7 +190,7 @@ def test_create_semantic_query_request_accepts_unified_camel_case_payload() -> N
         }
     )
 
-    assert request.query_scope == "unified"
+    assert request.query_scope == "semantic_graph"
     assert request.relationships is not None
     assert request.relationships[0].source_semantic_model_id == source_model_id
     assert request.relationships[0].relationship_type == "left"

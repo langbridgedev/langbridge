@@ -136,11 +136,12 @@ flowchart TD
     Host[ConfiguredLocalRuntimeHost.query_semantic_models]
     App[SemanticApplication.query_semantic_models]
     Normalize[Normalize members filters time dimensions order]
-    Branch{One model or many}
+    Branch{Executable model or semantic graph}
     Standard[RuntimeHost.query_semantic]
-    Unified[RuntimeHost.query_unified_semantic]
+    Graph[RuntimeHost.query_semantic_graph]
     StandardSvc[SemanticQueryExecutionService.execute_standard_query]
-    UnifiedSvc[SemanticQueryExecutionService.execute_unified_query]
+    GraphSvc[SemanticQueryExecutionService.execute_semantic_graph_query]
+    GraphCompile[Compile semantic graph to executable SemanticModel]
     Compile[Compile semantic query to SQL]
     Workflow[Build semantic federation workflow]
     Execute[FederatedQueryTool.execute_federated_query]
@@ -150,14 +151,15 @@ flowchart TD
     Host --> App
     App --> Normalize
     Normalize --> Branch
-    Branch -->|single semantic model| Standard
-    Branch -->|multiple semantic models| Unified
+    Branch -->|executable SemanticModel| Standard
+    Branch -->|configured graph or multi-model graph path| Graph
     Standard --> StandardSvc
-    Unified --> UnifiedSvc
+    Graph --> GraphSvc
     StandardSvc --> Compile
-    UnifiedSvc --> Compile
+    GraphSvc --> GraphCompile
+    GraphCompile --> Compile
     StandardSvc --> Workflow
-    UnifiedSvc --> Workflow
+    GraphSvc --> Workflow
     Workflow --> Execute
     Compile --> Response
     Execute --> Response

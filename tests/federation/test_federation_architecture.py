@@ -60,7 +60,7 @@ def test_same_source_smq_plan_matches_pushdown_golden() -> None:
 
 def test_cross_source_smq_plan_matches_three_dataset_split_golden() -> None:
     harness = FederationHarness()
-    model = harness.semantic.load_unified_model_fixture("commerce_marketing_unified")
+    model = harness.semantic.load_semantic_graph_fixture("commerce_marketing_graph")
     workflow = harness.build_workflow_for_model(
         model=model,
         source_by_dataset={
@@ -95,7 +95,7 @@ def test_cross_source_smq_plan_matches_three_dataset_split_golden() -> None:
 
 def test_cross_source_smq_plan_matches_four_dataset_filtered_split_golden() -> None:
     harness = FederationHarness()
-    model = harness.semantic.load_unified_model_fixture("commerce_marketing_support_unified")
+    model = harness.semantic.load_semantic_graph_fixture("commerce_marketing_support_graph")
     workflow = harness.build_workflow_for_model(
         model=model,
         source_by_dataset={
@@ -140,7 +140,7 @@ def test_cross_source_smq_plan_matches_four_dataset_filtered_split_golden() -> N
 
 def test_cross_source_sql_plan_matches_mixed_dialect_golden() -> None:
     harness = FederationHarness()
-    model = harness.semantic.load_unified_model_fixture("commerce_marketing_unified")
+    model = harness.semantic.load_semantic_graph_fixture("commerce_marketing_graph")
     workflow = harness.build_workflow_for_model(
         model=model,
         source_by_dataset={
@@ -251,7 +251,7 @@ async def test_federated_sql_join_executes_across_split_sources() -> None:
 @pytest.mark.anyio
 async def test_federated_smq_executes_three_dataset_rollup() -> None:
     harness = FederationHarness()
-    model = harness.semantic.load_unified_model_fixture("commerce_marketing_unified")
+    model = harness.semantic.load_semantic_graph_fixture("commerce_marketing_graph")
     workflow = harness.build_workflow_for_model(
         model=model,
         source_by_dataset={
@@ -280,7 +280,7 @@ async def test_federated_smq_executes_three_dataset_rollup() -> None:
 @pytest.mark.anyio
 async def test_federated_smq_executes_four_dataset_filtered_rollup() -> None:
     harness = FederationHarness()
-    model = harness.semantic.load_unified_model_fixture("commerce_marketing_support_unified")
+    model = harness.semantic.load_semantic_graph_fixture("commerce_marketing_support_graph")
     workflow = harness.build_workflow_for_model(
         model=model,
         source_by_dataset={

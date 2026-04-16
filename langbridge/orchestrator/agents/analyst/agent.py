@@ -7,6 +7,7 @@ import inspect
 import json
 import logging
 import re
+from datetime import date
 from typing import Any, Optional, Sequence
 
 from langbridge.orchestrator.llm.provider import LLMProvider
@@ -194,6 +195,26 @@ class AnalystAgent:
                 fallback_to_scope=fallback_to_scope,
                 fallback_reason=fallback_reason,
             )
+
+            if self._should_attempt_semantic_rewrite_before_scope_fallback(
+                response=response,
+                current_tool=active_tool,
+                retry_count=retry_count,
+            ):
+                retry_request, retry_rationale, retry_actions = await self._prepare_retry_request(
+                    request=active_request,
+                    response=response,
+                    tool=active_tool,
+                )
+                if retry_request is not None:
+                    retry_count += 1
+                    last_retry_rationale = retry_rationale
+                    recovery_actions = recovery_actions + retry_actions
+                    active_request = await self._augment_request_with_semantic_search(
+                        request=retry_request,
+                        tool=active_tool,
+                    )
+                    continue
 
             fallback_tool, updated_request, fallback_action = self._prepare_scope_fallback(
                 request=active_request,
@@ -407,6 +428,29 @@ class AnalystAgent:
         question = str(request.question or "")
         return bool(request.filters) or bool(_ENTITY_HINT_RE.search(question))
 
+    def _should_attempt_semantic_rewrite_before_scope_fallback(
+        self,
+        *,
+        response: AnalystQueryResponse,
+        current_tool: SqlAnalystTool,
+        retry_count: int,
+    ) -> bool:
+        if retry_count >= self.max_retries:
+            return False
+        outcome = response.outcome
+        if outcome is None:
+            return False
+        if current_tool.query_scope != SqlQueryScope.semantic:
+            return False
+        if outcome.status not in {
+            AnalystOutcomeStatus.query_error,
+            AnalystOutcomeStatus.execution_error,
+        }:
+            return False
+        metadata = outcome.metadata if isinstance(outcome.metadata, dict) else {}
+        semantic_failure_kind = str(metadata.get("semantic_failure_kind") or "").strip().lower()
+        return semantic_failure_kind == "unsupported_semantic_sql_shape"
+
     def _prepare_scope_fallback(
         self,
         *,
@@ -541,6 +585,8 @@ class AnalystAgent:
         recovery_actions: list[AnalystRecoveryAction] = []
         retry_rationale: str | None = None
         conversation_context = request.conversation_context
+        metadata = outcome.metadata if isinstance(outcome.metadata, dict) else {}
+        semantic_failure_kind = str(metadata.get("semantic_failure_kind") or "").strip().lower()
         retry_request = request.model_copy(
             deep=True,
             update={
@@ -550,12 +596,25 @@ class AnalystAgent:
         )
 
         if outcome.status in {AnalystOutcomeStatus.query_error, AnalystOutcomeStatus.execution_error}:
-            retry_rationale = "Retrying once with the prior failure captured as analyst guidance."
+            if (
+                tool.query_scope == SqlQueryScope.semantic
+                and semantic_failure_kind == "unsupported_semantic_sql_shape"
+            ):
+                retry_rationale = (
+                    "Retrying once by rewriting the request into a semantic-safe governed shape "
+                    "before falling back to dataset scope."
+                )
+            else:
+                retry_rationale = "Retrying once with the prior failure captured as analyst guidance."
             recovery_actions.append(
                 AnalystRecoveryAction(
                     action="retry_query",
                     rationale=retry_rationale,
-                    details={"status": outcome.status.value, "error": error_text},
+                    details={
+                        "status": outcome.status.value,
+                        "error": error_text,
+                        "semantic_failure_kind": semantic_failure_kind or None,
+                    },
                 )
             )
         elif outcome.status == AnalystOutcomeStatus.empty_result:
@@ -602,6 +661,8 @@ class AnalystAgent:
         outcome: AnalystExecutionOutcome,
         tool: SqlAnalystTool,
     ) -> tuple[str | None, str | None]:
+        metadata = outcome.metadata if isinstance(outcome.metadata, dict) else {}
+        semantic_failure_kind = str(metadata.get("semantic_failure_kind") or "").strip().lower()
         prompt_sections = [
             "You rewrite analytical questions after a failed or empty execution.",
             "Return ONLY JSON with keys: rewritten_question, rationale.",
@@ -616,6 +677,21 @@ class AnalystAgent:
         if request.filters:
             prompt_sections.append(
                 "Filters: " + json.dumps(request.filters, ensure_ascii=True, sort_keys=True)
+            )
+        if (
+            tool.query_scope == SqlQueryScope.semantic
+            and semantic_failure_kind == "unsupported_semantic_sql_shape"
+        ):
+            prompt_sections.extend(
+                [
+                    "The previous governed semantic query used an unsupported SQL shape.",
+                    "Rewrite the request so it can be answered with named semantic members, supported semantic time buckets, and literal filters only.",
+                    (
+                        "For relative time windows, convert them into explicit literal dates or explicit years "
+                        f"using the current date {date.today().isoformat()} when needed."
+                    ),
+                    "Do not ask for raw SQL functions, CURRENT_DATE arithmetic, INTERVAL expressions, casts, or free-form SQL predicates.",
+                ]
             )
         if request.conversation_context:
             prompt_sections.append(f"Conversation context: {request.conversation_context}")
