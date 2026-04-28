@@ -55,11 +55,13 @@ class FaissConnector(ManagedVectorDB):
         logger: Optional[logging.Logger] = None,
     ) -> "FaissConnector":
         index_name: str = kwargs.get("index_name")
+        location: str = kwargs.get("location")
         if not index_name:
             raise ConnectorError("index_name is required to create a FAISS managed instance.")
         if logger is None:
             logger = get_root_logger()
-        config = FaissConnectorConfig(location=f"~/langbridge/faiss_data/{index_name}")
+        full_location = str(Path(location).expanduser() / f"{index_name}.faiss")
+        config = FaissConnectorConfig(location=full_location)
         return FaissConnector(config=config, logger=logger)
     
     async def create_index(self, dimension, *, metric = "cosine"):

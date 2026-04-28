@@ -76,8 +76,10 @@ surfaces.
   dataset SQL on the commerce datasets.
 - `growth_analyst`
   Focused on channel efficiency, influenced pipeline, conversion, segment
-  performance, and support pressure. It can use the `growth_performance`
-  semantic model plus scoped dataset SQL on growth, spend, and support datasets.
+  performance, and support pressure. It uses one layered analytical SQL binding:
+  semantic-first on `growth_performance`, with scoped dataset SQL fallback on
+  growth, spend, and support datasets when the governed semantic surface cannot
+  satisfy the request.
 
 The agents have different prompts, different tool bindings, and different
 connector scope. `commerce_analyst` is intentionally blocked from the
@@ -96,6 +98,10 @@ That creates:
 - `examples/complex_runtime/data/commerce.db`
 - `examples/complex_runtime/data/growth_ops.db`
 - `examples/complex_runtime/data/channel_spend_targets.csv`
+
+If you pull updates to this example after generating the local data once,
+re-run the setup step so the SQLite schema changes are applied to the example
+databases.
 
 If you want to use the agents, export an API key first:
 

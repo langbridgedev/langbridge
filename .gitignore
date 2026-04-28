@@ -42,6 +42,7 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
+.langbridge-data
 nosetests.xml
 coverage.xml
 *.cover
@@ -49,7 +50,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
-
+uv.lock
 # Translations
 *.mo
 *.pot
@@ -269,3 +270,4 @@ experimental/
 debug/
 
 node_modules/
+udm_snowflake/

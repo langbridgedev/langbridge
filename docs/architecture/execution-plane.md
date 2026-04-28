@@ -20,11 +20,11 @@ The current execution plane should be read as single-node first. There are dispa
 - host API: `langbridge/runtime/hosting/app.py`
 - host auth: `langbridge/runtime/hosting/auth.py`
 - runtime host facade: `langbridge/runtime/services/runtime_host.py`
-- dataset query service: `langbridge/runtime/services/dataset_query_service.py`
-- SQL query service: `langbridge/runtime/services/sql_query_service.py`
+- dataset query service: `langbridge/runtime/services/dataset_query/`
+- SQL query service: `langbridge/runtime/services/sql_query/`
 - semantic query service: `langbridge/runtime/services/semantic_query_execution_service.py`
-- dataset sync runtime: `langbridge/runtime/services/dataset_sync_service.py`
-- agent execution service: `langbridge/runtime/services/agent_execution_service.py`
+- dataset sync runtime: `langbridge/runtime/services/dataset_sync/`
+- agent execution service: `langbridge/runtime/services/agents/service.py`
 - federated execution bridge: `langbridge/runtime/execution/federated_query_tool.py`
 - federated engine: `langbridge/federation/*`
 - MCP assembly: `langbridge/mcp/server.py`

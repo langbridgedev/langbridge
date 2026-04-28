@@ -85,7 +85,7 @@ def enforce_read_only_sql(query: str, *, allow_dml: bool, dialect: str = "tsql")
         raise ValueError("Only a single SQL statement is allowed.")
 
     statement = statements[0]
-    token_match = _FIRST_TOKEN_PATTERN.search(query)
+    token_match = _FIRST_TOKEN_PATTERN.search(_strip_leading_sql_comments(query))
     token = token_match.group(1).lower() if token_match else ""
     if token not in {"select", "with"}:
         raise ValueError("Workspace policy only allows SELECT statements.")
@@ -251,3 +251,22 @@ def _to_sql_literal(value: Any) -> str:
         return "'" + serialized + "'"
     escaped = str(value).replace("'", "''")
     return f"'{escaped}'"
+
+
+def _strip_leading_sql_comments(query: str) -> str:
+    remaining = str(query or "")
+    while True:
+        trimmed = remaining.lstrip()
+        if trimmed.startswith("/*"):
+            end = trimmed.find("*/")
+            if end < 0:
+                return trimmed
+            remaining = trimmed[end + 2 :]
+            continue
+        if trimmed.startswith("--"):
+            newline = trimmed.find("\n")
+            if newline < 0:
+                return ""
+            remaining = trimmed[newline + 1 :]
+            continue
+        return trimmed

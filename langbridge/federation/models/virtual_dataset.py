@@ -2,7 +2,7 @@
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 
 class TableStatistics(BaseModel):
@@ -54,7 +54,7 @@ class VirtualTableBinding(BaseModel):
     schema_name: str | None = Field(
         default=None,
         alias="schema",
-        validation_alias="schema",
+        validation_alias=AliasChoices("schema", "schema_name"),
         serialization_alias="schema",
     )
     table: str

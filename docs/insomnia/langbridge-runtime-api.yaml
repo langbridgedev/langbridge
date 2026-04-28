@@ -120,7 +120,7 @@ resources:
     modified: 0
     created: 0
     name: SQL
-    description: Direct SQL query endpoint.
+    description: Explicit scoped SQL query endpoint for semantic, dataset, and source SQL.
     environment: {}
     environmentPropertyOrder: null
     metaSortKey: -400
@@ -1207,12 +1207,13 @@ resources:
     created: 0
     url: "{{ _.base_url }}/api/runtime/v1/sql/query"
     name: SQL Query
-    description: POST /api/runtime/v1/sql/query using connection_name for a direct connector query.
+    description: POST /api/runtime/v1/sql/query with explicit query_scope. This sample uses source SQL.
     method: POST
     body:
       mimeType: application/json
       text: |-
         {
+          "query_scope": "source",
           "query": "SELECT 1 AS ok",
           "connection_name": "{{ _.connector_name }}",
           "query_dialect": "tsql",

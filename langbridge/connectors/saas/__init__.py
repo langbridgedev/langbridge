@@ -5,5 +5,6 @@ Core ``langbridge`` retains only the shared declarative runtime and helpers.
 """
 
 __all__ = [
+    "basic_http",
     "declarative",
 ]

@@ -27,6 +27,7 @@ from langbridge.runtime.persistence.mappers.connectors import to_connector_recor
 from langbridge.runtime.utils.connector_runtime import (
     build_connector_runtime_payload,
     resolve_connector_capabilities,
+    resolve_supported_resources,
 )
 
 if TYPE_CHECKING:
@@ -296,7 +297,7 @@ class ConnectorApplication:
                 },
                 secret_resolver=self._host._secret_provider_registry.resolve,
             )
-            config_factory.create(runtime_payload.get("config") or {})
+            validated_config = config_factory.create(runtime_payload.get("config") or {})
         except Exception as exc:
             raise ApplicationError(
                 f"Connector '{connector_name}' failed validation for connector type '{connector_type}'."
@@ -317,7 +318,10 @@ class ConnectorApplication:
             connection_metadata=connection_metadata,
             secret_references=secret_references,
             connection_policy=connection_policy,
-            supported_resources=list(plugin.supported_resources) if plugin is not None else [],
+            supported_resources=resolve_supported_resources(
+                plugin=plugin,
+                connector_config=validated_config,
+            ),
             default_sync_strategy=(
                 plugin.default_sync_strategy
                 if plugin is not None and plugin.default_sync_strategy is not None
@@ -421,7 +425,7 @@ class ConnectorApplication:
                 },
                 secret_resolver=self._host._secret_provider_registry.resolve,
             )
-            config_factory.create(runtime_payload.get("config") or {})
+            validated_config = config_factory.create(runtime_payload.get("config") or {})
         except Exception as exc:
             raise ApplicationError(
                 f"Connector '{connector.name}' failed validation for connector type '{connector_type}'."
@@ -434,6 +438,10 @@ class ConnectorApplication:
                 "connection_metadata": connection_metadata,
                 "secret_references": secret_references,
                 "connection_policy": connection_policy,
+                "supported_resources": resolve_supported_resources(
+                    plugin=plugin,
+                    connector_config=validated_config,
+                ),
                 "capabilities": capabilities,
                 "updated_by": self._host.context.actor_id,
             }

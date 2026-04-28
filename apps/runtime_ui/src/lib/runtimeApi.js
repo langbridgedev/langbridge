@@ -47,6 +47,110 @@ async function runtimeRequest(path, options = {}) {
   return payload;
 }
 
+export function parseSseEventBlock(block) {
+  const lines = String(block || "").split(/\r?\n/);
+  let eventName = "message";
+  let eventId = "";
+  const dataLines = [];
+
+  lines.forEach((line) => {
+    if (!line || line.startsWith(":")) {
+      return;
+    }
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim() || eventName;
+      return;
+    }
+    if (line.startsWith("id:")) {
+      eventId = line.slice(3).trim();
+      return;
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  });
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  const dataText = dataLines.join("\n");
+  let payload = dataText;
+  try {
+    payload = JSON.parse(dataText);
+  } catch {}
+
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    return eventId ? { id: eventId, event: eventName, ...payload } : { event: eventName, ...payload };
+  }
+  return eventId ? { id: eventId, event: eventName, data: payload } : { event: eventName, data: payload };
+}
+
+async function readSseResponse(response, { onEvent } = {}) {
+  if (!response.ok) {
+    const errorPayload = await parseResponse(response);
+    const message =
+      errorPayload?.detail ||
+      errorPayload?.message ||
+      (typeof errorPayload === "string" ? errorPayload : "") ||
+      `Runtime stream failed with status ${response.status}`;
+    throw buildError(message, response.status, errorPayload);
+  }
+
+  const events = [];
+  let buffer = "";
+  const flushBuffer = () => {
+    const chunks = buffer.split(/\r?\n\r?\n/);
+    buffer = chunks.pop() || "";
+    chunks.forEach((chunk) => {
+      const parsed = parseSseEventBlock(chunk);
+      if (!parsed) {
+        return;
+      }
+      events.push(parsed);
+      if (typeof onEvent === "function") {
+        onEvent(parsed);
+      }
+    });
+  };
+
+  if (!response.body || typeof response.body.getReader !== "function") {
+    buffer = await response.text();
+    flushBuffer();
+    if (buffer.trim()) {
+      const parsed = parseSseEventBlock(buffer);
+      if (parsed) {
+        events.push(parsed);
+        if (typeof onEvent === "function") {
+          onEvent(parsed);
+        }
+      }
+    }
+    return events;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    flushBuffer();
+    if (done) {
+      break;
+    }
+  }
+  if (buffer.trim()) {
+    const parsed = parseSseEventBlock(buffer);
+    if (parsed) {
+      events.push(parsed);
+      if (typeof onEvent === "function") {
+        onEvent(parsed);
+      }
+    }
+  }
+  return events;
+}
+
 export function fetchAuthBootstrapStatus() {
   return runtimeRequest("/api/runtime/v1/auth/bootstrap");
 }
@@ -259,6 +363,41 @@ export function askAgent(payload) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export async function streamAgentRun(payload, options = {}) {
+  const { signal, onEvent } = options;
+  const response = await fetch("/api/runtime/v1/agents/ask/stream", {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "text/event-stream",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+    signal,
+  });
+
+  return readSseResponse(response, { onEvent });
+}
+
+export async function streamRuntimeRun(runId, options = {}) {
+  const { signal, onEvent, afterSequence } = options;
+  const query = Number.isFinite(Number(afterSequence)) && Number(afterSequence) > 0
+    ? `?after_sequence=${encodeURIComponent(String(Number(afterSequence)))}`
+    : "";
+  const response = await fetch(
+    `/api/runtime/v1/runs/${encodeURIComponent(runId)}/stream${query}`,
+    {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        Accept: "text/event-stream",
+      },
+      signal,
+    },
+  );
+  return readSseResponse(response, { onEvent });
 }
 
 export function createThread(payload = {}) {

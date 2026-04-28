@@ -28,10 +28,10 @@ datasets:
     label: Shopify Orders
     description: Order-level commerce performance data with revenue and customer attributes.
     connector: commerce_demo
-    materialization_mode: live
-    semantic_model: commerce_performance
-    default_time_dimension: order_date
+    materialization:
+      mode: live
     source:
+      kind: table
       table: orders_enriched
 
 semantic_models:
@@ -81,45 +81,22 @@ llm_connections:
       provider_type: env
       identifier: OPENAI_API_KEY
 
-agents:
-  - name: commerce_analyst
-    description: Default analytics agent for the runtime host example.
-    llm_connection: local_openai
-    default: true
-    definition:
-      prompt:
-        system_prompt: You are a Langbridge analytics agent.
-        user_instructions: |
+ai:
+  profiles:
+    - name: commerce_analyst
+      description: Default analytics agent for the runtime host example.
+      llm:
+        llm_connection: local_openai
+      scope:
+        semantic_models: [commerce_performance]
+      prompts:
+        system: You are a Langbridge analytics agent.
+        user: |
           Focus on net sales, margin, country, channel, and loyalty questions.
-        style_guidance: Keep answers concise and clearly grounded in query results.
-      memory:
-        strategy: database
-      features:
-        bi_copilot_enabled: false
-        deep_research_enabled: false
-        visualization_enabled: true
-        mcp_enabled: false
-      tools:
-        - name: commerce_semantic_sql
-          tool_type: sql
-          description: Governed semantic analytics access for the commerce model.
-          config:
-            semantic_model_ids: [commerce_performance]
-      access_policy:
+        presentation: Keep answers concise and clearly grounded in query results.
+      access:
         allowed_connectors: [commerce_demo]
         denied_connectors: []
       execution:
-        mode: iterative
-        response_mode: analyst
         max_iterations: 3
-        max_steps_per_iteration: 5
-        allow_parallel_tools: false
-      output:
-        format: markdown
-      guardrails:
-        moderation_enabled: true
-      observability:
-        log_level: info
-        emit_traces: false
-        capture_prompts: false
         audit_fields: []

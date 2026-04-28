@@ -76,11 +76,11 @@ from langbridge.runtime.providers import (
     SecretRegistryCredentialProvider,
 )
 from langbridge.runtime.security import SecretProviderRegistry
-from langbridge.runtime.services.agent_execution_service import (
+from langbridge.runtime.services.agents import (
     AgentExecutionService,
 )
-from langbridge.runtime.services.dataset_query_service import DatasetQueryService
-from langbridge.runtime.services.dataset_sync_service import ConnectorSyncRuntime
+from langbridge.runtime.services.dataset_query import DatasetQueryService
+from langbridge.runtime.services.dataset_sync import ConnectorSyncRuntime
 from langbridge.runtime.services.runtime_host import (
     RuntimeHost,
     RuntimeProviders,
@@ -89,10 +89,11 @@ from langbridge.runtime.services.runtime_host import (
 from langbridge.runtime.services.semantic_query_execution_service import (
     SemanticQueryExecutionService,
 )
-from langbridge.runtime.services.semantic_vector_search_service import (
+from langbridge.runtime.services.semantic_sql_query_service import SemanticSqlQueryService
+from langbridge.runtime.services.semantic_vector_search import (
     SemanticVectorSearchService,
 )
-from langbridge.runtime.services.sql_query_service import SqlQueryService
+from langbridge.runtime.services.sql_query import SqlQueryService
 
 
 def build_local_runtime(
@@ -252,6 +253,7 @@ def build_local_runtime(
             connector_provider=connector_provider,
             credential_provider=credential_provider,
             federated_query_tool=federated_query_tool,
+            llm_connection_store=llm_connection_store,
             logger=logger or logging.getLogger("langbridge.runtime.semantic.vector"),
         )
         if (
@@ -260,7 +262,7 @@ def build_local_runtime(
         )
         else None
     )
-    dataset_query_service = DatasetQueryService(
+    dataset_query_runtime = DatasetQueryService(
         dataset_repository=dataset_store,
         dataset_column_repository=dataset_column_store,
         dataset_policy_repository=dataset_policy_store,
@@ -270,7 +272,7 @@ def build_local_runtime(
         dataset_provider=dataset_provider,
         connector_provider=connector_provider,
     )
-    sql_query_service = SqlQueryService(
+    sql_query_runtime = SqlQueryService(
         sql_job_result_artifact_store=(
             RepositorySqlJobArtifactStore(repository=sql_job_result_artifact_repository)
             if sql_job_result_artifact_repository is not None
@@ -283,7 +285,7 @@ def build_local_runtime(
         secret_provider_registry=secret_provider_registry,
         federated_query_tool=federated_query_tool,
     )
-    dataset_sync_service = (
+    dataset_sync_runtime = (
         ConnectorSyncRuntime(
             connector_sync_state_repository=connector_sync_state_store,
             dataset_repository=dataset_store,
@@ -295,27 +297,27 @@ def build_local_runtime(
         if connector_sync_state_store is not None
         else None
     )
+    semantic_sql_query_service = SemanticSqlQueryService()
     agent_execution_service = (
         AgentExecutionService(
             agent_definition_repository=agent_definition_store,
             llm_repository=llm_connection_store,
-            semantic_model_store=runtime_semantic_model_store,
-            dataset_repository=dataset_store,
-            dataset_column_repository=dataset_column_store,
             thread_repository=thread_store,
             thread_message_repository=thread_message_store,
             memory_repository=runtime_memory_store,
+            semantic_model_store=runtime_semantic_model_store,
+            dataset_repository=dataset_store,
+            dataset_column_repository=dataset_column_store,
             federated_query_tool=federated_query_tool,
             semantic_vector_search_service=semantic_vector_search_service,
+            semantic_query_service=semantic_query_service,
+            semantic_sql_service=semantic_sql_query_service,
         )
         if (
             agent_definition_store is not None
             and llm_connection_store is not None
-            and dataset_column_store is not None
             and thread_store is not None
             and thread_message_store is not None
-            and runtime_memory_store is not None
-            and runtime_semantic_model_store is not None
         )
         else None
     )
@@ -330,13 +332,14 @@ def build_local_runtime(
             credentials=credential_provider,
         ),
         services=RuntimeServices(
-            dataset_query=dataset_query_service,
+            dataset_query=dataset_query_runtime,
             federated_query_tool=federated_query_tool,
             semantic_query=semantic_query_service,
             semantic_vector_search=semantic_vector_search_service,
-            sql_query=sql_query_service,
-            dataset_sync=dataset_sync_service,
+            sql_query=sql_query_runtime,
+            dataset_sync=dataset_sync_runtime,
             agent_execution=agent_execution_service,
+            semantic_sql_query=semantic_sql_query_service,
         ),
     )
 

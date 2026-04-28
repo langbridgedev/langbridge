@@ -1,9 +1,9 @@
-﻿
-import hashlib
+﻿import hashlib
 import json
 
 from langbridge.federation.models.plans import PhysicalPlan, StageDefinition, StageType
 from langbridge.federation.planner.optimizer import OptimizedPlan
+from langbridge.runtime.settings import runtime_settings
 
 
 class PhysicalPlanner:
@@ -18,12 +18,12 @@ class PhysicalPlanner:
                     stage_type=StageType.REMOTE_FULL_QUERY,
                     source_id=subplan.source_id,
                     subplan=subplan,
-                    retry_limit=2,
+                    retry_limit=runtime_settings.FEDERATION_DEFAULT_RETRY,
                     metadata={"alias": subplan.alias},
                 )
             )
             logical_payload = optimized_plan.logical_plan.model_dump(mode="json")
-            plan_id = _plan_hash(logical_payload)
+            plan_id = self._plan_hash(logical_payload)
             return PhysicalPlan(
                 plan_id=plan_id,
                 logical_plan=optimized_plan.logical_plan,
@@ -31,6 +31,8 @@ class PhysicalPlanner:
                 result_stage_id=subplan.stage_id,
                 join_order=optimized_plan.join_order,
                 join_strategies=optimized_plan.join_strategies,
+                pushdown_full_query=optimized_plan.pushdown_full_query,
+                pushdown_reasons=list(optimized_plan.pushdown_reasons),
             )
 
         dependency_ids: list[str] = []
@@ -42,7 +44,7 @@ class PhysicalPlanner:
                     stage_type=StageType.REMOTE_SCAN,
                     source_id=subplan.source_id,
                     subplan=subplan,
-                    retry_limit=2,
+                    retry_limit=runtime_settings.FEDERATION_DEFAULT_RETRY,
                     metadata={"alias": subplan.alias},
                 )
             )
@@ -57,7 +59,7 @@ class PhysicalPlanner:
                 dependencies=dependency_ids,
                 sql=optimized_plan.local_stage_sql,
                 sql_dialect=optimized_plan.local_stage_dialect,
-                retry_limit=2,
+                retry_limit=runtime_settings.FEDERATION_DEFAULT_RETRY,
                 metadata={
                     "table_inputs": table_inputs,
                     "join_order": optimized_plan.join_order,
@@ -70,7 +72,7 @@ class PhysicalPlanner:
 
         logical_payload = optimized_plan.logical_plan.model_dump(mode="json")
         logical_payload["local_stage_sql"] = optimized_plan.local_stage_sql
-        plan_id = _plan_hash(logical_payload)
+        plan_id = self._plan_hash(logical_payload)
         return PhysicalPlan(
             plan_id=plan_id,
             logical_plan=optimized_plan.logical_plan,
@@ -78,9 +80,11 @@ class PhysicalPlanner:
             result_stage_id=final_stage_id,
             join_order=optimized_plan.join_order,
             join_strategies=optimized_plan.join_strategies,
+            pushdown_full_query=optimized_plan.pushdown_full_query,
+            pushdown_reasons=list(optimized_plan.pushdown_reasons),
         )
 
 
-def _plan_hash(payload: dict) -> str:
-    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
+    def _plan_hash(self, payload: dict) -> str:
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]

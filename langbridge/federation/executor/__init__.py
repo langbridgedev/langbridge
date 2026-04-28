@@ -6,6 +6,10 @@ from langbridge.federation.executor.cache_context import (
     StageCacheInputPolicy,
     StageCacheResolver,
 )
+from langbridge.federation.executor.offload import (
+    FederationExecutionOffloader,
+    run_federation_blocking,
+)
 from langbridge.federation.executor.scheduler import (
     CallbackStageDispatcher,
     LocalStageDispatcher,
@@ -22,6 +26,8 @@ __all__ = [
     "StageCacheInputKind",
     "StageCacheInputPolicy",
     "StageCacheResolver",
+    "FederationExecutionOffloader",
+    "run_federation_blocking",
     "CallbackStageDispatcher",
     "LocalStageDispatcher",
     "SchedulerResult",

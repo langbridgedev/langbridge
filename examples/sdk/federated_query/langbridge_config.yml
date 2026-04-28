@@ -47,8 +47,10 @@ datasets:
     label: Sales Orders
     description: Order-level sales facts enriched with the CRM contact key from the sales database.
     connector: sales_reporting
-    materialization_mode: live
+    materialization:
+      mode: live
     source:
+      kind: sql
       sql: |
         SELECT
           o.id AS order_id,
@@ -68,8 +70,10 @@ datasets:
     label: CRM Contacts
     description: CRM contacts enriched with account segment and owner region from the CRM database.
     connector: crm_reporting
-    materialization_mode: live
+    materialization:
+      mode: live
     source:
+      kind: sql
       sql: |
         SELECT
           'CRM-' || LPAD(TRIM(REPLACE(c.contact_external_id, 'CRM-', '')), 8, '0') AS contact_external_id,
@@ -88,8 +92,10 @@ datasets:
     label: Marketing Campaigns
     description: Campaign metadata loaded from a local CSV and joined to CRM contacts at runtime.
     connector: campaign_file
-    materialization_mode: live
+    materialization:
+      mode: live
     source:
+      kind: file
       path: ./marketing_campaign.csv
       format: csv
       header: true
@@ -229,50 +235,22 @@ llm_connections:
       provider_type: env
       identifier: OPENAI_API_KEY
 
-agents:
-  - name: revenue_federation_analyst
-    description: Default federated analytics agent for the SDK federated query example.
-    llm_connection: local_openai
-    default: true
-    definition:
-      prompt:
-        system_prompt: You are a Langbridge analytics agent.
-        user_instructions: |
+ai:
+  profiles:
+    - name: revenue_federation_analyst
+      description: Default federated analytics agent for the SDK federated query example.
+      llm:
+        llm_connection: local_openai
+      scope:
+        semantic_models: [customer_revenue_federation]
+        datasets: [sales_orders, crm_contacts, marketing_campaigns]
+      prompts:
+        system: You are a Langbridge analytics agent.
+        user: |
           Focus on revenue, account segment, lifecycle stage, region, and campaign attribution questions across the federated sources.
-        style_guidance: Keep answers concise and clearly grounded in query results.
-      memory:
-        strategy: database
-      features:
-        bi_copilot_enabled: false
-        deep_research_enabled: false
-        visualization_enabled: true
-        mcp_enabled: false
-      tools:
-        - name: governed_revenue_sql
-          tool_type: sql
-          description: Governed semantic analytics access for the federated revenue model.
-          config:
-            semantic_model_ids: [customer_revenue_federation]
-        - name: federated_dataset_sql
-          tool_type: sql
-          description: Dataset-level federated access across the source systems.
-          config:
-            dataset_ids: [sales_orders, crm_contacts, marketing_campaigns]
-      access_policy:
+        presentation: Keep answers concise and clearly grounded in query results.
+      access:
         allowed_connectors: [sales_reporting, crm_reporting, campaign_file]
         denied_connectors: []
       execution:
-        mode: iterative
-        response_mode: analyst
         max_iterations: 3
-        max_steps_per_iteration: 5
-        allow_parallel_tools: false
-      output:
-        format: markdown
-      guardrails:
-        moderation_enabled: true
-      observability:
-        log_level: info
-        emit_traces: false
-        capture_prompts: false
-        audit_fields: []

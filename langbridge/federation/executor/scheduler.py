@@ -82,7 +82,7 @@ class StageScheduler:
                 unresolved = ", ".join(sorted(remaining.keys()))
                 raise RuntimeError(f"Stage DAG contains unresolved dependencies: {unresolved}")
 
-            for batch in _chunk(ready, self._stage_parallelism):
+            for batch in self._chunk(ready, self._stage_parallelism):
                 tasks = [
                     asyncio.create_task(self._execute_with_retry(stage=stage, context=context))
                     for stage in batch
@@ -124,5 +124,5 @@ class StageScheduler:
         raise last_error
 
 
-def _chunk(items: list[StageDefinition], size: int) -> list[list[StageDefinition]]:
-    return [items[index : index + size] for index in range(0, len(items), size)]
+    def _chunk(self, items: list[StageDefinition], size: int) -> list[list[StageDefinition]]:
+        return [items[index : index + size] for index in range(0, len(items), size)]

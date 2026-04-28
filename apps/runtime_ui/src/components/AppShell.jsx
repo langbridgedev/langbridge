@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { Box, ChevronLeft, ChevronRight } from "lucide-react";
 
-import { NAV_SECTIONS, resolveActiveNav } from "../lib/routes";
+import { NAV_SECTIONS } from "../lib/routes";
 import { ThemeToggle } from "./ThemeToggle";
 
 export function AppShell({ session, authStatus, onLogout, children }) {
@@ -15,17 +15,20 @@ export function AppShell({ session, authStatus, onLogout, children }) {
   const identityName = session?.username || (authEnabled ? "Runtime user" : "Direct access");
   const identitySubcopy = session?.email || (authEnabled ? "Signed into this runtime" : "Authentication disabled");
   const authBadge = authEnabled ? `${authStatus?.auth_mode || "configured"} auth` : "Open runtime";
+  const isChatRoute = location.pathname === "/chat" || location.pathname.startsWith("/chat/");
+  const shellClassName = [
+    "app-shell",
+    collapsed ? "nav-collapsed" : "",
+    isChatRoute ? "chat-route" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const identityInitials = identityName
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() || "")
     .join("");
-
-  const activePage = useMemo(
-    () => resolveActiveNav(location.pathname),
-    [location.pathname],
-  );
 
   useEffect(() => {
     setUtilityMenuOpen(false);
@@ -58,6 +61,7 @@ export function AppShell({ session, authStatus, onLogout, children }) {
   }, []);
 
   const flatItems = NAV_SECTIONS.flatMap((section) => section.items);
+  const mobileItems = flatItems.filter((item) => item.mobile !== false);
   const utilityPanel = (className = "", compact = false, ref = null) => (
     <div className={`shell-utility-panel ${className}`.trim()} ref={ref}>
       <button
@@ -106,7 +110,7 @@ export function AppShell({ session, authStatus, onLogout, children }) {
   );
 
   return (
-    <div className={`app-shell ${collapsed ? "nav-collapsed" : ""}`.trim()}>
+    <div className={shellClassName}>
       <aside className={`side-nav ${collapsed ? "collapsed" : ""}`.trim()}>
         <div className="side-nav-top">
           <div className="brand-row">
@@ -173,7 +177,7 @@ export function AppShell({ session, authStatus, onLogout, children }) {
 
       <div className="shell-main">
         <nav className="mobile-nav" aria-label="Runtime navigation">
-          {flatItems.map((item) => {
+          {mobileItems.map((item) => {
             const Icon = item.icon;
             return (
               <NavLink

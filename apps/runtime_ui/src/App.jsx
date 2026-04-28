@@ -16,6 +16,7 @@ import { ChatPage } from "./pages/ChatPage";
 import { ConnectorsPage } from "./pages/ConnectorsPage";
 import { DatasetsPage } from "./pages/DatasetsPage";
 import { OverviewPage } from "./pages/OverviewPage";
+import { RunsPage } from "./pages/RunsPage";
 import { SemanticModelsPage } from "./pages/SemanticModelsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SettingsUsersPage } from "./pages/SettingsUsersPage";
@@ -32,7 +33,9 @@ function RuntimeRoutes({ authStatus, session, onLogout }) {
         <Route path="/datasets/:id" element={<DatasetsPage />} />
         <Route path="/semantic-models" element={<SemanticModelsPage />} />
         <Route path="/semantic-models/:id" element={<SemanticModelsPage />} />
-        <Route path="/sql" element={<SqlPage />} />
+        <Route path="/runs" element={<RunsPage />} />
+        <Route path="/query-workspace" element={<SqlPage />} />
+        <Route path="/sql" element={<Navigate to="/query-workspace" replace />} />
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/agents/:id" element={<AgentsPage />} />
         <Route path="/chat" element={<ChatIndexPage />} />

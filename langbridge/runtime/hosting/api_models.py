@@ -11,14 +11,23 @@ from langbridge.connectors.base.config import (
     ConnectorRuntimeType,
     ConnectorSyncStrategy,
 )
+from langbridge.runtime.datasets.contracts import (
+    DatasetMaterializationConfig,
+    DatasetMaterializationMode,
+    DatasetRequestConfig,
+    DatasetSchemaHint,
+    DatasetSourceConfig,
+    DatasetSyncPolicy,
+)
 from langbridge.runtime.models.base import RuntimeModel, RuntimeRequestModel
+from langbridge.runtime.models.federation_diagnostics import RuntimeFederationDiagnostics
 from langbridge.runtime.models.metadata import (
     ConnectorCapabilities,
-    DatasetMaterializationMode,
     DatasetStatus,
     DatasetType,
     ManagementMode,
 )
+from langbridge.runtime.models.jobs import SqlQueryRequest, SqlQueryScope
 from langbridge.runtime.models.state import ConnectorSyncMode, ConnectorSyncStatus
 
 
@@ -40,10 +49,12 @@ class RuntimeDatasetSummary(RuntimeModel):
     label: str | None = None
     description: str | None = None
     connector: str | None = None
+    semantic_models: list[str] = Field(default_factory=list)
     semantic_model: str | None = None
+    materialization: dict[str, Any] | None = None
     materialization_mode: DatasetMaterializationMode | None = None
     source: dict[str, Any] | None = None
-    sync: dict[str, Any] | None = None
+    schema_hint: dict[str, Any] | None = None
     status: DatasetStatus | None = None
     sync_status: ConnectorSyncStatus | None = None
     last_sync_at: datetime | None = None
@@ -166,36 +177,11 @@ class RuntimeConnectorUpdateRequest(RuntimeRequestModel):
     capabilities: ConnectorCapabilities | dict[str, Any] | None = None
 
 
-class RuntimeDatasetSourceRequest(RuntimeRequestModel):
-    table: str | None = None
-    resource: str | None = None
-    flatten: list[str] | None = None
-    sql: str | None = None
-    path: str | None = None
-    storage_uri: str | None = None
-    format: str | None = None
-    file_format: str | None = None
-    header: bool | None = None
-    delimiter: str | None = None
-    quote: str | None = None
-
-    @model_validator(mode="after")
-    def _validate_source(self) -> "RuntimeDatasetSourceRequest":
-        has_table = bool(str(self.table or "").strip())
-        has_resource = bool(str(self.resource or "").strip())
-        has_sql = bool(str(self.sql or "").strip())
-        has_file = bool(str(self.path or "").strip() or str(self.storage_uri or "").strip())
-        configured_modes = sum((has_table, has_resource, has_sql, has_file))
-        if configured_modes != 1:
-            raise ValueError(
-                "Dataset source must define exactly one of table, resource, sql, or path/storage_uri."
-            )
-        if self.flatten and not has_resource:
-            raise ValueError("Dataset source flatten paths are only valid for resource-backed API datasets.")
-        return self
+class RuntimeDatasetSourceRequest(DatasetSourceConfig):
+    pass
 
 
-class RuntimeDatasetSyncSourceRequest(RuntimeDatasetSourceRequest):
+class RuntimeDatasetSyncSourceRequest(DatasetSourceConfig):
     pass
 
 
@@ -207,90 +193,128 @@ class RuntimeDatasetPolicyRequest(RuntimeRequestModel):
     allow_dml: bool = False
 
 
-class RuntimeDatasetSyncConfigRequest(RuntimeRequestModel):
+class RuntimeDatasetSyncConfigRequest(DatasetSyncPolicy):
     source: RuntimeDatasetSyncSourceRequest
-    strategy: ConnectorSyncStrategy | None = None
-    cadence: str | None = None
-    cursor_field: str | None = None
-    initial_cursor: str | None = None
-    lookback_window: str | None = None
-    backfill_start: str | None = None
-    backfill_end: str | None = None
-    sync_on_start: bool = False
 
-    @field_validator("strategy", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def _normalize_strategy(cls, value: Any) -> ConnectorSyncStrategy | None:
-        if value in {None, ""}:
-            return None
-        return ConnectorSyncStrategy(str(getattr(value, "value", value)).strip().upper())
+    def _normalize_sync_shape(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        strategy = normalized.get("strategy")
+        if isinstance(strategy, DatasetSyncPolicy):
+            normalized.update(strategy.model_dump(mode="json", exclude_none=True))
+            normalized["strategy"] = strategy.strategy
+        return normalized
 
-    @model_validator(mode="after")
-    def _validate_sync(self) -> "RuntimeDatasetSyncConfigRequest":
-        if self.source is None:
-            raise ValueError("Dataset sync config requires source.")
-        return self
+
+class RuntimeDatasetMaterializationRequest(DatasetMaterializationConfig):
+    pass
 
 
 class RuntimeDatasetCreateRequest(RuntimeRequestModel):
     name: str = Field(..., min_length=1, max_length=255)
+    label: str | None = Field(default=None, max_length=255)
     description: str | None = Field(default=None, max_length=1024)
     connector: str | None = Field(default=None, min_length=1, max_length=255)
-    materialization_mode: DatasetMaterializationMode
-    source: RuntimeDatasetSourceRequest | None = None
-    sync: RuntimeDatasetSyncConfigRequest | None = None
+    source: RuntimeDatasetSourceRequest
+    materialization: RuntimeDatasetMaterializationRequest
+    schema_hint: DatasetSchemaHint | None = None
     tags: list[str] = Field(default_factory=list)
     policy: RuntimeDatasetPolicyRequest | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_shape(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        legacy_mode = normalized.pop("materialization_mode", None)
+        legacy_sync = normalized.pop("sync", None)
+        if normalized.get("materialization") is None:
+            normalized["materialization"] = {
+                "mode": legacy_mode,
+                "sync": legacy_sync,
+            }
+        if normalized.get("source") is None and isinstance(legacy_sync, dict) and legacy_sync.get("source") is not None:
+            normalized["source"] = legacy_sync.get("source")
+        return normalized
 
     @model_validator(mode="after")
     def _validate_materialization_mode_source(self) -> "RuntimeDatasetCreateRequest":
         connector_name = str(self.connector or "").strip()
-        if self.materialization_mode == DatasetMaterializationMode.SYNCED:
+        if self.materialization.mode == DatasetMaterializationMode.SYNCED:
             if not connector_name:
                 raise ValueError("Dataset connector is required for synced datasets.")
-            if self.source is not None:
-                raise ValueError("Synced datasets must declare sync config, not live source config.")
-            if self.sync is None:
-                raise ValueError("Synced datasets must declare sync config.")
-            return self
-
-        if self.sync is not None:
-            raise ValueError("Live datasets must not declare sync config.")
-        if self.source is None:
-            raise ValueError("Live datasets must declare source.")
-        table_name = str(self.source.table or "").strip()
-        resource_name = str(self.source.resource or "").strip()
-        sql = str(self.source.sql or "").strip()
-        if not connector_name and (table_name or resource_name or sql):
-            raise ValueError(
-                "Dataset connector is required for table-backed, sql-backed, and API live dataset sources."
-            )
+        if not connector_name and self.source.kind.value in {"table", "sql", "resource", "request"}:
+            raise ValueError("Dataset connector is required for table-backed, sql-backed, and API dataset sources.")
         return self
+
+    @property
+    def materialization_mode(self) -> DatasetMaterializationMode:
+        return self.materialization.mode
+
+    @property
+    def sync(self) -> RuntimeDatasetSyncConfigRequest | None:
+        sync_policy = self.materialization.sync
+        if sync_policy is None:
+            return None
+        return RuntimeDatasetSyncConfigRequest.model_validate(
+            {
+                "source": self.source.model_dump(mode="json"),
+                **sync_policy.model_dump(mode="json", exclude_none=True),
+            }
+        )
 
 
 class RuntimeDatasetUpdateRequest(RuntimeRequestModel):
+    label: str | None = Field(default=None, max_length=255)
     description: str | None = Field(default=None, max_length=1024)
-    materialization_mode: DatasetMaterializationMode | None = None
+    materialization: RuntimeDatasetMaterializationRequest | None = None
     source: RuntimeDatasetSourceRequest | None = None
-    sync: RuntimeDatasetSyncConfigRequest | None = None
+    schema_hint: DatasetSchemaHint | None = None
     tags: list[str] | None = None
     policy: RuntimeDatasetPolicyRequest | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_shape(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        legacy_mode = normalized.pop("materialization_mode", None)
+        legacy_sync = normalized.pop("sync", None)
+        if normalized.get("materialization") is None and (legacy_mode is not None or legacy_sync is not None):
+            normalized["materialization"] = {
+                "mode": legacy_mode,
+                "sync": legacy_sync,
+            }
+        if normalized.get("source") is None and isinstance(legacy_sync, dict) and legacy_sync.get("source") is not None:
+            normalized["source"] = legacy_sync.get("source")
+        return normalized
+
     @model_validator(mode="after")
     def _validate_materialization_mode_source(self) -> "RuntimeDatasetUpdateRequest":
-        if self.materialization_mode is None:
-            return self
-
-        if self.materialization_mode == DatasetMaterializationMode.SYNCED:
-            if self.source is not None:
-                raise ValueError("Synced datasets must declare sync config, not live source config.")
-            if self.sync is not None:
-                return self
-            return self
-
-        if self.sync is not None:
-            raise ValueError("Live datasets must not declare sync config.")
         return self
+
+    @property
+    def materialization_mode(self) -> DatasetMaterializationMode | None:
+        if self.materialization is None:
+            return None
+        return self.materialization.mode
+
+    @property
+    def sync(self) -> RuntimeDatasetSyncConfigRequest | None:
+        if self.materialization is None or self.materialization.sync is None or self.source is None:
+            return None
+        sync_policy = self.materialization.sync
+        return RuntimeDatasetSyncConfigRequest.model_validate(
+            {
+                "source": self.source.model_dump(mode="json"),
+                **sync_policy.model_dump(mode="json", exclude_none=True),
+            }
+        )
 
 
 class RuntimeSemanticModelCreateRequest(RuntimeRequestModel):
@@ -378,38 +402,21 @@ class RuntimeSemanticQueryResponse(RuntimeModel):
     annotations: list[dict[str, Any]] = Field(default_factory=list)
     metadata: list[dict[str, Any]] | None = None
     generated_sql: str | None = None
+    federation_diagnostics: RuntimeFederationDiagnostics | None = None
     error: str | None = None
 
 
-class RuntimeSqlQueryRequest(RuntimeRequestModel):
-    query: str = Field(..., min_length=1)
-    connection_id: uuid.UUID | None = None
-    connection_name: str | None = None
-    selected_datasets: list[uuid.UUID] = Field(default_factory=list)
-    query_dialect: str = "tsql"
-    params: dict[str, Any] = Field(default_factory=dict)
-    requested_limit: int | None = Field(default=None, ge=1)
-    requested_timeout_seconds: int | None = Field(default=None, ge=1)
-    explain: bool = False
-
-    @model_validator(mode="after")
-    def _validate_sql_mode(self) -> "RuntimeSqlQueryRequest":
-        normalized: list[uuid.UUID] = []
-        for dataset_id in self.selected_datasets:
-            if dataset_id not in normalized:
-                normalized.append(dataset_id)
-        self.selected_datasets = normalized
-
-        if self.connection_id is not None and self.connection_name:
-            raise ValueError("Specify only one of connection_id or connection_name for direct SQL requests.")
-        if (self.connection_id is not None or self.connection_name) and self.selected_datasets:
-            raise ValueError("selected_datasets cannot be combined with explicit direct SQL requests.")
-        return self
+class RuntimeSqlQueryRequest(SqlQueryRequest):
+    pass
 
 
 class RuntimeSqlQueryResponse(RuntimeModel):
     sql_job_id: uuid.UUID | None = None
+    query_scope: SqlQueryScope
     status: str
+    semantic_model_id: uuid.UUID | None = None
+    semantic_model_ids: list[uuid.UUID] = Field(default_factory=list)
+    connector_id: uuid.UUID | None = None
     columns: list[dict[str, Any]] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)
     row_count_preview: int = 0
@@ -420,6 +427,7 @@ class RuntimeSqlQueryResponse(RuntimeModel):
     error: dict[str, Any] | None = None
     query: str | None = None
     generated_sql: str | None = None
+    federation_diagnostics: RuntimeFederationDiagnostics | None = None
 
 
 class RuntimeAgentAskRequest(RuntimeRequestModel):
@@ -428,13 +436,16 @@ class RuntimeAgentAskRequest(RuntimeRequestModel):
     agent_name: str | None = None
     thread_id: uuid.UUID | None = None
     title: str | None = None
+    agent_mode: str | None = None
     metadata_json: dict[str, Any] | None = None
 
 
 class RuntimeAgentAskResponse(RuntimeModel):
     thread_id: uuid.UUID | None = None
     status: str
+    run_id: uuid.UUID | None = None
     job_id: uuid.UUID | None = None
+    message_id: uuid.UUID | None = None
     summary: str | None = None
     result: Any | None = None
     visualization: Any | None = None

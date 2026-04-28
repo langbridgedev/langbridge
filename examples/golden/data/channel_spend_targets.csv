@@ -1,0 +1,55 @@
+channel_month_key,spend_month,acquisition_channel,geo_region,target_segment,spend_amount,impressions,clicks,qualified_leads_target
+2025-01|Paid Search,2025-01-01,Paid Search,Global,Enterprise,8500,180000,3600,14
+2025-01|Paid Social,2025-01-01,Paid Social,Global,Mid-Market,11210,223000,4392,19
+2025-01|Email,2025-01-01,Email,Global,SMB,11400,224000,4680,16
+2025-01|Affiliate,2025-01-01,Affiliate,Global,Enterprise,14110,267000,5472,25
+2025-01|Partner,2025-01-01,Partner,Global,Mid-Market,14300,268000,5760,22
+2025-01|Organic Search,2025-01-01,Organic Search,Global,SMB,17010,311000,6552,31
+2025-02|Paid Search,2025-02-01,Paid Search,Global,Enterprise,8500,180000,3600,14
+2025-02|Paid Social,2025-02-01,Paid Social,Global,Mid-Market,11420,226500,4434,20
+2025-02|Email,2025-02-01,Email,Global,SMB,11400,224000,4680,16
+2025-02|Affiliate,2025-02-01,Affiliate,Global,Enterprise,14320,270500,5514,26
+2025-02|Partner,2025-02-01,Partner,Global,Mid-Market,14300,268000,5760,22
+2025-02|Organic Search,2025-02-01,Organic Search,Global,SMB,17220,314500,6594,32
+2025-03|Paid Search,2025-03-01,Paid Search,Global,Enterprise,8500,180000,3600,14
+2025-03|Paid Social,2025-03-01,Paid Social,Global,Mid-Market,11630,230000,4476,21
+2025-03|Email,2025-03-01,Email,Global,SMB,11400,224000,4680,16
+2025-03|Affiliate,2025-03-01,Affiliate,Global,Enterprise,14530,274000,5556,27
+2025-03|Partner,2025-03-01,Partner,Global,Mid-Market,14300,268000,5760,22
+2025-03|Organic Search,2025-03-01,Organic Search,Global,SMB,17430,318000,6636,33
+2025-04|Paid Search,2025-04-01,Paid Search,Global,Enterprise,8500,180000,3600,14
+2025-04|Paid Social,2025-04-01,Paid Social,Global,Mid-Market,11840,233500,4518,22
+2025-04|Email,2025-04-01,Email,Global,SMB,11400,224000,4680,16
+2025-04|Affiliate,2025-04-01,Affiliate,Global,Enterprise,14740,277500,5598,28
+2025-04|Partner,2025-04-01,Partner,Global,Mid-Market,14300,268000,5760,22
+2025-04|Organic Search,2025-04-01,Organic Search,Global,SMB,17640,321500,6678,34
+2025-05|Paid Search,2025-05-01,Paid Search,Global,Enterprise,8500,180000,3600,14
+2025-05|Paid Social,2025-05-01,Paid Social,Global,Mid-Market,12050,237000,4560,23
+2025-05|Email,2025-05-01,Email,Global,SMB,11400,224000,4680,16
+2025-05|Affiliate,2025-05-01,Affiliate,Global,Enterprise,14950,281000,5640,29
+2025-05|Partner,2025-05-01,Partner,Global,Mid-Market,14300,268000,5760,22
+2025-05|Organic Search,2025-05-01,Organic Search,Global,SMB,17850,325000,6720,35
+2025-06|Paid Search,2025-06-01,Paid Search,Global,Enterprise,8500,180000,3600,14
+2025-06|Paid Social,2025-06-01,Paid Social,Global,Mid-Market,12260,240500,4602,24
+2025-06|Email,2025-06-01,Email,Global,SMB,11400,224000,4680,16
+2025-06|Affiliate,2025-06-01,Affiliate,Global,Enterprise,15160,284500,5682,30
+2025-06|Partner,2025-06-01,Partner,Global,Mid-Market,14300,268000,5760,22
+2025-06|Organic Search,2025-06-01,Organic Search,Global,SMB,18060,328500,6762,36
+2025-07|Paid Search,2025-07-01,Paid Search,Global,Enterprise,8500,180000,3600,14
+2025-07|Paid Social,2025-07-01,Paid Social,Global,Mid-Market,12470,244000,4644,25
+2025-07|Email,2025-07-01,Email,Global,SMB,11400,224000,4680,16
+2025-07|Affiliate,2025-07-01,Affiliate,Global,Enterprise,15370,288000,5724,31
+2025-07|Partner,2025-07-01,Partner,Global,Mid-Market,14300,268000,5760,22
+2025-07|Organic Search,2025-07-01,Organic Search,Global,SMB,18270,332000,6804,37
+2025-08|Paid Search,2025-08-01,Paid Search,Global,Enterprise,8500,180000,3600,14
+2025-08|Paid Social,2025-08-01,Paid Social,Global,Mid-Market,12680,247500,4686,26
+2025-08|Email,2025-08-01,Email,Global,SMB,11400,224000,4680,16
+2025-08|Affiliate,2025-08-01,Affiliate,Global,Enterprise,15580,291500,5766,32
+2025-08|Partner,2025-08-01,Partner,Global,Mid-Market,14300,268000,5760,22
+2025-08|Organic Search,2025-08-01,Organic Search,Global,SMB,18480,335500,6846,38
+2025-09|Paid Search,2025-09-01,Paid Search,Global,Enterprise,8500,180000,3600,14
+2025-09|Paid Social,2025-09-01,Paid Social,Global,Mid-Market,12890,251000,4728,27
+2025-09|Email,2025-09-01,Email,Global,SMB,11400,224000,4680,16
+2025-09|Affiliate,2025-09-01,Affiliate,Global,Enterprise,15790,295000,5808,33
+2025-09|Partner,2025-09-01,Partner,Global,Mid-Market,14300,268000,5760,22
+2025-09|Organic Search,2025-09-01,Organic Search,Global,SMB,18690,339000,6888,39

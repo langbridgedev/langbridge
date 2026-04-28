@@ -71,16 +71,14 @@ function buildDatasetEditFormState(detail) {
     detail?.relation_identity && typeof detail.relation_identity === "object"
       ? detail.relation_identity
       : {};
-  const syncConfig = detail?.sync && typeof detail.sync === "object" ? detail.sync : null;
-  const syncSource =
-    syncConfig?.source && typeof syncConfig.source === "object" ? syncConfig.source : {};
+  const source = detail?.source && typeof detail.source === "object" ? detail.source : {};
   const fileConfig =
     detail?.file_config && typeof detail.file_config === "object" ? detail.file_config : {};
-  const sourceMode = syncSource.resource
+  const sourceMode = source.request || source.resource
     ? "resource"
-    : detail?.sql_text
+    : source.sql || detail?.sql_text
       ? "sql"
-      : detail?.storage_uri
+      : source.path || source.storage_uri || detail?.storage_uri
         ? "file"
         : "table";
   const tableName =
@@ -94,10 +92,10 @@ function buildDatasetEditFormState(detail) {
     description: detail?.description || "",
     materializationMode: detail?.materialization_mode || "live",
     sourceMode,
-    table: sourceMode === "table" ? tableName : "",
-    resource: syncSource.resource || "",
-    sql: detail?.sql_text || "",
-    path: detail?.storage_uri || "",
+    table: sourceMode === "table" ? (source.table || tableName) : "",
+    resource: source.resource || source.request?.path || "",
+    sql: source.sql || detail?.sql_text || "",
+    path: source.path || source.storage_uri || detail?.storage_uri || "",
     format: fileConfig.format || fileConfig.file_format || "csv",
     header: Boolean(fileConfig.header),
     delimiter: fileConfig.delimiter || ",",
@@ -107,9 +105,7 @@ function buildDatasetEditFormState(detail) {
 }
 
 function toDatasetListItem(dataset) {
-  const syncConfig = dataset?.sync && typeof dataset.sync === "object" ? dataset.sync : null;
-  const syncSource =
-    syncConfig?.source && typeof syncConfig.source === "object" ? syncConfig.source : null;
+  const source = dataset?.source && typeof dataset.source === "object" ? dataset.source : null;
   return {
     id: dataset.id,
     name: dataset.name,
@@ -117,12 +113,19 @@ function toDatasetListItem(dataset) {
     description: dataset.description,
     connector: dataset.connector,
     semantic_model: dataset.semantic_model || null,
+    semantic_models: Array.isArray(dataset.semantic_models) ? dataset.semantic_models : [],
+    materialization: dataset.materialization || null,
     materialization_mode: dataset.materialization_mode,
     status: dataset.status,
-    source: dataset.source || null,
-    sync: syncConfig,
+    source: source,
+    sync: getDatasetSyncConfig(dataset),
     sync_resource:
-      syncSource?.resource || syncSource?.table || syncSource?.path || syncSource?.storage_uri || null,
+      source?.resource ||
+      source?.request?.path ||
+      source?.table ||
+      source?.path ||
+      source?.storage_uri ||
+      null,
     sync_status: dataset.sync_status || dataset.sync_state?.status || null,
     last_sync_at: dataset.last_sync_at || dataset.sync_state?.last_sync_at || null,
     management_mode: dataset.management_mode,
@@ -221,10 +224,13 @@ function isObject(value) {
 }
 
 function isSyncedDataset(value) {
-  return String(value?.materialization_mode || "").trim().toLowerCase() === "synced";
+  return String(value?.materialization?.mode || value?.materialization_mode || "").trim().toLowerCase() === "synced";
 }
 
 function getDatasetSyncConfig(value) {
+  if (isObject(value?.materialization?.sync)) {
+    return value.materialization.sync;
+  }
   return isObject(value?.sync) ? value.sync : null;
 }
 
@@ -254,12 +260,8 @@ function getDatasetSourceConfig(value) {
 }
 
 function getDatasetSyncSource(value) {
-  const syncConfig = getDatasetSyncConfig(value);
-  if (isObject(syncConfig?.source)) {
-    return syncConfig.source;
-  }
   const source = getDatasetSourceConfig(value);
-  if (isObject(source) && (source.resource || source.table || source.sql)) {
+  if (isObject(source) && (source.resource || source.request || source.table || source.sql)) {
     return source;
   }
   return null;
@@ -306,6 +308,9 @@ function describeSourceBinding(value) {
   if (source.resource) {
     return `Resource ${source.resource}`;
   }
+  if (source.request?.path) {
+    return `Request ${source.request.path}`;
+  }
   if (source.table) {
     return `Table ${source.table}`;
   }
@@ -331,6 +336,12 @@ function getSyncSourceDescriptor(value) {
     return {
       label: "Sync resource",
       value: source.resource,
+    };
+  }
+  if (source.request?.path) {
+    return {
+      label: "Sync request",
+      value: source.request.path,
     };
   }
   if (source.table) {
@@ -817,10 +828,13 @@ export function DatasetsPage() {
       const payload = {
         name,
         connector: createForm.connector || null,
-        materialization_mode: createForm.materializationMode,
-        ...(createForm.materializationMode === "synced"
-          ? { sync: { source: {} } }
-          : { source: {} }),
+        source: {},
+        materialization: {
+          mode: createForm.materializationMode,
+          ...(createForm.materializationMode === "synced"
+            ? { sync: {} }
+            : {}),
+        },
       };
       const description = String(createForm.description || "").trim();
       if (description) {
@@ -832,18 +846,21 @@ export function DatasetsPage() {
         if (!table) {
           throw new Error("Dataset source.table is required.");
         }
+        payload.source.kind = "table";
         payload.source.table = table;
       } else if (createSourceMode === "sql") {
         const sql = String(createForm.sql || "").trim();
         if (!sql) {
           throw new Error("Dataset source.sql is required.");
         }
+        payload.source.kind = "sql";
         payload.source.sql = sql;
       } else if (createSourceMode === "file") {
         const path = String(createForm.path || "").trim();
         if (!path) {
           throw new Error("Dataset source.path is required.");
         }
+        payload.source.kind = "file";
         payload.source.path = path;
         payload.source.format = createForm.format;
         payload.source.header = Boolean(createForm.header);
@@ -858,7 +875,8 @@ export function DatasetsPage() {
         if (!resource) {
           throw new Error("Dataset source.resource is required for synced datasets.");
         }
-        payload.sync.source.resource = resource;
+        payload.source.kind = "resource";
+        payload.source.resource = resource;
       }
 
       const tags = splitCsv(createForm.tags);
@@ -917,11 +935,14 @@ export function DatasetsPage() {
     try {
       const payload = {
         description: String(editForm.description || "").trim() || null,
-        materialization_mode: editForm.materializationMode,
+        source: {},
+        materialization: {
+          mode: editForm.materializationMode,
+          ...(editForm.materializationMode === "synced"
+            ? { sync: { ...(getDatasetSyncConfig(detail) || {}) } }
+            : {}),
+        },
         tags: splitCsv(editForm.tags),
-        ...(editForm.materializationMode === "synced"
-          ? { sync: { ...(getDatasetSyncConfig(detail) || {}), source: {} } }
-          : { source: {} }),
       };
       const editSourceMode =
         editForm.materializationMode === "synced" ? "resource" : editForm.sourceMode;
@@ -930,18 +951,21 @@ export function DatasetsPage() {
         if (!table) {
           throw new Error("Dataset source.table is required.");
         }
+        payload.source.kind = "table";
         payload.source.table = table;
       } else if (editSourceMode === "sql") {
         const sql = String(editForm.sql || "").trim();
         if (!sql) {
           throw new Error("Dataset source.sql is required.");
         }
+        payload.source.kind = "sql";
         payload.source.sql = sql;
       } else if (editSourceMode === "file") {
         const path = String(editForm.path || "").trim();
         if (!path) {
           throw new Error("Dataset source.path or source.storage_uri is required.");
         }
+        payload.source.kind = "file";
         payload.source.storage_uri = path;
         payload.source.format = editForm.format;
         payload.source.header = Boolean(editForm.header);
@@ -956,10 +980,8 @@ export function DatasetsPage() {
         if (!resource) {
           throw new Error("Dataset source.resource is required for synced datasets.");
         }
-        payload.sync.source = {
-          ...(getDatasetSyncConfig(detail)?.source || {}),
-          resource,
-        };
+        payload.source.kind = "resource";
+        payload.source.resource = resource;
       }
 
       const updated = await updateDataset(String(detail.id || detail.name), payload);
@@ -1988,8 +2010,12 @@ export function DatasetsPage() {
                         Edit
                       </button>
                     ) : null}
-                    <button className="ghost-button" type="button" onClick={() => navigate("/sql")}>
-                      Open SQL
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      onClick={() => navigate("/query-workspace")}
+                    >
+                      Open Query Workspace
                     </button>
                     <button
                       className="ghost-button"
@@ -2299,7 +2325,7 @@ export function DatasetsPage() {
                     <article className="detail-card">
                       <strong>SQL alias</strong>
                       <span>{detail?.sql_alias || toSqlAlias(detail?.name || selected.name)}</span>
-                      <small>Use this alias from the runtime SQL workspace.</small>
+                      <small>Use this alias from Query Workspace.</small>
                     </article>
                     <article className="detail-card">
                       <strong>Semantic and policy posture</strong>

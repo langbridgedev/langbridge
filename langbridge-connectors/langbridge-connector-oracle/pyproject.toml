@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langbridge-connector-oracle"
+version = "0.1.0"
+description = "Oracle connector for Langbridge"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["langbridge", "oracledb"]
+
+[project.entry-points."langbridge.connectors"]
+oracle = "langbridge_connector_oracle:get_connector_plugin"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

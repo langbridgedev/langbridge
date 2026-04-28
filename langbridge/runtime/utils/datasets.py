@@ -12,6 +12,7 @@ from langbridge.runtime.models import (
     DatasetSourceKind,
     DatasetStorageKind,
 )
+from langbridge.runtime.utils.util import _coerce_uuid, _string_or_none
 
 def resolve_dataset_source_kind(
     *,
@@ -282,19 +283,3 @@ def _qualified_name(
     if not parts:
         return None
     return ".".join(parts)
-
-
-def _string_or_none(value: Any) -> str | None:
-    normalized = str(value or "").strip()
-    return normalized or None
-
-
-def _coerce_uuid(value: Any) -> uuid.UUID | None:
-    if value in {None, ""}:
-        return None
-    if isinstance(value, uuid.UUID):
-        return value
-    try:
-        return uuid.UUID(str(value))
-    except (TypeError, ValueError):
-        return None

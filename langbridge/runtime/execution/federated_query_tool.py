@@ -16,7 +16,11 @@ from langbridge.federation.connectors import (
     RemoteSource,
     SqlConnectorRemoteSource,
 )
-from langbridge.federation.executor import ArtifactStore
+from langbridge.federation.executor import (
+    ArtifactStore,
+    FederationExecutionOffloader,
+    run_federation_blocking,
+)
 from langbridge.federation.models import FederationWorkflow, SMQQuery
 from langbridge.federation.service import FederatedQueryService
 from langbridge.runtime.providers import (
@@ -43,6 +47,7 @@ class FederatedQueryTool:
         connector_provider: ConnectorMetadataProvider,
         secret_provider_registry: SecretProviderRegistry | None = None,
         credential_provider: CredentialProvider | None = None,
+        blocking_executor: FederationExecutionOffloader | None = None,
     ) -> None:
         self._connector_provider = connector_provider
         self._credential_provider = credential_provider or SecretRegistryCredentialProvider(
@@ -54,7 +59,15 @@ class FederatedQueryTool:
         self._storage_connector_factory = StorageConnectorFactory()
         self._service = FederatedQueryService(
             artifact_store=ArtifactStore(base_dir=settings.FEDERATION_ARTIFACT_DIR),
+            blocking_executor=blocking_executor,
         )
+
+    async def aclose(self) -> None:
+        await self._service.aclose()
+
+    def close(self) -> None:
+        self._service.close()
+
     async def execute_federated_query(self, query_payload: dict[str, Any]) -> dict[str, Any]:
         request = FederatedQueryToolRequest.model_validate(query_payload)
         sources = await self._build_sources(request.workflow)
@@ -62,12 +75,6 @@ class FederatedQueryTool:
             load_semantic_model(request.semantic_model)
             if request.semantic_model is not None
             else None
-        )
-        self._service.register_workspace(
-            workspace_id=request.workspace_id,
-            workflow=request.workflow,
-            sources=sources,
-            semantic_model=semantic_model,
         )
 
         query_value: str | SMQQuery
@@ -80,11 +87,29 @@ class FederatedQueryTool:
             query=query_value,
             dialect=request.dialect,
             workspace_id=request.workspace_id,
+            workflow=request.workflow,
+            sources=sources,
+            semantic_model=semantic_model
         )
         table: pa.Table = await self._service.fetch_arrow(result_handle)
-        rows = table.to_pylist()
+        rows = await run_federation_blocking(
+            self._service.blocking_executor,
+            table.to_pylist,
+        )
         return {
             "result_handle": result_handle.model_dump(mode="json"),
+            "planning": {
+                "logical_plan": (
+                    result_handle.logical_plan.model_dump(mode="json")
+                    if result_handle.logical_plan is not None
+                    else None
+                ),
+                "physical_plan": (
+                    result_handle.physical_plan.model_dump(mode="json")
+                    if result_handle.physical_plan is not None
+                    else None
+                ),
+            },
             "columns": table.column_names,
             "rows": rows,
             "row_count": len(rows),
@@ -95,21 +120,22 @@ class FederatedQueryTool:
         request = FederatedQueryToolRequest.model_validate(query_payload)
         sources = await self._build_sources(request.workflow)
         semantic_model = (
-            load_semantic_model(request.semantic_model)
+            await run_federation_blocking(
+                self._service.blocking_executor,
+                load_semantic_model,
+                request.semantic_model,
+            )
             if request.semantic_model is not None
             else None
-        )
-        self._service.register_workspace(
-            workspace_id=request.workspace_id,
-            workflow=request.workflow,
-            sources=sources,
-            semantic_model=semantic_model,
         )
 
         explain = await self._service.explain(
             query=request.query,
             dialect=request.dialect,
             workspace_id=request.workspace_id,
+            workflow=request.workflow,
+            sources=sources,
+            semantic_model=semantic_model,
         )
         return explain.model_dump(mode="json")
 
@@ -170,6 +196,7 @@ class FederatedQueryTool:
                     connector=api_connector,
                     bindings=bindings,
                     logger=self._logger,
+                    blocking_executor=self._service.blocking_executor,
                 )
                 continue
             if self._is_distributed_parquet_source(bindings):
@@ -203,6 +230,7 @@ class FederatedQueryTool:
                     bindings=bindings,
                     storage_connector=storage_connector,
                     logger=self._logger,
+                    blocking_executor=self._service.blocking_executor,
                 )
                 continue
             if is_file_like_source:
@@ -210,6 +238,7 @@ class FederatedQueryTool:
                     source_id=source_id,
                     bindings=bindings,
                     logger=self._logger,
+                    blocking_executor=self._service.blocking_executor,
                 )
                 continue
 
@@ -243,6 +272,7 @@ class FederatedQueryTool:
                 connector=sql_connector,
                 dialect=source_dialect,
                 logger=self._logger,
+                blocking_executor=self._service.blocking_executor,
             )
 
         return sources

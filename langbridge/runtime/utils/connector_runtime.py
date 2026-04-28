@@ -107,3 +107,37 @@ def _coerce_connector_capabilities(value: Any) -> ConnectorCapabilities:
     if isinstance(value, PluginConnectorCapabilities):
         return ConnectorCapabilities.model_validate(value.model_dump(mode="json"))
     return ConnectorCapabilities.model_validate(value or {})
+
+
+def resolve_supported_resources(
+    *,
+    plugin: ConnectorPlugin | None,
+    connector_config: Any | None,
+) -> list[str]:
+    if plugin is not None and plugin.supported_resources:
+        return list(plugin.supported_resources)
+
+    raw_resources = getattr(connector_config, "resources", None)
+    if raw_resources is None and isinstance(connector_config, dict):
+        raw_resources = connector_config.get("resources")
+    if isinstance(raw_resources, str):
+        try:
+            raw_resources = json.loads(raw_resources)
+        except Exception:
+            return []
+    if not isinstance(raw_resources, list):
+        return []
+
+    items: list[str] = []
+    seen: set[str] = set()
+    for resource in raw_resources:
+        key = ""
+        if isinstance(resource, dict):
+            key = str(resource.get("key", "") or "").strip()
+        else:
+            key = str(getattr(resource, "key", "") or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        items.append(key)
+    return items

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langbridge-connector-bigquery"
+version = "0.1.0"
+description = "BigQuery connector for Langbridge"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["langbridge", "google-cloud-bigquery", "google-auth"]
+
+[project.entry-points."langbridge.connectors"]
+bigquery = "langbridge_connector_bigquery:get_connector_plugin"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

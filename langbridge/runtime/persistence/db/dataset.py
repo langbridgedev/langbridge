@@ -47,6 +47,7 @@ class DatasetRecord(Base):
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sql_alias: Mapped[str] = mapped_column(
         String(128),
         nullable=False,

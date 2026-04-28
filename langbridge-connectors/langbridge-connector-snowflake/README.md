@@ -1,3 +1,3 @@
-# langbridge-sdk
+# Langbridge Snowflake Connector
 
-Runtime-facing SDK package published from the Langbridge runtime repository.
+This is a connector for integrating Snowflake with Langbridge.

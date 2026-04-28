@@ -167,6 +167,7 @@ class AgentDefinitionStore(Protocol):
 
 class LLMConnectionStore(Protocol):
     async def get_by_id(self, id_: object) -> LLMConnectionSecret | None: ...
+    async def list_llm_connections(self) -> list[LLMConnectionSecret]: ...
 
 
 class ThreadStore(Protocol):

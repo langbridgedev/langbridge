@@ -14,6 +14,10 @@ from langbridge.federation.connectors.base import (
     RemoteSource,
     SourceCapabilities,
 )
+from langbridge.federation.executor.offload import (
+    FederationExecutionOffloader,
+    run_federation_blocking,
+)
 from langbridge.federation.models.plans import SourceSubplan
 from langbridge.federation.models.virtual_dataset import (
     TableStatistics,
@@ -28,10 +32,12 @@ class DuckDbFileRemoteSource(RemoteSource):
         source_id: str,
         bindings: list[VirtualTableBinding],
         logger: logging.Logger | None = None,
+        blocking_executor: FederationExecutionOffloader | None = None,
     ) -> None:
         self.source_id = source_id
         self._bindings = {binding.table_key: binding for binding in bindings}
         self._logger = logger or logging.getLogger(__name__)
+        self._blocking_executor = blocking_executor
 
     def capabilities(self) -> SourceCapabilities:
         return SourceCapabilities(
@@ -48,37 +54,58 @@ class DuckDbFileRemoteSource(RemoteSource):
     async def execute(self, subplan: SourceSubplan) -> RemoteExecutionResult:
         binding = self._require_binding(subplan.table_key)
         started = time.perf_counter()
-        connection = duckdb.connect(database=":memory:")
         try:
-            self._register_binding(connection=connection, binding=binding)
-            result = connection.execute(subplan.sql)
-            table = result.fetch_arrow_table()
+            table = await run_federation_blocking(
+                self._blocking_executor,
+                self._execute_subplan_blocking,
+                binding,
+                subplan.sql,
+            )
             return RemoteExecutionResult(
-                table=table if isinstance(table, pa.Table) else pa.table({}),
+                table=table,
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
             )
         except Exception as e:
             self._logger.error("Error executing subplan on file source %s: %s", self.source_id, str(e), exc_info=True)
             raise
-        finally:
-            connection.close()
 
     async def estimate_table_stats(self, binding: VirtualTableBinding) -> TableStatistics:
         table_binding = self._require_binding(binding.table_key)
         if table_binding.stats is not None:
             return table_binding.stats
 
+        try:
+            return await run_federation_blocking(
+                self._blocking_executor,
+                self._estimate_table_stats_blocking,
+                table_binding,
+            )
+        except Exception:
+            self._logger.warning("Falling back to heuristic stats for file source %s", self.source_id)
+            return TableStatistics(row_count_estimate=1_000_000.0, bytes_per_row=128.0)
+
+    def _execute_subplan_blocking(self, binding: VirtualTableBinding, sql: str | None) -> pa.Table:
         connection = duckdb.connect(database=":memory:")
         try:
-            self._register_binding(connection=connection, binding=table_binding)
+            self._register_binding(connection=connection, binding=binding)
+            result = connection.execute(sql)
+            table = result.fetch_arrow_table()
+            return table if isinstance(table, pa.Table) else pa.table({})
+        finally:
+            connection.close()
+
+    def _estimate_table_stats_blocking(self, binding: VirtualTableBinding) -> TableStatistics:
+        connection = duckdb.connect(database=":memory:")
+        try:
+            self._register_binding(connection=connection, binding=binding)
             result = connection.execute(
-                f"SELECT COUNT(*) AS row_count FROM {self._qualified_relation_name(table_binding)}"
+                f"SELECT COUNT(*) AS row_count FROM {self._qualified_relation_name(binding)}"
             )
             rows = result.fetchall()
             row_count = float(rows[0][0]) if rows else None
             bytes_per_row = 128.0
             try:
-                storage_uri = self._storage_uri_from_binding(table_binding)
+                storage_uri = self._storage_uri_from_binding(binding)
                 path = resolve_local_storage_path(storage_uri)
                 if path.exists():
                     file_size = float(path.stat().st_size)
@@ -87,9 +114,6 @@ class DuckDbFileRemoteSource(RemoteSource):
             except Exception:
                 self._logger.debug("Unable to estimate bytes per row for source=%s", self.source_id)
             return TableStatistics(row_count_estimate=row_count, bytes_per_row=bytes_per_row)
-        except Exception:
-            self._logger.warning("Falling back to heuristic stats for file source %s", self.source_id)
-            return TableStatistics(row_count_estimate=1_000_000.0, bytes_per_row=128.0)
         finally:
             connection.close()
 

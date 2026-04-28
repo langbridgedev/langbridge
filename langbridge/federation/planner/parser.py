@@ -263,24 +263,16 @@ def _resolve_table(
     schema_name = table_expression.db
     catalog_name = table_expression.catalog
 
-    direct = virtual_dataset.virtual_tables.get(table_name.lower())
-    if direct is not None:
-        return alias, direct
-    direct = virtual_dataset.tables.get(f"{schema_name}.{table_name}" if schema_name else table_name)
-    if direct is not None:
-        return alias, direct
-    candidates = []
+    candidates: list[VirtualTableBinding] = []
     for table_key, binding in virtual_dataset.tables.items():
-        if table_key == table_name:
+        if _binding_matches_table_ref(
+            table_key=table_key,
+            binding=binding,
+            table_name=table_name,
+            schema_name=schema_name,
+            catalog_name=catalog_name,
+        ):
             candidates.append(binding)
-            continue
-        if binding.table != table_name:
-            continue
-        if schema_name and (binding.schema_name or "") != schema_name:
-            continue
-        if catalog_name and (binding.catalog or "") != catalog_name:
-            continue
-        candidates.append(binding)
 
     if len(candidates) == 1:
         return alias, candidates[0]
@@ -289,6 +281,110 @@ def _resolve_table(
             f"Table '{table_expression.sql()}' is not mapped in virtual dataset '{virtual_dataset.id}'."
         )
     raise QueryParsingError(f"Table '{table_expression.sql()}' has ambiguous source mappings.")
+
+
+def _binding_matches_table_ref(
+    *,
+    table_key: str,
+    binding: VirtualTableBinding,
+    table_name: str,
+    schema_name: str | None,
+    catalog_name: str | None,
+) -> bool:
+    for candidate_catalog, candidate_schema, candidate_table in _binding_table_candidates(
+        table_key=table_key,
+        binding=binding,
+    ):
+        if _table_ref_matches(
+            table_name=table_name,
+            schema_name=schema_name,
+            catalog_name=catalog_name,
+            candidate_table=candidate_table,
+            candidate_schema=candidate_schema,
+            candidate_catalog=candidate_catalog,
+        ):
+            return True
+    return False
+
+
+def _binding_table_candidates(
+    *,
+    table_key: str,
+    binding: VirtualTableBinding,
+) -> list[tuple[str | None, str | None, str]]:
+    metadata = binding.metadata if isinstance(binding.metadata, dict) else {}
+    raw_candidates: list[tuple[str | None, str | None, str | None]] = [
+        _split_table_reference(table_key),
+        (binding.catalog, binding.schema_name, binding.table),
+        (
+            _string_or_none(metadata.get("physical_catalog")),
+            _string_or_none(metadata.get("physical_schema")),
+            _string_or_none(metadata.get("physical_table")),
+        ),
+        (None, None, _string_or_none(metadata.get("dataset_alias"))),
+    ]
+
+    candidates: list[tuple[str | None, str | None, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for catalog, schema, table in raw_candidates:
+        table_value = _string_or_none(table)
+        if table_value is None:
+            continue
+        normalized = (
+            _normalize_identifier(catalog),
+            _normalize_identifier(schema),
+            _normalize_identifier(table_value),
+        )
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        candidates.append((_string_or_none(catalog), _string_or_none(schema), table_value))
+    return candidates
+
+
+def _table_ref_matches(
+    *,
+    table_name: str,
+    schema_name: str | None,
+    catalog_name: str | None,
+    candidate_table: str,
+    candidate_schema: str | None,
+    candidate_catalog: str | None,
+) -> bool:
+    ref_catalog, ref_schema, ref_table = _split_table_reference(table_name)
+    if schema_name:
+        ref_schema = schema_name
+    if catalog_name:
+        ref_catalog = catalog_name
+
+    if _normalize_identifier(ref_table) != _normalize_identifier(candidate_table):
+        return False
+    if ref_schema and _normalize_identifier(ref_schema) != _normalize_identifier(candidate_schema):
+        return False
+    if ref_catalog and _normalize_identifier(ref_catalog) != _normalize_identifier(candidate_catalog):
+        return False
+    return True
+
+
+def _split_table_reference(value: str | None) -> tuple[str | None, str | None, str | None]:
+    normalized = _string_or_none(value)
+    if normalized is None:
+        return None, None, None
+    parts = [part for part in normalized.split(".") if part]
+    if len(parts) >= 3:
+        return ".".join(parts[:-2]), parts[-2], parts[-1]
+    if len(parts) == 2:
+        return None, parts[0], parts[1]
+    return None, None, normalized
+
+
+def _normalize_identifier(value: object) -> str:
+    return str(value or "").strip().strip('"').lower()
+
+
+def _string_or_none(value: object) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
 
 
 def _table_ref(*, alias: str, binding: VirtualTableBinding) -> TableRef:

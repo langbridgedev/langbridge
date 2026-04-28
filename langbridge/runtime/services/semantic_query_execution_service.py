@@ -10,15 +10,16 @@ from typing import Any
 import yaml
 from .errors import ExecutionValidationError
 
+from langbridge.federation.models import ExecutionSummary, FederationWorkflow, LogicalPlan, PhysicalPlan
 from langbridge.runtime.services.dataset_execution import (
     DatasetExecutionResolver,
     build_binding_for_dataset,
     synthetic_file_connector_id,
 )
 from langbridge.runtime.models import (
+    SemanticGraphQueryResponse,
+    SemanticGraphSourceModelRequest,
     SemanticQueryResponse,
-    UnifiedSemanticSourceModelRequest,
-    UnifiedSemanticQueryResponse,
 )
 from langbridge.runtime.models.metadata import DatasetType
 from langbridge.connectors.base import (
@@ -33,19 +34,21 @@ from langbridge.runtime.providers import (
     DatasetMetadataProvider,
     SemanticModelMetadataProvider,
 )
+from langbridge.runtime.utils.sql import normalize_sql_dialect
+from langbridge.runtime.services.federation_diagnostics import build_runtime_federation_diagnostics
 from langbridge.runtime.settings import runtime_settings as settings
 from langbridge.semantic.loader import (
     SemanticModelError,
+    load_semantic_graph,
     load_semantic_model,
-    load_unified_semantic_model,
 )
 from langbridge.semantic.model import SemanticModel
 from langbridge.semantic.query import SemanticQuery, SemanticQueryEngine
-from langbridge.semantic.unified_query import (
+from langbridge.semantic.graph_compiler import (
+    SemanticGraphSource,
     WorkspaceAwareQueryContext,
-    UnifiedSourceModel,
     apply_workspace_aware_context,
-    build_unified_semantic_model,
+    compile_semantic_graph,
 )
 
 _DATE_RANGE_PRESETS = {
@@ -58,12 +61,14 @@ _DATE_RANGE_PRESETS = {
 }
 
 
-def _normalize_unified_relationship_payload(relationship: Any) -> dict[str, Any]:
+def _normalize_semantic_graph_relationship_payload(relationship: Any) -> dict[str, Any]:
     if hasattr(relationship, "model_dump"):
         return relationship.model_dump(exclude_none=True)
     if isinstance(relationship, Mapping):
         return dict(relationship)
     return dict(relationship)
+
+
 _YEAR_PATTERN = re.compile(r"^\d{4}$")
 _YEAR_MONTH_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 _ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -74,16 +79,16 @@ _DATE_MEMBER_HINTS = ("date", "time", "timestamp", "_at", "_ts")
 
 
 @dataclass(frozen=True)
-class UnifiedModelConfig:
+class SemanticGraphConfig:
     semantic_model_ids: list[uuid.UUID]
-    source_models: list[UnifiedSemanticSourceModelRequest] | None = None
+    source_models: list[SemanticGraphSourceModelRequest] | None = None
     relationships: list[dict[str, Any]] | None = None
     metrics: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
-class UnifiedQueryExecutionResult:
-    response: UnifiedSemanticQueryResponse
+class SemanticGraphQueryExecutionResult:
+    response: SemanticGraphQueryResponse
     compiled_sql: str
 
 
@@ -129,6 +134,38 @@ class SemanticQueryExecutionService:
                 if schema_value is not None and "schema_name" not in table_payload:
                     table_payload["schema_name"] = schema_value
         return payload
+
+    @staticmethod
+    def _build_federation_diagnostics(
+        *,
+        workflow: Any,
+        planning_payload: dict[str, Any] | None,
+        execution_payload: dict[str, Any] | None,
+    ):
+        if not isinstance(planning_payload, dict):
+            return None
+        logical_plan_payload = planning_payload.get("logical_plan")
+        physical_plan_payload = planning_payload.get("physical_plan")
+        if not isinstance(logical_plan_payload, dict) or not isinstance(physical_plan_payload, dict):
+            return None
+        logical_plan = LogicalPlan.model_validate(logical_plan_payload)
+        physical_plan = PhysicalPlan.model_validate(physical_plan_payload)
+        execution_summary = (
+            ExecutionSummary.model_validate(execution_payload)
+            if isinstance(execution_payload, dict)
+            else None
+        )
+        normalized_workflow = (
+            workflow
+            if isinstance(workflow, FederationWorkflow)
+            else FederationWorkflow.model_validate(workflow)
+        )
+        return build_runtime_federation_diagnostics(
+            workflow=normalized_workflow,
+            logical_plan=logical_plan,
+            physical_plan=physical_plan,
+            execution=execution_summary,
+        )
 
     @staticmethod
     def build_widget_query_payload(
@@ -296,27 +333,27 @@ class SemanticQueryExecutionService:
 
         return None
 
-    async def execute_unified_query(
+    async def execute_semantic_graph_query(
         self,
         *,
         workspace_id: uuid.UUID,
         semantic_query: SemanticQuery,
         semantic_model_ids: Iterable[uuid.UUID],
-        source_models: Iterable[UnifiedSemanticSourceModelRequest] | None = None,
+        source_models: Iterable[SemanticGraphSourceModelRequest] | None = None,
         relationships: Iterable[Any] | None = None,
         metrics: Mapping[str, Any] | None = None,
-    ) -> UnifiedQueryExecutionResult:
+    ) -> SemanticGraphQueryExecutionResult:
         if self._federated_query_tool is None:
             raise ExecutionValidationError("Federated query tool is not configured on this runtime node.")
 
-        semantic_model, table_connector_map = await self._build_unified_model_and_map(
+        semantic_model, table_connector_map = await self._build_semantic_graph_model_and_map(
             workspace_id=workspace_id,
             semantic_model_ids=semantic_model_ids,
             source_models=source_models,
             relationships=relationships,
             metrics=metrics,
         )
-        execution_connector_id = self.build_unified_execution_connector_id(
+        execution_connector_id = self.build_semantic_graph_execution_connector_id(
             workspace_id=workspace_id
         )
         execution_model = apply_workspace_aware_context(
@@ -337,7 +374,7 @@ class SemanticQueryExecutionService:
         except Exception as exc:
             raise ExecutionValidationError(f"Semantic query translation failed: {exc}") from exc
 
-        workflow_payload = await self._build_federation_workflow_payload(
+        workflow_payload = await self._build_semantic_graph_federation_workflow_payload(
             workspace_id=workspace_id,
             semantic_model=execution_model,
             source_semantic_model=semantic_model,
@@ -355,8 +392,13 @@ class SemanticQueryExecutionService:
         data_payload = execution.get("rows", [])
         if not isinstance(data_payload, list):
             raise ExecutionValidationError("Federated query execution returned an invalid row payload.")
+        federation_diagnostics = self._build_federation_diagnostics(
+            workflow=workflow_payload,
+            planning_payload=execution.get("planning") if isinstance(execution, dict) else None,
+            execution_payload=execution.get("execution") if isinstance(execution, dict) else None,
+        )
 
-        response = UnifiedSemanticQueryResponse(
+        response = SemanticGraphQueryResponse(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
             connector_id=execution_connector_id,
@@ -364,8 +406,12 @@ class SemanticQueryExecutionService:
             data=data_payload,
             annotations=plan.annotations,
             metadata=plan.metadata,
+            federation_diagnostics=federation_diagnostics,
         )
-        return UnifiedQueryExecutionResult(response=response, compiled_sql=plan.sql)
+        return SemanticGraphQueryExecutionResult(response=response, compiled_sql=plan.sql)
+
+    async def execute_unified_query(self, *args: Any, **kwargs: Any) -> SemanticGraphQueryExecutionResult:
+        return await self.execute_semantic_graph_query(*args, **kwargs)
 
     async def execute_standard_query(
         self,
@@ -398,12 +444,13 @@ class SemanticQueryExecutionService:
             semantic_model=semantic_model,
             raw_datasets_payload=raw_datasets if isinstance(raw_datasets, Mapping) else None,
         )
+        execution_dialect = self._semantic_execution_dialect(workflow_dialect)
 
         try:
             plan = self._engine.compile(
                 semantic_query,
                 semantic_model,
-                dialect=workflow_dialect,
+                dialect=execution_dialect,
             )
         except Exception as exc:
             raise ExecutionValidationError(f"Semantic query translation failed: {exc}") from exc
@@ -412,7 +459,7 @@ class SemanticQueryExecutionService:
             {
                 "workspace_id": str(workspace_id),
                 "query": semantic_query.model_dump(by_alias=True, exclude_none=True),
-                "dialect": workflow_dialect,
+                "dialect": execution_dialect,
                 "workflow": self._serialize_workflow_payload(workflow),
                 "semantic_model": semantic_model.model_dump(by_alias=True, exclude_none=True),
             }
@@ -420,6 +467,11 @@ class SemanticQueryExecutionService:
         rows_payload = execution.get("rows", [])
         if not isinstance(rows_payload, list):
             raise ExecutionValidationError("Dataset-backed semantic query returned an invalid row payload.")
+        federation_diagnostics = self._build_federation_diagnostics(
+            workflow=workflow,
+            planning_payload=execution.get("planning") if isinstance(execution, dict) else None,
+            execution_payload=execution.get("execution") if isinstance(execution, dict) else None,
+        )
 
         response = SemanticQueryResponse(
             id=uuid.uuid4(),
@@ -428,15 +480,23 @@ class SemanticQueryExecutionService:
             data=[row for row in rows_payload if isinstance(row, dict)],
             annotations=plan.annotations,
             metadata=plan.metadata,
+            federation_diagnostics=federation_diagnostics,
         )
         return StandardQueryExecutionResult(response=response, compiled_sql=plan.sql)
 
-    async def _build_unified_model_and_map(
+    @staticmethod
+    def _semantic_execution_dialect(workflow_dialect: str | None) -> str:
+        normalized = normalize_sql_dialect(workflow_dialect, default="tsql")
+        if normalized == "sqlite":
+            return "duckdb"
+        return normalized
+
+    async def _build_semantic_graph_model_and_map(
         self,
         *,
         workspace_id: uuid.UUID,
         semantic_model_ids: Iterable[uuid.UUID],
-        source_models: Iterable[UnifiedSemanticSourceModelRequest] | None = None,
+        source_models: Iterable[SemanticGraphSourceModelRequest] | None = None,
         relationships: Iterable[Any] | None = None,
         metrics: Mapping[str, Any] | None = None,
     ) -> tuple[SemanticModel, dict[str, uuid.UUID]]:
@@ -445,7 +505,7 @@ class SemanticQueryExecutionService:
             source_model.id: source_model
             for source_model in (source_models or [])
         }
-        loaded_source_models: list[UnifiedSourceModel] = []
+        loaded_source_models: list[SemanticGraphSource] = []
         table_connector_map: dict[str, uuid.UUID] = {}
         seen_keys: set[str] = set()
         for semantic_model_id in normalized_model_ids:
@@ -455,7 +515,7 @@ class SemanticQueryExecutionService:
             )
             if semantic_model_record is None:
                 raise ExecutionValidationError(
-                    f"Semantic model '{semantic_model_id}' not found for unified query."
+                    f"Semantic model '{semantic_model_id}' not found for semantic graph query."
                 )
             semantic_model = self.load_model_payload(semantic_model_record.content_yaml)
             raw_payload = self._parse_model_payload_from_record(semantic_model_record) or {}
@@ -477,7 +537,7 @@ class SemanticQueryExecutionService:
                 seen_keys=seen_keys,
             )
             loaded_source_models.append(
-                UnifiedSourceModel(
+                SemanticGraphSource(
                     model_id=semantic_model_record.id,
                     key=source_key,
                     model=semantic_model,
@@ -505,13 +565,13 @@ class SemanticQueryExecutionService:
                 )
                 if not dataset_ref:
                     raise ExecutionValidationError(
-                        f"Unified semantic model dataset '{dataset_key}' must define dataset_id for federated execution."
+                        f"Semantic graph dataset '{dataset_key}' must define dataset_id for federated execution."
                     )
                 try:
                     dataset_id = uuid.UUID(str(dataset_ref))
                 except (TypeError, ValueError) as exc:
                     raise ExecutionValidationError(
-                        f"Unified semantic model dataset '{dataset_key}' contains an invalid dataset_id."
+                        f"Semantic graph dataset '{dataset_key}' contains an invalid dataset_id."
                     ) from exc
                 dataset = await self._get_dataset_record(
                     workspace_id=workspace_id,
@@ -519,7 +579,7 @@ class SemanticQueryExecutionService:
                 )
                 if dataset is None:
                     raise ExecutionValidationError(
-                        f"Dataset '{dataset_id}' referenced by unified semantic dataset '{dataset_key}' was not found."
+                        f"Dataset '{dataset_id}' referenced by semantic graph dataset '{dataset_key}' was not found."
                     )
                 dataset_type = dataset.dataset_type
                 if dataset_type == DatasetType.FILE:
@@ -528,11 +588,11 @@ class SemanticQueryExecutionService:
                     table_connector_map[materialized_dataset_key] = dataset.connection_id
                 else:
                     raise ExecutionValidationError(
-                        f"Dataset '{dataset.id}' referenced by unified semantic dataset '{dataset_key}' has no execution binding."
+                        f"Dataset '{dataset.id}' referenced by semantic graph dataset '{dataset_key}' has no execution binding."
                     )
 
         relationships_payload = [
-            _normalize_unified_relationship_payload(relationship)
+            _normalize_semantic_graph_relationship_payload(relationship)
             for relationship in (relationships or [])
         ]
         metrics_payload: dict[str, Any] = {}
@@ -547,7 +607,7 @@ class SemanticQueryExecutionService:
                 metrics_payload[metric_name] = metric_value
 
         try:
-            semantic_model, _ = build_unified_semantic_model(
+            semantic_model, _ = compile_semantic_graph(
                 source_models=loaded_source_models,
                 relationships=relationships_payload,
                 metrics=metrics_payload or None,
@@ -555,10 +615,10 @@ class SemanticQueryExecutionService:
             return semantic_model, table_connector_map
         except (SemanticModelError, ValueError) as exc:
             raise ExecutionValidationError(
-                f"Unified semantic model failed validation: {exc}"
+                f"Semantic graph compilation failed validation: {exc}"
             ) from exc
 
-    async def _build_federation_workflow_payload(
+    async def _build_semantic_graph_federation_workflow_payload(
         self,
         *,
         workspace_id: uuid.UUID,
@@ -574,20 +634,20 @@ class SemanticQueryExecutionService:
 
         workspace_id_value = str(workspace_id)
         semantic_model_id = str(uuid.uuid4())
-        workflow_dataset_id = f"unified_semantic_{workspace_id.hex[:12]}_{semantic_model_id[:12]}"
+        workflow_dataset_id = f"semantic_graph_{workspace_id.hex[:12]}_{semantic_model_id[:12]}"
         tables: dict[str, dict[str, Any]] = {}
         for dataset_key, semantic_dataset in semantic_model.datasets.items():
             source_dataset = source_semantic_model.datasets.get(dataset_key, semantic_dataset)
             dataset_ref = source_dataset.dataset_id
             if not dataset_ref:
                 raise ExecutionValidationError(
-                    f"Unified semantic model dataset '{dataset_key}' must define dataset_id for federated execution."
+                    f"Semantic graph dataset '{dataset_key}' must define dataset_id for federated execution."
                 )
             try:
                 referenced_dataset_id = uuid.UUID(str(dataset_ref))
             except (TypeError, ValueError) as exc:
                 raise ExecutionValidationError(
-                    f"Unified semantic model dataset '{dataset_key}' has an invalid dataset_id."
+                    f"Semantic graph dataset '{dataset_key}' has an invalid dataset_id."
                 ) from exc
             dataset = await self._get_dataset_record(
                 workspace_id=workspace_id,
@@ -595,7 +655,7 @@ class SemanticQueryExecutionService:
             )
             if dataset is None:
                 raise ExecutionValidationError(
-                    f"Dataset '{referenced_dataset_id}' referenced by unified semantic dataset '{dataset_key}' was not found."
+                    f"Dataset '{referenced_dataset_id}' referenced by semantic graph dataset '{dataset_key}' was not found."
                 )
             logical_schema = semantic_dataset.schema_name
             logical_catalog = semantic_dataset.catalog_name
@@ -626,7 +686,7 @@ class SemanticQueryExecutionService:
             workspace_id=workspace_id_value,
             dataset=VirtualDataset(
                 id=workflow_dataset_id,
-                name="Unified Semantic Dataset",
+                name="Semantic Graph Dataset",
                 workspace_id=workspace_id_value,
                 tables={table_key: VirtualTableBinding.model_validate(binding) for table_key, binding in tables.items()},
                 relationships=[],
@@ -674,10 +734,16 @@ class SemanticQueryExecutionService:
         )
 
     @staticmethod
-    def build_unified_execution_connector_id(*, workspace_id: uuid.UUID) -> uuid.UUID:
+    def build_semantic_graph_execution_connector_id(*, workspace_id: uuid.UUID) -> uuid.UUID:
         return uuid.uuid5(
             uuid.NAMESPACE_DNS,
             f"langbridge-unified-federation:{workspace_id}",
+        )
+
+    @staticmethod
+    def build_unified_execution_connector_id(*, workspace_id: uuid.UUID) -> uuid.UUID:
+        return SemanticQueryExecutionService.build_semantic_graph_execution_connector_id(
+            workspace_id=workspace_id
         )
 
     @staticmethod
@@ -721,7 +787,7 @@ class SemanticQueryExecutionService:
             ) from exc
 
     @staticmethod
-    def parse_unified_model_config_from_record(model_record: Any) -> UnifiedModelConfig | None:
+    def parse_semantic_graph_config_from_record(model_record: Any) -> SemanticGraphConfig | None:
         payload = SemanticQueryExecutionService._parse_model_payload_from_record(model_record)
         if payload is None:
             return None
@@ -730,45 +796,49 @@ class SemanticQueryExecutionService:
         if not isinstance(source_models_raw, list):
             if isinstance(payload.get("semantic_models"), list):
                 raise ExecutionValidationError(
-                    "Unified semantic model is missing source_models metadata required for execution."
+                    "Semantic graph is missing source_models metadata required for execution."
                 )
             return None
         try:
-            unified_model = load_unified_semantic_model(payload)
+            semantic_graph = load_semantic_graph(payload)
         except SemanticModelError as exc:
             raise ExecutionValidationError(
-                f"Unified semantic model failed validation: {exc}"
+                f"Semantic graph failed validation: {exc}"
             ) from exc
 
         semantic_model_ids = [
             source_model.id
-            for source_model in unified_model.source_models
+            for source_model in semantic_graph.source_models
         ]
         if not semantic_model_ids:
             raise ExecutionValidationError(
-                "Unified semantic model is missing source model ids."
+                "Semantic graph is missing source model ids."
             )
 
         relationships = [
             relationship.model_dump(mode="json", by_alias=True, exclude_none=True)
-            for relationship in (unified_model.relationships or [])
+            for relationship in (semantic_graph.relationships or [])
         ] or None
         metrics = {
             metric_name: metric.model_dump(mode="json", by_alias=True, exclude_none=True)
-            for metric_name, metric in (unified_model.metrics or {}).items()
+            for metric_name, metric in (semantic_graph.metrics or {}).items()
         } or None
 
-        return UnifiedModelConfig(
+        return SemanticGraphConfig(
             semantic_model_ids=semantic_model_ids,
             source_models=[
-                UnifiedSemanticSourceModelRequest.model_validate(
+                SemanticGraphSourceModelRequest.model_validate(
                     source_model.model_dump(mode="json", by_alias=True, exclude_none=True)
                 )
-                for source_model in unified_model.source_models
+                for source_model in semantic_graph.source_models
             ],
             relationships=relationships,
             metrics=metrics,
         )
+
+    @staticmethod
+    def parse_unified_model_config_from_record(model_record: Any) -> SemanticGraphConfig | None:
+        return SemanticQueryExecutionService.parse_semantic_graph_config_from_record(model_record)
 
     @staticmethod
     def _parse_model_payload_from_record(model_record: Any) -> dict[str, Any] | None:
@@ -792,3 +862,8 @@ class SemanticQueryExecutionService:
             except Exception:
                 return None
         return None
+
+
+UnifiedModelConfig = SemanticGraphConfig
+UnifiedQueryExecutionResult = SemanticGraphQueryExecutionResult
+_normalize_unified_relationship_payload = _normalize_semantic_graph_relationship_payload

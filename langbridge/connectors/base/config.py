@@ -30,6 +30,7 @@ class ConnectorRuntimeType(str, Enum):
     SHOPIFY = "SHOPIFY"
     STRIPE = "STRIPE"
     HUBSPOT = "HUBSPOT"
+    BASIC_HTTP = "BASIC_HTTP"
     GITHUB = "GITHUB"
     JIRA = "JIRA"
     ASANA = "ASANA"

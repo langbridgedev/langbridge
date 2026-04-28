@@ -8,14 +8,11 @@ import {
   Panel,
   SectionTabs,
 } from "../components/PagePrimitives";
-import { RuntimeResultPanel } from "../components/RuntimeResultPanel";
 import { useAsyncData } from "../hooks/useAsyncData";
-import { askAgent, fetchAgent, fetchAgents } from "../lib/runtimeApi";
+import { createThread, fetchAgent, fetchAgents } from "../lib/runtimeApi";
 import { formatList, formatValue, getErrorMessage } from "../lib/format";
 import {
   buildItemRef,
-  normalizeTabularResult,
-  normalizeVisualizationSpec,
   readAgentAllowedConnectors,
   readAgentFeatureFlags,
   readAgentSystemPrompt,
@@ -31,7 +28,6 @@ export function AgentsPage() {
   const [trialMessage, setTrialMessage] = useState(
     "Summarize the most relevant runtime signals for this workspace.",
   );
-  const [trialResponse, setTrialResponse] = useState(null);
   const [trialError, setTrialError] = useState(null);
   const [trialRunning, setTrialRunning] = useState(false);
   const deferredSearch = useDeferredValue(search);
@@ -58,8 +54,6 @@ export function AgentsPage() {
   const enabledFeatureFlags = readAgentFeatureFlags(detail);
   const allowedConnectors = readAgentAllowedConnectors(detail);
   const systemPrompt = readAgentSystemPrompt(detail);
-  const trialResult = trialResponse?.result ? normalizeTabularResult(trialResponse.result) : null;
-  const trialVisualization = normalizeVisualizationSpec(trialResponse?.visualization);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,14 +96,13 @@ export function AgentsPage() {
     }
     setTrialRunning(true);
     setTrialError(null);
-    setTrialResponse(null);
     try {
-      const payload = await askAgent({
-        message: trialMessage.trim(),
-        agent_name: selected.name,
-        title: `Quick run - ${selected.name}`,
-      });
-      setTrialResponse(payload);
+      const thread = await createThread({ title: `Quick run - ${selected.name}` });
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem(`runtime-thread-draft:${thread.id}`, trialMessage.trim());
+        window.localStorage.setItem(`runtime-thread-agent:${thread.id}`, selected.name);
+      }
+      navigate(`/chat/${encodeURIComponent(String(thread.id))}`);
     } catch (caughtError) {
       setTrialError(caughtError);
     } finally {
@@ -122,8 +115,8 @@ export function AgentsPage() {
       <section className="surface-panel product-command-bar">
         <div className="product-command-bar-main">
           <div className="product-command-bar-copy">
-            <p className="eyebrow">Agents</p>
-            <h2>{selected?.name || "Agent inventory"}</h2>
+            <p className="eyebrow">Agent Library</p>
+            <h2>{selected?.name || "Runtime agent profiles"}</h2>
             <div className="product-command-bar-meta">
               <span className="chip">{formatValue(agents.length)} agents</span>
               <span className="chip">{formatValue(totalTools)} tools</span>
@@ -140,7 +133,7 @@ export function AgentsPage() {
           type="search"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Filter agents by name, connection, or tool"
+          placeholder="Filter agent profiles by name, connection, or tool"
         />
         <button className="ghost-button" type="button" onClick={reload} disabled={loading}>
           {loading ? "Refreshing..." : "Refresh agents"}
@@ -150,7 +143,7 @@ export function AgentsPage() {
       {error ? <div className="error-banner">{error}</div> : null}
 
       <section className="split-layout">
-        <Panel title="Agent inventory" className="list-panel compact-panel">
+        <Panel title="Agent library" className="list-panel compact-panel">
           {filteredAgents.length > 0 ? (
             <div className="stack-list">
               {filteredAgents.map((item) => (
@@ -171,7 +164,7 @@ export function AgentsPage() {
           ) : (
             <PageEmpty
               title="No agents"
-              message="Define runtime agents to use local chat and dashboard builder copilots."
+              message="Define runtime agents to power ask flows, guided analysis, and dashboard assistance."
             />
           )}
         </Panel>
@@ -185,7 +178,7 @@ export function AgentsPage() {
                 actions={
                   <div className="panel-actions-inline">
                     <button className="ghost-button" type="button" onClick={() => navigate("/chat")}>
-                      Open chat
+                      Open ask
                     </button>
                     <button
                       className="ghost-button"
@@ -301,7 +294,7 @@ export function AgentsPage() {
                 </Panel>
               </section>
 
-              <Panel title="Agent workspace" eyebrow="Inspect and try">
+              <Panel title="Agent profile" eyebrow="Inspect and try">
                 <SectionTabs
                   tabs={[
                     { value: "overview", label: "Overview" },
@@ -316,7 +309,7 @@ export function AgentsPage() {
                 {activeTab === "overview" ? (
                   <div className="detail-card-grid">
                     <article className="detail-card">
-                      <strong>Semantic context</strong>
+                      <strong>Runtime context</strong>
                       <span>{detail?.semantic_model || "No semantic model attached"}</span>
                       <small>{detail?.dataset || "No dataset shortcut configured"}</small>
                     </article>
@@ -337,7 +330,7 @@ export function AgentsPage() {
                           : "Unspecified"}
                       </span>
                       <small>
-                        Runtime UI intentionally excludes cloud agent-definition editing workflows.
+                        Agent definitions remain inspectable here, but asking stays the primary user flow.
                       </small>
                     </article>
                   </div>
@@ -378,6 +371,13 @@ export function AgentsPage() {
 
                 {activeTab === "try" ? (
                   <div className="page-stack">
+                    <div className="callout">
+                      <strong>Use the main Ask surface for live runs</strong>
+                      <span>
+                        Agent runs now open in chat threads so execution progress streams live instead of
+                        blocking inside the library.
+                      </span>
+                    </div>
                     <form className="form-grid" onSubmit={handleQuickAsk}>
                       <label className="field field-full">
                         <span>Prompt</span>
@@ -395,52 +395,16 @@ export function AgentsPage() {
                           type="submit"
                           disabled={trialRunning || !trialMessage.trim()}
                         >
-                          {trialRunning ? "Running agent..." : "Run agent"}
+                          {trialRunning ? "Opening ask..." : "Open in ask"}
                         </button>
-                        {trialResponse?.thread_id ? (
-                          <button
-                            className="ghost-button"
-                            type="button"
-                            onClick={() =>
-                              navigate(`/chat/${encodeURIComponent(String(trialResponse.thread_id))}`)
-                            }
-                          >
-                            Open thread
-                          </button>
-                        ) : null}
                       </div>
                     </form>
-                    {trialResponse || trialError ? (
-                      <>
-                        {trialResponse?.thread_id ? (
-                          <div className="callout">
-                            <strong>Quick run thread ready</strong>
-                            <span>{`Thread ${trialResponse.thread_id} was created for this quick run.`}</span>
-                          </div>
-                        ) : null}
-                        <RuntimeResultPanel
-                          summary={trialResponse?.summary}
-                          result={trialResult}
-                          visualization={trialVisualization}
-                          status={trialError ? "error" : trialResponse?.status || "ready"}
-                          errorMessage={
-                            trialError
-                              ? getErrorMessage(trialError)
-                              : trialResponse?.error?.message || ""
-                          }
-                          errorStatus={
-                            trialError?.status ||
-                            trialResponse?.error?.status ||
-                            trialResponse?.error?.status_code ||
-                            null
-                          }
-                          maxPreviewRows={12}
-                        />
-                      </>
+                    {trialError ? (
+                      <div className="error-banner">{getErrorMessage(trialError)}</div>
                     ) : (
                       <PageEmpty
-                        title="No quick run yet"
-                        message="Run the selected agent here to inspect its current runtime behavior."
+                        title="Ask opens in chat"
+                        message="Launch the selected agent into a thread to inspect live execution events and the final persisted answer."
                       />
                     )}
                   </div>
@@ -448,7 +412,7 @@ export function AgentsPage() {
               </Panel>
             </>
           ) : (
-            <Panel title="Agent detail" eyebrow="Runtime">
+            <Panel title="Agent profile" eyebrow="Runtime">
               <PageEmpty
                 title="No agent selected"
                 message="Pick an agent to inspect its runtime bindings and definition."

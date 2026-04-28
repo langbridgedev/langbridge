@@ -11,6 +11,16 @@ export const DASHBOARD_BUILDER_PALETTES = [
   { id: "sunset", label: "Sunset", colors: ["#f97316", "#fb7185", "#f43f5e", "#f59e0b"] },
   { id: "slate", label: "Slate", colors: ["#334155", "#475569", "#64748b", "#94a3b8"] },
   { id: "orchard", label: "Orchard", colors: ["#65a30d", "#84cc16", "#22c55e", "#166534"] },
+  { id: "canyon", label: "Canyon", colors: ["#c2410c", "#ea580c", "#fb923c", "#7c2d12"] },
+  { id: "mulberry", label: "Mulberry", colors: ["#7c3aed", "#a855f7", "#ec4899", "#4c1d95"] },
+  { id: "ember", label: "Ember", colors: ["#dc2626", "#f97316", "#facc15", "#7f1d1d"] },
+  { id: "citrus", label: "Citrus", colors: ["#ca8a04", "#f59e0b", "#84cc16", "#365314"] },
+  { id: "aurora", label: "Aurora", colors: ["#0f766e", "#06b6d4", "#8b5cf6", "#ec4899"] },
+  { id: "rosewood", label: "Rosewood", colors: ["#9f1239", "#e11d48", "#fb7185", "#881337"] },
+  { id: "charcoal", label: "Charcoal", colors: ["#111827", "#374151", "#6b7280", "#9ca3af"] },
+  { id: "lavender", label: "Lavender", colors: ["#8b5cf6", "#c084fc", "#f0abfc", "#6d28d9"] },
+  { id: "desert", label: "Desert", colors: ["#b45309", "#d97706", "#fbbf24", "#92400e"] },
+  { id: "festival", label: "Festival", colors: ["#2563eb", "#7c3aed", "#db2777", "#ea580c"] },
 ];
 
 export const DASHBOARD_BUILDER_FILTER_OPERATORS = [
@@ -425,6 +435,10 @@ export function enrichDashboardBuilderResult(response) {
     rowCount: rows.length,
     metadata: Array.isArray(response?.metadata) ? response.metadata : [],
     generated_sql: response?.generated_sql || "",
+    federation_diagnostics:
+      response?.federation_diagnostics && typeof response.federation_diagnostics === "object"
+        ? response.federation_diagnostics
+        : null,
   };
 }
 

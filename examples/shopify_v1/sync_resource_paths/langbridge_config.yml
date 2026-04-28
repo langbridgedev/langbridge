@@ -29,28 +29,34 @@ datasets:
   - name: shopify_synced_customers
     description: Synced parent dataset for customers with explicit 1:1 address flattening.
     connector: shopify_demo
-    materialization_mode: synced
-    sync:
-      source:
-        resource: customers
-        flatten:
-          - default_address
-      strategy: INCREMENTAL
+    source:
+      kind: resource
+      resource: customers
+      flatten:
+        - default_address
+    materialization:
+      mode: synced
+      sync:
+        strategy: INCREMENTAL
 
   - name: shopify_synced_product_options
     description: Synced explicit child dataset for the 1:many `products.options` path.
     connector: shopify_demo
-    materialization_mode: synced
-    sync:
-      source:
-        resource: products.options
-      strategy: INCREMENTAL
+    source:
+      kind: resource
+      resource: products.options
+    materialization:
+      mode: synced
+      sync:
+        strategy: INCREMENTAL
 
   - name: shopify_synced_price_rules
     description: Synced dynamic Shopify resource using an explicit dataset-owned resource path.
     connector: shopify_demo
-    materialization_mode: synced
-    sync:
-      source:
-        resource: price_rules
-      strategy: FULL_REFRESH
+    source:
+      kind: resource
+      resource: price_rules
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH

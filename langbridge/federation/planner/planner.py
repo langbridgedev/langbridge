@@ -1,6 +1,7 @@
 ﻿
 from dataclasses import dataclass
 
+from langbridge.federation.connectors import SourceCapabilities
 from langbridge.federation.models.plans import LogicalPlan, PhysicalPlan, QueryType
 from langbridge.federation.models.smq import SMQQuery
 from langbridge.federation.models.virtual_dataset import FederationWorkflow, TableStatistics
@@ -36,6 +37,7 @@ class FederatedPlanner:
         dialect: str,
         workflow: FederationWorkflow,
         source_dialects: dict[str, str],
+        source_capabilities: dict[str, SourceCapabilities] | None = None,
         local_dialect: str = "duckdb",
     ) -> PlanningOutput:
         logical_plan, expression = logical_plan_from_sql(
@@ -54,6 +56,7 @@ class FederatedPlanner:
             virtual_dataset=workflow.dataset,
             stats_by_table=self._resolve_stats(workflow),
             source_dialects=source_dialects,
+            source_capabilities=source_capabilities or {},
             input_dialect=dialect,
             local_dialect=local_dialect,
         )
@@ -68,6 +71,7 @@ class FederatedPlanner:
         dialect: str,
         workflow: FederationWorkflow,
         source_dialects: dict[str, str],
+        source_capabilities: dict[str, SourceCapabilities] | None = None,
         local_dialect: str = "duckdb",
     ) -> PlanningOutput:
         sql = self._smq_compiler.compile_to_sql(
@@ -91,6 +95,7 @@ class FederatedPlanner:
             virtual_dataset=workflow.dataset,
             stats_by_table=self._resolve_stats(workflow),
             source_dialects=source_dialects,
+            source_capabilities=source_capabilities or {},
             input_dialect=dialect,
             local_dialect=local_dialect,
         )

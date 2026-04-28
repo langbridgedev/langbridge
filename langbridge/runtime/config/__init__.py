@@ -1,6 +1,5 @@
 from .loader import load_runtime_config
 from .models import (
-    LocalRuntimeAgentConfig,
     LocalRuntimeConfig,
     LocalRuntimeConnectorConfig,
     LocalRuntimeDatasetConfig,
@@ -14,11 +13,20 @@ from .models import (
     LocalRuntimeRuntimeConfig,
     LocalRuntimeSemanticModelConfig,
     ResolvedLocalRuntimeMetadataStoreConfig,
+    
+    LocalRuntimeAiProfileAnalystScopeConfig,
+    LocalRuntimeAiProfileLLMScopeConfig,
+    LocalRuntimeAiProfilePromptsConfig,
+    LocalRuntimeAiProfileWebSearchScopeConfig,
+    LocalRuntimeAiProfileResearchScopeConfig,
+    LocalRuntimeAiProfileAccessConfig,
+    LocalRuntimeAiProfileExecutionConfig,
+    LocalRuntimeAiProfileConfig,
+    LocalRuntimeAiConfig,
 )
 from .normalizers import normalize_runtime_config, resolve_metadata_store_config
 
 __all__ = [
-    "LocalRuntimeAgentConfig",
     "LocalRuntimeConfig",
     "LocalRuntimeConnectorConfig",
     "LocalRuntimeDatasetConfig",
@@ -31,6 +39,17 @@ __all__ = [
     "LocalRuntimeMigrationsConfig",
     "LocalRuntimeRuntimeConfig",
     "LocalRuntimeSemanticModelConfig",
+
+    "LocalRuntimeAiProfileAnalystScopeConfig",
+    "LocalRuntimeAiProfileLLMScopeConfig",
+    "LocalRuntimeAiProfilePromptsConfig",
+    "LocalRuntimeAiProfileWebSearchScopeConfig",
+    "LocalRuntimeAiProfileResearchScopeConfig",
+    "LocalRuntimeAiProfileAccessConfig",
+    "LocalRuntimeAiProfileExecutionConfig",
+    "LocalRuntimeAiProfileConfig",
+    "LocalRuntimeAiConfig",
+
     "ResolvedLocalRuntimeMetadataStoreConfig",
     "load_runtime_config",
     "normalize_runtime_config",

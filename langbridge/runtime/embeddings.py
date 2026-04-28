@@ -3,12 +3,22 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Sequence
 
+import httpx
 from openai import AzureOpenAI, OpenAI, OpenAIError  # type: ignore[import-untyped]
 
 from langbridge.runtime.models import LLMProvider
 
 DEFAULT_OPENAI_EMBED_MODEL = "text-embedding-3-small"
 DEFAULT_AZURE_API_VERSION = "2024-05-01-preview"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+_OPENAI_COMPATIBLE_CLIENT_CONFIG_KEYS = {
+    "base_url",
+    "timeout",
+    "max_retries",
+    "organization",
+    "default_headers",
+    "http_client",
+}
 
 
 class EmbeddingProviderError(RuntimeError):
@@ -55,14 +65,36 @@ class EmbeddingProvider:
 
     def _embed_chunk(self, chunk: Sequence[str]) -> List[List[float]]:
         try:
+            if self.provider == LLMProvider.OLLAMA:
+                return self._embed_ollama_chunk(chunk)
             response = self._client.embeddings.create(
                 model=self.embedding_model,
                 input=list(chunk),
             )
-        except OpenAIError as exc:  # pragma: no cover
+        except (OpenAIError, httpx.HTTPError) as exc:  # pragma: no cover
             raise EmbeddingProviderError(f"Embedding request failed: {exc}") from exc
 
         return [list(item.embedding) for item in response.data]
+
+    def _embed_ollama_chunk(self, chunk: Sequence[str]) -> List[List[float]]:
+        payload: dict[str, Any] = {
+            "model": self.embedding_model,
+            "input": list(chunk),
+        }
+        if self.configuration.get("keep_alive") is not None:
+            payload["keep_alive"] = self.configuration["keep_alive"]
+        if self.configuration.get("truncate") is not None:
+            payload["truncate"] = bool(self.configuration["truncate"])
+        options = self.configuration.get("embedding_options") or self.configuration.get("options")
+        if isinstance(options, dict):
+            payload["options"] = dict(options)
+        response = self._client.post("/api/embed", json=payload)
+        response.raise_for_status()
+        response_payload = response.json()
+        embeddings = response_payload.get("embeddings") if isinstance(response_payload, dict) else None
+        if not isinstance(embeddings, list):
+            raise EmbeddingProviderError("Ollama embedding response missing embeddings.")
+        return [list(item) for item in embeddings]
 
     def _resolve_embedding_model(self) -> str:
         configured = (
@@ -79,11 +111,13 @@ class EmbeddingProvider:
                     "'embedding_deployment' in configuration."
                 )
             return configured
+        if self.provider == LLMProvider.OLLAMA:
+            return configured or self.model_name
         raise EmbeddingProviderError(f"Provider '{self.provider}' does not support embeddings.")
 
     def _build_client(self):
         if self.provider == LLMProvider.OPENAI:
-            return OpenAI(api_key=self.api_key)
+            return OpenAI(**self._openai_client_params())
         if self.provider == LLMProvider.AZURE:
             endpoint = self.configuration.get("api_base") or self.configuration.get("azure_endpoint")
             if not endpoint:
@@ -96,7 +130,23 @@ class EmbeddingProvider:
                 azure_endpoint=endpoint,
                 api_version=api_version,
             )
+        if self.provider == LLMProvider.OLLAMA:
+            base_url = str(self.configuration.get("base_url") or DEFAULT_OLLAMA_BASE_URL).strip()
+            params: dict[str, Any] = {"base_url": (base_url or DEFAULT_OLLAMA_BASE_URL).rstrip("/")}
+            if "timeout" in self.configuration:
+                params["timeout"] = self.configuration["timeout"]
+            return httpx.Client(**params)
         raise EmbeddingProviderError(f"Provider '{self.provider}' does not support embeddings.")
+
+    def _openai_client_params(self) -> dict[str, Any]:
+        params = {
+            key: self.configuration.get(key)
+            for key in _OPENAI_COMPATIBLE_CLIENT_CONFIG_KEYS
+            if key in self.configuration
+        }
+        params = {key: value for key, value in params.items() if value is not None}
+        params.setdefault("api_key", self.api_key)
+        return params
 
 
 def _chunk(values: Iterable[str], size: int) -> Iterable[List[str]]:

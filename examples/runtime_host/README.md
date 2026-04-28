@@ -9,7 +9,7 @@ host serving a configured local runtime over HTTP.
 - mounted runtime config at `/examples/runtime_host/langbridge_config.yml`
 - mounted demo SQLite warehouse from `examples/sdk/semantic_query/example.db`
 - persistent runtime state under `/examples/runtime_host/.langbridge`
-- runtime-owned HTTP endpoints for datasets, semantic query, SQL, agents, and runtime info
+- runtime-owned HTTP endpoints for datasets, semantic query, scoped SQL, agents, and runtime info
 
 The example config keeps runtime metadata in SQLite at
 `examples/runtime_host/.langbridge/metadata.db`. For production or
@@ -85,12 +85,35 @@ curl -X POST http://localhost:8000/api/runtime/v1/semantic/query \
   }'
 ```
 
-Run direct SQL:
+Run semantic SQL:
 
 ```bash
 curl -X POST http://localhost:8000/api/runtime/v1/sql/query \
   -H "Content-Type: application/json" \
   -d '{
+    "query_scope": "semantic",
+    "query": "SELECT country, net_sales FROM commerce_performance ORDER BY net_sales DESC LIMIT 5"
+  }'
+```
+
+Run dataset SQL:
+
+```bash
+curl -X POST http://localhost:8000/api/runtime/v1/sql/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query_scope": "dataset",
+    "query": "SELECT country, COUNT(*) AS order_count FROM shopify_orders GROUP BY country ORDER BY order_count DESC LIMIT 5"
+  }'
+```
+
+Run source SQL:
+
+```bash
+curl -X POST http://localhost:8000/api/runtime/v1/sql/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query_scope": "source",
     "query": "SELECT country, SUM(net_revenue) AS net_sales FROM orders_enriched GROUP BY country ORDER BY net_sales DESC LIMIT 5",
     "connection_name": "commerce_demo"
   }'

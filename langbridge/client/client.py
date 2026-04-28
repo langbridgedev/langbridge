@@ -21,6 +21,7 @@ else:  # pragma: no cover - exercised indirectly in local-only environments
 from langbridge.runtime.models import (
     CreateDatasetPreviewJobRequest,
     CreateSqlJobRequest,
+    SqlQueryScope,
     SqlSelectedDataset,
     SqlWorkbenchMode,
 )
@@ -216,7 +217,11 @@ class SemanticQueryResult(_AwaitableModel):
 
 class SqlQueryResult(_AwaitableModel):
     sql_job_id: uuid.UUID | None = None
+    query_scope: str | None = None
     status: str
+    semantic_model_id: uuid.UUID | None = None
+    semantic_model_ids: list[uuid.UUID] = Field(default_factory=list)
+    connector_id: uuid.UUID | None = None
     columns: list[SqlColumnMetadata] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)
     row_count_preview: int = 0
@@ -384,6 +389,7 @@ class _SdkAdapter(Protocol):
         workspace_id: uuid.UUID,
         actor_id: uuid.UUID | None,
         query: str,
+        query_scope: SqlQueryScope | str | None,
         connection_id: uuid.UUID | None,
         connection_name: str | None,
         selected_datasets: list[uuid.UUID] | None,
@@ -406,6 +412,7 @@ class _SdkAdapter(Protocol):
         agent_name: str | None,
         thread_id: uuid.UUID | None,
         title: str | None,
+        agent_mode: str | None,
         metadata_json: dict[str, Any] | None,
         timeout_s: float,
         poll_interval_s: float,
@@ -494,6 +501,25 @@ def _coerce_sql_dialect(value: SqlDialect | str) -> SqlDialect:
     if isinstance(value, SqlDialect):
         return value
     return SqlDialect(str(value).strip().lower())
+
+
+def _coerce_sql_query_scope(value: SqlQueryScope | str) -> SqlQueryScope:
+    if isinstance(value, SqlQueryScope):
+        return value
+    return SqlQueryScope(str(value).strip().lower())
+
+
+def _infer_sql_query_scope(
+    *,
+    query_scope: SqlQueryScope | str | None,
+    connection_id: uuid.UUID | None,
+    connection_name: str | None,
+) -> SqlQueryScope:
+    if query_scope is not None:
+        return _coerce_sql_query_scope(query_scope)
+    if connection_id is not None or bool(connection_name):
+        return SqlQueryScope.source
+    return SqlQueryScope.dataset
 
 
 def _wait_for_terminal(
@@ -668,6 +694,7 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         workspace_id: uuid.UUID,
         actor_id: uuid.UUID | None,
         query: str,
+        query_scope: SqlQueryScope | str | None,
         connection_id: uuid.UUID | None,
         connection_name: str | None,
         selected_datasets: list[uuid.UUID] | None,
@@ -680,7 +707,13 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         poll_interval_s: float,
     ) -> SqlQueryResult:
         normalized_datasets = _normalize_selected_datasets(selected_datasets)
+        normalized_scope = _infer_sql_query_scope(
+            query_scope=query_scope,
+            connection_id=connection_id,
+            connection_name=connection_name,
+        )
         payload = {
+            "query_scope": normalized_scope.value,
             "query": query,
             **({"connection_id": str(connection_id)} if connection_id else {}),
             **({"connection_name": connection_name} if connection_name else {}),
@@ -713,6 +746,7 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         agent_name: str | None,
         thread_id: uuid.UUID | None,
         title: str | None,
+        agent_mode: str | None,
         metadata_json: dict[str, Any] | None,
         timeout_s: float,
         poll_interval_s: float,
@@ -727,6 +761,7 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
                     **({"agent_name": agent_name} if agent_name else {}),
                     **({"thread_id": str(thread_id)} if thread_id else {}),
                     **({"title": title} if title else {}),
+                    **({"agent_mode": agent_mode} if agent_mode else {}),
                     **({"metadata_json": metadata_json} if metadata_json else {}),
                 },
             )
@@ -907,6 +942,7 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         workspace_id: uuid.UUID,
         actor_id: uuid.UUID | None,
         query: str,
+        query_scope: SqlQueryScope | str | None,
         connection_id: uuid.UUID | None,
         connection_name: str | None,
         selected_datasets: list[uuid.UUID] | None,
@@ -919,11 +955,22 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         poll_interval_s: float,
     ) -> SqlQueryResult:
         normalized_datasets = _normalize_selected_datasets(selected_datasets)
-        is_direct = connection_id is not None or bool(connection_name)
+        normalized_scope = _infer_sql_query_scope(
+            query_scope=query_scope,
+            connection_id=connection_id,
+            connection_name=connection_name,
+        )
+        if normalized_scope == SqlQueryScope.semantic:
+            raise ValueError(
+                "Semantic SQL scope is only available through runtime-host adapters. "
+                "Use LangbridgeClient.remote(...) or LangbridgeClient.for_runtime_host(...)."
+            )
+        is_direct = normalized_scope == SqlQueryScope.source
         workbench_mode = SqlWorkbenchMode.direct_sql if is_direct else SqlWorkbenchMode.dataset
         execute_request = RuntimeSqlQueryRequest(
             workspace_id=workspace_id,
             workbench_mode=workbench_mode,
+            query_scope=normalized_scope,
             connection_id=connection_id,
             connection_name=connection_name,
             query=query,
@@ -954,6 +1001,7 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         if job.status != "succeeded":
             return SqlQueryResult(
                 sql_job_id=job.id,
+                query_scope=normalized_scope.value,
                 status=job.status,
                 bytes_scanned=job.bytes_scanned,
                 duration_ms=job.duration_ms,
@@ -971,6 +1019,7 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         )
         return SqlQueryResult(
             sql_job_id=job.id,
+            query_scope=normalized_scope.value,
             status=results.status,
             columns=results.columns,
             rows=results.rows,
@@ -993,6 +1042,7 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
         agent_name: str | None,
         thread_id: uuid.UUID | None,
         title: str | None,
+        agent_mode: str | None,
         metadata_json: dict[str, Any] | None,
         timeout_s: float,
         poll_interval_s: float,
@@ -1241,6 +1291,7 @@ class LocalRuntimeAdapter(_SdkAdapter):
         workspace_id: uuid.UUID,
         actor_id: uuid.UUID | None,
         query: str,
+        query_scope: SqlQueryScope | str | None,
         connection_id: uuid.UUID | None,
         connection_name: str | None,
         selected_datasets: list[uuid.UUID] | None,
@@ -1253,7 +1304,70 @@ class LocalRuntimeAdapter(_SdkAdapter):
         poll_interval_s: float,
     ) -> SqlQueryResult:
         normalized_datasets = _normalize_selected_datasets(selected_datasets)
-        is_direct = connection_id is not None or bool(connection_name)
+        normalized_scope = _infer_sql_query_scope(
+            query_scope=query_scope,
+            connection_id=connection_id,
+            connection_name=connection_name,
+        )
+        query_method = getattr(self._runtime_host, "query_sql", None)
+        if query_method is not None:
+            try:
+                payload = _run_awaitable(
+                    query_method(
+                        request=RuntimeSqlQueryRequest(
+                            query_scope=normalized_scope,
+                            query=query,
+                            connection_id=connection_id,
+                            connection_name=connection_name,
+                            selected_datasets=normalized_datasets,
+                            query_dialect=_coerce_sql_dialect(query_dialect).value,
+                            params=params or {},
+                            requested_limit=requested_limit,
+                            requested_timeout_seconds=requested_timeout_seconds,
+                            explain=explain,
+                        )
+                    )
+                )
+            except Exception as exc:
+                return SqlQueryResult(
+                    sql_job_id=uuid.uuid4(),
+                    query_scope=normalized_scope.value,
+                    status="failed",
+                    error={"message": str(exc)},
+                    query=query,
+                )
+            return SqlQueryResult(
+                sql_job_id=payload.get("sql_job_id") or uuid.uuid4(),
+                query_scope=str(payload.get("query_scope") or normalized_scope.value),
+                status="succeeded",
+                semantic_model_id=payload.get("semantic_model_id"),
+                semantic_model_ids=list(payload.get("semantic_model_ids", [])),
+                connector_id=payload.get("connector_id"),
+                columns=[SqlColumnMetadata.model_validate(item) for item in payload.get("columns", [])],
+                rows=list(payload.get("rows", [])),
+                row_count_preview=int(payload.get("row_count_preview") or 0),
+                total_rows_estimate=payload.get("total_rows_estimate"),
+                bytes_scanned=payload.get("bytes_scanned"),
+                duration_ms=payload.get("duration_ms"),
+                redaction_applied=bool(payload.get("redaction_applied")),
+                query=payload.get("query") or query,
+                generated_sql=payload.get("generated_sql"),
+            )
+
+        is_direct = normalized_scope == SqlQueryScope.source
+        if normalized_scope == SqlQueryScope.semantic:
+            return SqlQueryResult(
+                sql_job_id=uuid.uuid4(),
+                query_scope=normalized_scope.value,
+                status="failed",
+                error={
+                    "message": (
+                        "Local runtime host does not expose query_sql(); semantic SQL scope requires the explicit scoped query interface."
+                    )
+                },
+                query=query,
+            )
+
         execute_sql_text = getattr(self._runtime_host, "execute_sql_text", None)
         if is_direct and connection_name and execute_sql_text is not None:
             try:
@@ -1267,12 +1381,14 @@ class LocalRuntimeAdapter(_SdkAdapter):
             except Exception as exc:
                 return SqlQueryResult(
                     sql_job_id=uuid.uuid4(),
+                    query_scope=normalized_scope.value,
                     status="failed",
                     error={"message": str(exc)},
                     query=query,
                 )
             return SqlQueryResult(
                 sql_job_id=uuid.uuid4(),
+                query_scope=normalized_scope.value,
                 status="succeeded",
                 columns=[SqlColumnMetadata.model_validate(item) for item in payload.get("columns", [])],
                 rows=list(payload.get("rows", [])),
@@ -1317,12 +1433,14 @@ class LocalRuntimeAdapter(_SdkAdapter):
         except Exception as exc:
             return SqlQueryResult(
                 sql_job_id=sql_job_id,
+                query_scope=normalized_scope.value,
                 status="failed",
                 error={"message": str(exc)},
                 query=query,
             )
         return SqlQueryResult(
             sql_job_id=sql_job_id,
+            query_scope=normalized_scope.value,
             status="succeeded",
             columns=[SqlColumnMetadata.model_validate(item) for item in payload.get("columns", [])],
             rows=list(payload.get("rows", [])),
@@ -1345,6 +1463,7 @@ class LocalRuntimeAdapter(_SdkAdapter):
         agent_name: str | None,
         thread_id: uuid.UUID | None,
         title: str | None,
+        agent_mode: str | None,
         metadata_json: dict[str, Any] | None,
         timeout_s: float,
         poll_interval_s: float,
@@ -1353,11 +1472,14 @@ class LocalRuntimeAdapter(_SdkAdapter):
         if ask_agent_method is None:
             raise ValueError("Local runtime host does not expose ask_agent().")
         try:
+            ask_kwargs = {
+                "prompt": message,
+                "agent_name": agent_name,
+            }
+            if agent_mode is not None:
+                ask_kwargs["agent_mode"] = agent_mode
             payload = _run_awaitable(
-                ask_agent_method(
-                    prompt=message,
-                    agent_name=agent_name,
-                )
+                ask_agent_method(**ask_kwargs)
             )
         except Exception as exc:
             return AgentAskResult(
@@ -1610,6 +1732,7 @@ class _SqlClient:
         self,
         *,
         query: str,
+        query_scope: SqlQueryScope | str | None = None,
         workspace_id: uuid.UUID | None = None,
         actor_id: uuid.UUID | None = None,
         connection_id: uuid.UUID | None = None,
@@ -1627,6 +1750,7 @@ class _SqlClient:
             workspace_id=_coalesce_uuid(workspace_id, self._owner.default_workspace_id, "workspace_id"),
             actor_id=actor_id or self._owner.default_actor_id,
             query=query,
+            query_scope=query_scope,
             connection_id=connection_id,
             connection_name=connection_name,
             selected_datasets=_normalize_selected_datasets(selected_datasets),
@@ -1654,6 +1778,7 @@ class _AgentClient:
         actor_id: uuid.UUID | None = None,
         thread_id: uuid.UUID | None = None,
         title: str | None = None,
+        agent_mode: str | None = None,
         metadata_json: dict[str, Any] | None = None,
         timeout_s: float = 60.0,
         poll_interval_s: float = 0.5,
@@ -1670,6 +1795,7 @@ class _AgentClient:
             message=message,
             thread_id=thread_id,
             title=title,
+            agent_mode=agent_mode,
             metadata_json=metadata_json,
             timeout_s=timeout_s,
             poll_interval_s=poll_interval_s,

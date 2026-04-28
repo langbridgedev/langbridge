@@ -137,6 +137,12 @@ class RepositoryLLMConnectionStore(LLMConnectionStore):
 
     async def get_by_id(self, id_: object) -> LLMConnectionSecret | None:
         return from_llm_connection_record(await self._repository.get_by_id(id_))
+    
+    async def list_llm_connections(self) -> list[LLMConnectionSecret]:
+        return [
+            from_llm_connection_record(item)
+            for item in await self._repository.list_llm_connections()
+        ]
 
 
 class RepositoryThreadStore(ThreadStore):

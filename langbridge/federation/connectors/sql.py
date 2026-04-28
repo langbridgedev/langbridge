@@ -7,6 +7,10 @@ import pyarrow as pa
 
 from langbridge.connectors.base.connector import QueryResult, SqlConnector
 from langbridge.federation.connectors.base import RemoteExecutionResult, RemoteSource, SourceCapabilities
+from langbridge.federation.executor.offload import (
+    FederationExecutionOffloader,
+    run_federation_blocking,
+)
 from langbridge.federation.models.plans import SourceSubplan
 from langbridge.federation.models.virtual_dataset import TableStatistics, VirtualTableBinding
 
@@ -30,11 +34,13 @@ class SqlConnectorRemoteSource(RemoteSource):
         connector: SqlConnector,
         dialect: str,
         logger: logging.Logger | None = None,
+        blocking_executor: FederationExecutionOffloader | None = None,
     ) -> None:
         self.source_id = source_id
         self._connector = connector
         self._dialect = dialect
         self._logger = logger or logging.getLogger(__name__)
+        self._blocking_executor = blocking_executor
 
     def capabilities(self) -> SourceCapabilities:
         return SourceCapabilities(
@@ -51,7 +57,12 @@ class SqlConnectorRemoteSource(RemoteSource):
     async def execute(self, subplan: SourceSubplan) -> RemoteExecutionResult:
         self._logger.debug("Executing remote subplan stage=%s source=%s", subplan.stage_id, self.source_id)
         result = await self._connector.execute(subplan.sql)
-        return RemoteExecutionResult(table=_rows_to_arrow(result), elapsed_ms=result.elapsed_ms)
+        table = await run_federation_blocking(
+            self._blocking_executor,
+            _rows_to_arrow,
+            result,
+        )
+        return RemoteExecutionResult(table=table, elapsed_ms=result.elapsed_ms)
 
     async def estimate_table_stats(self, binding: VirtualTableBinding) -> TableStatistics:
         if binding.stats is not None:

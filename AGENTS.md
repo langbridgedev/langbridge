@@ -14,7 +14,7 @@ Langbridge is a runtime-first repository. Runtime-owned Python code lives under 
 - `pytest -q tests` runs the test suite; narrow scope with paths such as `pytest -q tests/unit`.
 
 ## Coding Style & Naming Conventions
-Use 4-space indentation, type hints, and cohesive domain-oriented modules. Python functions use snake_case. Keep runtime modules grouped by responsibility under `langbridge.runtime`, `langbridge.semantic`, `langbridge.federation`, `langbridge.connectors`, and `langbridge.orchestrator`. In the React app, components use PascalCase and utilities/hooks use camelCase.
+Use 4-space indentation, type hints, and cohesive domain-oriented modules. Python functions use snake_case. Keep runtime modules grouped by responsibility under `langbridge.runtime`, `langbridge.semantic`, `langbridge.federation`, `langbridge.connectors`, and `langbridge.ai`. In the React app, components use PascalCase and utilities/hooks use camelCase.
 
 ## Testing Guidelines
 Create pytest modules as `test_<feature>.py`, reuse fixtures from `tests/conftest.py`, and cover both success and failure paths. When changing runtime host behavior, update API and CLI tests together. When changing the UI, rebuild `langbridge/ui/static` from `apps/runtime_ui` and keep the host-facing smoke tests passing.

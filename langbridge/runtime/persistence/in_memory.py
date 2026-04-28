@@ -360,6 +360,7 @@ class _InMemoryLLMConnectionRepository:
             model=record.connection.model,
             configuration=dict(record.connection.configuration or {}),
             is_active=record.connection.is_active,
+            default=record.connection.default,
             workspace_id=record.connection.workspace_id,
             created_at=record.connection.created_at,
             updated_at=record.connection.updated_at,

@@ -47,6 +47,21 @@ class SemanticQueryEngine:
             annotations=self.build_annotations(semantic_model),
             metadata=self.build_result_metadata(semantic_query, semantic_model),
         )
+        
+    def compile_from_sql(
+        self,
+        sql: str,
+        semantic_model: SemanticModel,
+        *,
+        dialect: str,
+        rewrite_expression: RewriteExpression | None = None,
+    ) -> SemanticQueryPlan:
+        tree = sqlglot.parse_one(sql, read=dialect)
+        return SemanticQueryPlan(
+            sql=self._transpile(tree, dialect=dialect, rewrite_expression=rewrite_expression),
+            annotations=self.build_annotations(semantic_model),
+            metadata=[],
+        )
 
     @staticmethod
     def build_annotations(semantic_model: SemanticModel) -> List[dict[str, str]]:

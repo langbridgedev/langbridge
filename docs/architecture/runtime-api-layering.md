@@ -21,7 +21,7 @@ flowchart TD
 
     subgraph Core[Runtime Core]
         RuntimeHost[RuntimeHost facade]
-        Services[Service layer\n DatasetQueryService\n SemanticQueryExecutionService\n SqlQueryService\n AgentExecutionService\n ConnectorSyncRuntime]
+        Services[Service layer\n DatasetQueryService\n SemanticQueryExecutionService\n SemanticSqlQueryService\n SqlQueryService\n AgentExecutionService\n ConnectorSyncRuntime]
     end
 
     subgraph Infra[Providers and Persistence]
@@ -136,11 +136,12 @@ flowchart TD
     Host[ConfiguredLocalRuntimeHost.query_semantic_models]
     App[SemanticApplication.query_semantic_models]
     Normalize[Normalize members filters time dimensions order]
-    Branch{One model or many}
+    Branch{Executable model or semantic graph}
     Standard[RuntimeHost.query_semantic]
-    Unified[RuntimeHost.query_unified_semantic]
+    Graph[RuntimeHost.query_semantic_graph]
     StandardSvc[SemanticQueryExecutionService.execute_standard_query]
-    UnifiedSvc[SemanticQueryExecutionService.execute_unified_query]
+    GraphSvc[SemanticQueryExecutionService.execute_semantic_graph_query]
+    GraphCompile[Compile semantic graph to executable SemanticModel]
     Compile[Compile semantic query to SQL]
     Workflow[Build semantic federation workflow]
     Execute[FederatedQueryTool.execute_federated_query]
@@ -150,14 +151,15 @@ flowchart TD
     Host --> App
     App --> Normalize
     Normalize --> Branch
-    Branch -->|single semantic model| Standard
-    Branch -->|multiple semantic models| Unified
+    Branch -->|executable SemanticModel| Standard
+    Branch -->|configured graph or multi-model graph path| Graph
     Standard --> StandardSvc
-    Unified --> UnifiedSvc
+    Graph --> GraphSvc
     StandardSvc --> Compile
-    UnifiedSvc --> Compile
+    GraphSvc --> GraphCompile
+    GraphCompile --> Compile
     StandardSvc --> Workflow
-    UnifiedSvc --> Workflow
+    GraphSvc --> Workflow
     Workflow --> Execute
     Compile --> Response
     Execute --> Response
@@ -168,10 +170,12 @@ flowchart TD
 ```mermaid
 flowchart TD
     Route[POST /api/runtime/v1/sql/query]
-    Mode{Direct connector SQL\nor dataset-backed SQL}
-    DirectPath[execute_sql_text shortcut]
+    Scope{query_scope}
+    App[SqlApplication.query_sql]
+    SemanticApp[SemanticApplication.query_semantic_sql]
+    SemanticParse[SemanticSqlQueryService\nparse and build plan]
+    SemanticExec[query_semantic_models existing path]
     JobPath[CreateSqlJobRequest]
-    App[SqlApplication.execute_sql]
     Host[RuntimeHost.execute_sql]
     Service[SqlQueryService.execute_sql]
     Branch{execution_mode}
@@ -182,12 +186,16 @@ flowchart TD
     FQ[FederatedQueryTool.execute_federated_query]
     Response[Columns rows stats generated_sql]
 
-    Route --> Mode
-    Mode -->|connection_name direct path| DirectPath
-    Mode -->|dataset-backed or explicit job path| JobPath
-    DirectPath --> App
-    JobPath --> App
-    App --> Host
+    Route --> Scope
+    Scope -->|semantic| App
+    Scope -->|dataset| App
+    Scope -->|source| App
+    App -->|semantic| SemanticApp
+    SemanticApp --> SemanticParse
+    SemanticParse --> SemanticExec
+    SemanticExec --> Response
+    App -->|dataset or source| JobPath
+    JobPath --> Host
     Host --> Service
     Service --> Branch
     Branch -->|single| Single

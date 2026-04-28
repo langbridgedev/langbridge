@@ -7,10 +7,10 @@ from typing import Any
 import duckdb
 import yaml
 
-from langbridge.semantic.loader import load_semantic_model, load_unified_semantic_model
+from langbridge.semantic.graph_compiler import SemanticGraphSource, compile_semantic_graph
+from langbridge.semantic.loader import load_semantic_graph, load_semantic_model
 from langbridge.semantic.model import SemanticModel
 from langbridge.semantic.query import SemanticQuery, SemanticQueryEngine
-from langbridge.semantic.unified_query import UnifiedSourceModel, build_unified_semantic_model
 
 from tests.helpers.sql_normalize import normalize_rows, normalize_sql
 
@@ -35,13 +35,13 @@ class SemanticHarness:
     def load_semantic_model_fixture(self, name: str) -> SemanticModel:
         return load_semantic_model(self.read_text("semantic_models", f"{name}.yml"))
 
-    def load_unified_model_fixture(self, name: str) -> SemanticModel:
-        unified = load_unified_semantic_model(self.read_text("semantic_models", f"{name}.yml"))
-        source_models: list[UnifiedSourceModel] = []
-        for source in unified.source_models:
+    def load_semantic_graph_fixture(self, name: str) -> SemanticModel:
+        semantic_graph = load_semantic_graph(self.read_text("semantic_models", f"{name}.yml"))
+        source_models: list[SemanticGraphSource] = []
+        for source in semantic_graph.source_models:
             fixture_name = self._fixture_name_for_alias(source.alias)
             source_models.append(
-                UnifiedSourceModel(
+                SemanticGraphSource(
                     model_id=source.id,
                     key=source.alias,
                     alias=source.alias,
@@ -53,21 +53,24 @@ class SemanticHarness:
             )
         relationships = [
             relationship.model_dump(mode="json", exclude_none=True)
-            for relationship in (unified.relationships or [])
+            for relationship in (semantic_graph.relationships or [])
         ]
         metrics = {
             key: metric.model_dump(mode="json", exclude_none=True)
-            for key, metric in (unified.metrics or {}).items()
+            for key, metric in (semantic_graph.metrics or {}).items()
         }
-        merged_model, _ = build_unified_semantic_model(
+        compiled_model, _ = compile_semantic_graph(
             source_models=source_models,
             relationships=relationships or None,
             metrics=metrics or None,
-            name=unified.name,
-            description=unified.description,
-            version=unified.version,
+            name=semantic_graph.name,
+            description=semantic_graph.description,
+            version=semantic_graph.version,
         )
-        return merged_model
+        return compiled_model
+
+    def load_unified_model_fixture(self, name: str) -> SemanticModel:
+        return self.load_semantic_graph_fixture(name)
 
     def load_query_fixture(self, name: str, *, kind: str = "semantic") -> SemanticQuery:
         return SemanticQuery.model_validate(self.read_yaml("queries", kind, f"{name}.yml"))
@@ -90,12 +93,14 @@ class SemanticHarness:
         model_name: str,
         query_name: str,
         dialect: str,
+        semantic_graph: bool = False,
         unified: bool = False,
         kind: str = "semantic",
     ) -> str:
+        use_semantic_graph = semantic_graph or unified
         model = (
-            self.load_unified_model_fixture(model_name)
-            if unified
+            self.load_semantic_graph_fixture(model_name)
+            if use_semantic_graph
             else self.load_semantic_model_fixture(model_name)
         )
         return self.compile_query(model=model, query_name=query_name, dialect=dialect, kind=kind)
@@ -114,6 +119,7 @@ class SemanticHarness:
         model_name: str,
         query_name: str,
         dialect: str,
+        semantic_graph: bool = False,
         unified: bool = False,
         kind: str = "semantic",
     ) -> None:
@@ -121,6 +127,7 @@ class SemanticHarness:
             model_name=model_name,
             query_name=query_name,
             dialect=dialect,
+            semantic_graph=semantic_graph,
             unified=unified,
             kind=kind,
         )

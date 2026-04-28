@@ -245,6 +245,7 @@ class TsqlSemanticTranslator:
                 alias_map,
                 time_dimension.dimension.dataset,
                 time_dimension.dimension.column,
+                time_dimension.dimension.expression,
                 data_type=time_dimension.dimension.data_type,
             )
             expr = base_expr
@@ -572,11 +573,29 @@ class TsqlSemanticTranslator:
                 this=expr,
                 expression=format_literal(f"%{values[0]}%", None, dialect=self._dialect),
             )
+        if op == "ilike":
+            return exp.Like(
+                this=exp.func("LOWER", expr),
+                expression=exp.func(
+                    "LOWER",
+                    format_literal(str(values[0]), None, dialect=self._dialect),
+                ),
+            )
         if op == "notcontains":
             return exp.Not(
                 this=exp.Like(
                     this=expr,
                     expression=format_literal(f"%{values[0]}%", None, dialect=self._dialect),
+                )
+            )
+        if op == "notilike":
+            return exp.Not(
+                this=exp.Like(
+                    this=exp.func("LOWER", expr),
+                    expression=exp.func(
+                        "LOWER",
+                        format_literal(str(values[0]), None, dialect=self._dialect),
+                    ),
                 )
             )
         if op == "startswith":

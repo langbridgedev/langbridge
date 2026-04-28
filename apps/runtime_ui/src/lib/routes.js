@@ -1,76 +1,87 @@
 import {
+  Activity,
   Blocks,
   Bot,
   Cable,
   Database,
+  LayoutGrid,
   LayoutDashboard,
   MessageSquareText,
   Settings2,
-  Sparkles,
   Table2,
+  Workflow,
 } from "lucide-react";
 
 export const NAV_SECTIONS = [
   {
-    label: "Command",
+    label: "Core",
     items: [
       {
         to: "/",
-        label: "Overview",
+        label: "Command Center",
         icon: LayoutDashboard,
-        description: "Runtime command center, recent activity, and quick actions.",
+        description: "Ask-first runtime home with recent activity, entry points, and operating signals.",
+      },
+      {
+        to: "/chat",
+        label: "Ask",
+        icon: MessageSquareText,
+        description: "Question-first analysis with integrated threads and agent execution context.",
+      },
+      {
+        to: "/runs",
+        label: "Runs",
+        icon: Activity,
+        description: "Recent runtime executions across threads, queries, and dashboard widgets.",
       },
     ],
   },
   {
-    label: "Model",
+    label: "Build",
     items: [
+      {
+        to: "/semantic-models",
+        label: "Semantic Models",
+        icon: Blocks,
+        description: "Define the runtime semantic layer that powers governed analysis.",
+      },
+      {
+        to: "/datasets",
+        label: "Datasets",
+        icon: Database,
+        description: "Runtime datasets, bindings, previews, and execution-ready context.",
+      },
       {
         to: "/connectors",
         label: "Connectors",
         icon: Cable,
         description: "Connector inventory, sync resources, and runtime state.",
       },
-      {
-        to: "/datasets",
-        label: "Datasets",
-        icon: Database,
-        description: "Dataset bindings, schema detail, and runtime previews.",
-      },
-      {
-        to: "/semantic-models",
-        label: "Semantic Models",
-        icon: Blocks,
-        description: "Semantic field libraries, YAML detail, and model structure.",
-      },
     ],
   },
   {
-    label: "Operate",
+    label: "Advanced",
     items: [
       {
-        to: "/sql",
-        label: "SQL Workspace",
-        icon: Table2,
-        description: "Federated and direct SQL with local history and saved workbench state.",
+        to: "/query-workspace",
+        label: "Query Workspace",
+        icon: Workflow,
+        description: "Semantic-first query workspace with dataset and source SQL for power users.",
+        aliases: ["/sql"],
       },
       {
         to: "/dashboards",
-        label: "Dashboard Studio",
-        icon: Sparkles,
-        description: "Runtime Dashboard studio with local dashboards and semantic query widgets.",
+        label: "Dashboard Builder",
+        icon: LayoutGrid,
+        description: "Runtime-local dashboards backed by semantic queries without leading the main product story.",
+        mobile: false,
       },
       {
         to: "/agents",
-        label: "Agents",
+        label: "Agent Library",
         icon: Bot,
-        description: "Agent definitions, access policy, and runtime quick runs.",
-      },
-      {
-        to: "/chat",
-        label: "Threads",
-        icon: MessageSquareText,
-        description: "Threaded runtime chat with local agent selection and history.",
+        description: "Inspect runtime agent profiles, tools, and execution posture.",
+        mobile: false,
       },
     ],
   },
@@ -87,14 +98,19 @@ export const NAV_SECTIONS = [
   },
 ];
 
-export function matchNav(pathname, target) {
-  if (target === "/") {
+function listMatchTargets(item) {
+  return [item.to, ...(Array.isArray(item.aliases) ? item.aliases : [])];
+}
+
+export function matchNav(pathname, item) {
+  const targets = typeof item === "string" ? [item] : listMatchTargets(item);
+  if (targets.includes("/")) {
     return pathname === "/";
   }
-  return pathname === target || pathname.startsWith(`${target}/`);
+  return targets.some((target) => pathname === target || pathname.startsWith(`${target}/`));
 }
 
 export function resolveActiveNav(pathname) {
   const items = NAV_SECTIONS.flatMap((section) => section.items);
-  return items.find((item) => matchNav(pathname, item.to)) || items[0];
+  return items.find((item) => matchNav(pathname, item)) || items[0];
 }

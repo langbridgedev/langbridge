@@ -31,6 +31,27 @@ _DEFAULT_MAX_ROWS = 10000
 _DEFAULT_PORT = 15432
 _PUBLIC_SCHEMA_RE = re.compile(r'(?i)(?<![A-Za-z0-9_"])public\s*\.')
 _POSITIONAL_PARAM_RE = re.compile(r"\$([1-9][0-9]*)\b")
+_SYSTEM_CATALOG_TABLES = {
+    "pg_am",
+    "pg_attribute",
+    "pg_attrdef",
+    "pg_class",
+    "pg_constraint",
+    "pg_database",
+    "pg_description",
+    "pg_enum",
+    "pg_extension",
+    "pg_index",
+    "pg_namespace",
+    "pg_operator",
+    "pg_proc",
+    "pg_range",
+    "pg_roles",
+    "pg_sequence",
+    "pg_tables",
+    "pg_type",
+    "pg_views",
+}
 
 _PG_TYPE_OIDS = {
     "bool": 16,
@@ -209,6 +230,19 @@ class RuntimeOdbcQueryGateway:
             command_tag=f"SELECT {len(rows)}",
         )
 
+    async def describe(
+        self,
+        query: str,
+        *,
+        parameters: list[Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        result = await self.execute(
+            query,
+            parameters=parameters,
+            max_rows=1,
+        )
+        return list(result.columns)
+
     def _effective_limit(self, *, max_rows: int | None) -> int:
         if max_rows is None or max_rows <= 0:
             return self._config.max_rows
@@ -258,7 +292,7 @@ class RuntimeOdbcQueryGateway:
     @staticmethod
     def _is_metadata_query(query: str) -> bool:
         lowered = query.strip().lower()
-        return any(
+        if any(
             token in lowered
             for token in (
                 "information_schema.",
@@ -270,7 +304,20 @@ class RuntimeOdbcQueryGateway:
                 "current_schema()",
                 "current_schemas(",
             )
-        )
+        ):
+            return True
+        try:
+            expression = sqlglot.parse_one(query, read="postgres")
+        except sqlglot.ParseError:
+            return False
+        for table in expression.find_all(exp.Table):
+            schema_name = str(table.db or "").strip().lower()
+            table_name = str(table.name or "").strip().lower()
+            if schema_name in {"information_schema", "pg_catalog"}:
+                return True
+            if table_name in _SYSTEM_CATALOG_TABLES:
+                return True
+        return False
 
     async def _execute_metadata_query(self, query: str) -> RuntimeOdbcQueryResult:
         lowered = query.strip().lower()
@@ -304,7 +351,7 @@ class RuntimeOdbcQueryGateway:
         connection = duckdb.connect(database=":memory:")
         try:
             await self._materialize_metadata_catalog(connection)
-            result = connection.execute(query)
+            result = connection.execute(self._rewrite_metadata_query_for_duckdb(query))
             rows = [tuple(row) for row in result.fetchall()]
             description = result.description or []
             columns = [
@@ -321,6 +368,52 @@ class RuntimeOdbcQueryGateway:
             )
         finally:
             connection.close()
+
+    @staticmethod
+    def _rewrite_metadata_query_for_duckdb(query: str) -> str:
+        try:
+            expression = sqlglot.parse_one(query, read="postgres")
+        except sqlglot.ParseError:
+            return query
+        if not isinstance(expression, exp.Select):
+            return query
+
+        order = expression.args.get("order")
+        if not isinstance(order, exp.Order):
+            return query
+
+        required_aliases = {
+            item.this.name
+            for item in order.expressions
+            if isinstance(item, exp.Ordered)
+            and isinstance(item.this, exp.Column)
+            and not str(item.this.table or "").strip()
+            and str(item.this.name or "").strip()
+        }
+        if not required_aliases:
+            return query
+
+        updated = expression.copy()
+        projections = list(updated.expressions or [])
+        rewritten = False
+        for alias_name in required_aliases:
+            candidates = [
+                index
+                for index, projection in enumerate(projections)
+                if isinstance(projection, exp.Column)
+                and str(projection.name or "").strip().lower() == alias_name.lower()
+                and str(projection.table or "").strip()
+            ]
+            if len(candidates) != 1:
+                continue
+            projection = projections[candidates[0]]
+            projections[candidates[0]] = exp.alias_(projection.copy(), alias_name, quoted=False)
+            rewritten = True
+
+        if not rewritten:
+            return query
+        updated.set("expressions", projections)
+        return updated.sql(dialect="postgres")
 
     def _show_setting(self, query: str) -> RuntimeOdbcQueryResult:
         setting_name = query.strip()[5:].strip().strip(";").strip().lower()
@@ -343,6 +436,7 @@ class RuntimeOdbcQueryGateway:
         )
 
     async def _materialize_metadata_catalog(self, connection: duckdb.DuckDBPyConnection) -> None:
+        connection.execute("CREATE TABLE IF NOT EXISTS pg_range (rngtypid BIGINT, rngsubtype BIGINT)")
         datasets = await self._runtime_host.list_datasets()
         connection.execute('CREATE SCHEMA IF NOT EXISTS "public"')
         for item in datasets:
@@ -521,17 +615,18 @@ class RuntimeOdbcEndpoint:
                 length = _unpack_int32(await reader.readexactly(4))
                 payload = await reader.readexactly(length - 4)
                 code = message_type.decode("ascii")
-
                 if code == "X":
                     break
                 if code == "Q":
                     query = _read_cstring(payload, 0)[0]
-                    await self._execute_query(
-                        writer=writer,
-                        gateway=gateway,
-                        query=query,
-                        max_rows=None,
-                    )
+                    for statement_sql in _split_simple_query_statements(query):
+                        await self._execute_query(
+                            writer=writer,
+                            gateway=gateway,
+                            query=statement_sql,
+                            max_rows=None,
+                            include_row_description=True,
+                        )
                     await self._write_ready(writer)
                     continue
                 if code == "P":
@@ -602,10 +697,33 @@ class RuntimeOdbcEndpoint:
                         count = 0 if statement is None else statement.parameter_count
                         body = struct.pack("!H", count) + b"".join(struct.pack("!I", 0) for _ in range(count))
                         await _write_message(writer, "t", body)
-                        await _write_message(writer, "n", b"")
+                        if statement is None:
+                            await _write_message(writer, "n", b"")
+                            continue
+                        columns = await gateway.describe(
+                            statement.query,
+                            parameters=[None] * count,
+                        )
+                        if columns:
+                            await _write_message(writer, "T", _encode_row_description(columns))
+                        else:
+                            await _write_message(writer, "n", b"")
                         continue
                     if describe_type == "P":
-                        await _write_message(writer, "n", b"")
+                        portal = portals.get(name)
+                        if portal is None:
+                            raise ValueError(f"Unknown portal '{name}'.")
+                        statement = statements.get(portal.statement_name)
+                        if statement is None:
+                            raise ValueError(f"Unknown statement '{portal.statement_name}'.")
+                        columns = await gateway.describe(
+                            statement.query,
+                            parameters=portal.parameters,
+                        )
+                        if columns:
+                            await _write_message(writer, "T", _encode_row_description(columns))
+                        else:
+                            await _write_message(writer, "n", b"")
                         continue
                     raise ValueError(f"Unsupported describe target '{describe_type}'.")
                 if code == "E":
@@ -623,6 +741,7 @@ class RuntimeOdbcEndpoint:
                         query=statement.query,
                         parameters=portal.parameters,
                         max_rows=max_rows,
+                        include_row_description=False,
                     )
                     continue
                 if code == "S":
@@ -715,14 +834,16 @@ class RuntimeOdbcEndpoint:
         query: str,
         parameters: list[Any] | None = None,
         max_rows: int | None = None,
+        include_row_description: bool = True,
     ) -> None:
         result = await gateway.execute(
             query,
             parameters=parameters,
             max_rows=max_rows,
         )
-        if result.columns:
+        if result.columns and include_row_description:
             await _write_message(writer, "T", _encode_row_description(result.columns))
+        if result.rows:
             for row in result.rows:
                 await _write_message(writer, "D", _encode_data_row(row))
         elif not result.rows and result.command_tag == "EMPTY":
@@ -907,3 +1028,18 @@ def _sql_literal(value: Any) -> str:
 def _quote_identifier(value: str) -> str:
     escaped = str(value).replace('"', '""')
     return f'"{escaped}"'
+
+
+def _split_simple_query_statements(query: str) -> list[str]:
+    try:
+        expressions = sqlglot.parse(query, read="postgres")
+    except sqlglot.ParseError:
+        normalized = str(query or "").strip()
+        return [normalized] if normalized else []
+
+    statements = [
+        expression.sql(dialect="postgres")
+        for expression in expressions
+        if expression is not None and str(expression.sql(dialect="postgres")).strip()
+    ]
+    return statements or ([str(query or "").strip()] if str(query or "").strip() else [])

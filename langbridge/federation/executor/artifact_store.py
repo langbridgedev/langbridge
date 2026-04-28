@@ -2,19 +2,33 @@
 import hashlib
 import json
 from pathlib import Path
+import time
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pyarrow.parquet as pq
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from langbridge.federation.executor.cache_context import StageCacheDescriptor
 from langbridge.federation.models.plans import StageArtifact
+from langbridge.runtime.settings import runtime_settings
 
+
+class CacheStageArtifactTTL(BaseModel):
+    seconds: int
+    created_at: float = Field(default_factory=time.time)
+    
+    def is_expired(self) -> bool:
+        return time.time() > self.created_at + self.seconds
 
 class StageArtifactManifest(BaseModel):
     artifact: StageArtifact
     cache: StageCacheDescriptor | None = None
+    ttl: CacheStageArtifactTTL | None = None
+
+    @property
+    def artifact_key(self) -> str:
+        return self.artifact.artifact_key
 
 
 class ArtifactStore:
@@ -31,8 +45,8 @@ class ArtifactStore:
         plan_id: str,
         stage_id: str,
         expected_cache: StageCacheDescriptor | None = None,
-    ) -> StageArtifact | None:
-        manifest = self.get_stage_output_manifest(
+    ) -> StageArtifactManifest | None:
+        manifest: StageArtifactManifest | None = self.get_stage_output_manifest(
             workspace_id=workspace_id,
             plan_id=plan_id,
             stage_id=stage_id,
@@ -50,7 +64,7 @@ class ArtifactStore:
             return None
         if persisted_cache.cache_key != expected_cache.cache_key:
             return None
-        return manifest.artifact
+        return manifest
 
     def write_stage_output(
         self,
@@ -60,7 +74,7 @@ class ArtifactStore:
         stage_id: str,
         table: pa.Table,
         cache: StageCacheDescriptor | None = None,
-    ) -> StageArtifact:
+    ) -> StageArtifactManifest:
         content_hash = self._content_hash(table)
         artifact_key = f"{workspace_id}/artifacts/{content_hash}.parquet"
         artifact_path = self._artifact_path(artifact_key)
@@ -79,12 +93,12 @@ class ArtifactStore:
 
         manifest_path = self._manifest_path(workspace_id=workspace_id, plan_id=plan_id, stage_id=stage_id)
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        manifest = StageArtifactManifest(artifact=artifact, cache=cache)
+        manifest = StageArtifactManifest(artifact=artifact, cache=cache, ttl=CacheStageArtifactTTL(seconds=runtime_settings.FEDERATION_DEFAULT_TTL_SECONDS) if cache and cache.cacheable else None)
         manifest_path.write_text(
             manifest.model_dump_json(indent=2),
             encoding="utf-8",
         )
-        return artifact
+        return manifest
 
     def read_stage_output(
         self,

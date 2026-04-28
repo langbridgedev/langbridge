@@ -1,3 +1,5 @@
+import { parseRuntimeDate, getRuntimeTimestamp } from "./format.js";
+
 export const SQL_HISTORY_STORAGE_KEY = "langbridge.runtime_ui.sql_history";
 export const SQL_SAVED_STORAGE_KEY = "langbridge.runtime_ui.sql_saved";
 export const DASHBOARD_BUILDER_STORAGE_KEY = "langbridge.runtime_ui.dashboard_builder";
@@ -8,12 +10,12 @@ GROUP BY country
 ORDER BY net_sales DESC`;
 
 export const DEFAULT_CHAT_MESSAGE =
-  "Summarize the current runtime state and call out any operational issues.";
+  "What is the most important thing to investigate in this runtime right now?";
 
 export const SQL_TEMPLATES = [
   {
     label: "Revenue by country",
-    description: "Federated runtime query against the default orders dataset.",
+    description: "Dataset SQL query against the default orders dataset.",
     query: `SELECT country, SUM(net_revenue) AS net_sales
 FROM shopify_orders
 GROUP BY country
@@ -28,8 +30,8 @@ ORDER BY order_date DESC
 LIMIT 25`,
   },
   {
-    label: "Connector direct SQL",
-    description: "Starter pattern for direct connector workbench queries.",
+    label: "Source SQL",
+    description: "Starter pattern for source-scoped connector workbench queries.",
     query: `SELECT country, SUM(net_revenue) AS net_sales
 FROM orders_enriched
 GROUP BY country
@@ -38,9 +40,32 @@ ORDER BY net_sales DESC`,
 ];
 
 export const CHAT_STARTERS = [
-  "Summarize runtime health and the most important operational signals.",
-  "What datasets and semantic models are currently available in this runtime?",
-  "Recommend the next connector or sync action worth checking.",
+  "What changed recently in this runtime, and where should I focus first?",
+  "Which semantic models and datasets should I use to answer revenue questions?",
+  "Show the highest-value runtime signal or operational issue worth checking next.",
+];
+
+export const RUNTIME_AGENT_MODE_OPTIONS = [
+  {
+    value: "auto",
+    label: "Auto",
+    hint: "Let the runtime choose the best analytical route.",
+  },
+  {
+    value: "sql",
+    label: "Analysis",
+    hint: "Bias toward governed SQL and analytical workflows.",
+  },
+  {
+    value: "research",
+    label: "Research",
+    hint: "Bias toward source-backed synthesis and broader investigation.",
+  },
+  {
+    value: "context_analysis",
+    label: "Context",
+    hint: "Work from the current thread context and verified results.",
+  },
 ];
 
 export function createLocalId(prefix = "item") {
@@ -48,6 +73,26 @@ export function createLocalId(prefix = "item") {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+export function normalizeRuntimeAgentMode(value) {
+  if (
+    value === "auto" ||
+    value === "sql" ||
+    value === "research" ||
+    value === "context_analysis"
+  ) {
+    return value;
+  }
+  return "auto";
+}
+
+export function formatRuntimeAgentModeLabel(value) {
+  const normalized = normalizeRuntimeAgentMode(value);
+  return (
+    RUNTIME_AGENT_MODE_OPTIONS.find((item) => item.value === normalized)?.label ||
+    "Auto"
+  );
 }
 
 export async function copyTextToClipboard(value) {
@@ -84,7 +129,7 @@ export function formatRelativeTime(value) {
   if (!value) {
     return "just now";
   }
-  const date = new Date(value);
+  const date = parseRuntimeDate(value);
   if (Number.isNaN(date.getTime())) {
     return String(value);
   }
@@ -370,6 +415,7 @@ export function normalizeVisualizationSpec(visualization) {
   return {
     title: raw.title || raw.chart_title || "Runtime chart",
     subtitle: raw.subtitle || raw.chart_subtitle || raw.description || options.subtitle || "",
+    rationale: raw.rationale || raw.reason || options.rationale || options.reason || "",
     chartType: normalizeChartType(rawChartType),
     x: raw.x || raw.x_axis || "",
     y: Array.isArray(yValue) ? yValue.filter(Boolean) : [yValue].filter(Boolean),
@@ -396,6 +442,189 @@ export function normalizeVisualizationSpec(visualization) {
 export function hasRenderableVisualization(visualization) {
   const normalized = normalizeVisualizationSpec(visualization);
   return Boolean(normalized?.chartType && normalized.chartType !== "table");
+}
+
+export function extractArtifactPlaceholderIds(markdown) {
+  const text = String(markdown || "");
+  if (!text) {
+    return [];
+  }
+  const ids = [];
+  const pattern = /{{\s*artifact:([A-Za-z0-9_.:-]+)\s*}}/g;
+  let match = pattern.exec(text);
+  while (match) {
+    const artifactId = String(match[1] || "").trim();
+    if (artifactId && !ids.includes(artifactId)) {
+      ids.push(artifactId);
+    }
+    match = pattern.exec(text);
+  }
+  return ids;
+}
+
+export function normalizeRuntimeArtifactType(value, fallbackId = "") {
+  const normalized = `${String(value || "")} ${String(fallbackId || "")}`
+    .trim()
+    .toLowerCase()
+    .replaceAll("-", "_");
+  if (!normalized) {
+    return "artifact";
+  }
+  if (
+    normalized.includes("primary_visualization") ||
+    normalized.includes("visualization") ||
+    normalized.includes("chart") ||
+    normalized.includes("plot") ||
+    normalized.includes("graph")
+  ) {
+    return "chart";
+  }
+  if (
+    normalized.includes("primary_result") ||
+    normalized.includes("result_table") ||
+    normalized.includes("table") ||
+    normalized.includes("tabular") ||
+    normalized.includes("rows")
+  ) {
+    return "table";
+  }
+  if (normalized.includes("sql") || normalized.includes("query")) {
+    return "sql";
+  }
+  if (normalized.includes("diagnostic") || normalized.includes("execution")) {
+    return "diagnostics";
+  }
+  return "artifact";
+}
+
+function hasTabularArtifactPayload(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      (Array.isArray(value.rows) || Array.isArray(value.data) || Array.isArray(value.columns)),
+  );
+}
+
+function normalizeAssistantArtifactItem(item, index) {
+  if (typeof item === "string") {
+    const id = item.trim();
+    return id
+      ? {
+          id,
+          type: normalizeRuntimeArtifactType("", id),
+          title: id.replaceAll("_", " "),
+          source: "",
+        }
+      : null;
+  }
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const id = String(
+    item.id ||
+      item.artifact_id ||
+      item.artifactId ||
+      item.key ||
+      item.name ||
+      item.source ||
+      `artifact-${index + 1}`,
+  ).trim();
+  if (!id) {
+    return null;
+  }
+  const type = normalizeRuntimeArtifactType(
+    item.type || item.kind || item.source || item.category,
+    id,
+  );
+  return {
+    ...item,
+    id,
+    type,
+    title: item.title || item.label || id.replaceAll("_", " "),
+    placeholder: item.placeholder || `{{artifact:${id}}}`,
+  };
+}
+
+function inferArtifactForPlaceholder({ id, result, visualization, diagnostics }) {
+  const type = normalizeRuntimeArtifactType("", id);
+  if (type === "chart" && visualization && typeof visualization === "object") {
+    return {
+      id,
+      type: "chart",
+      title: visualization.title || visualization.chart_title || "Visualization",
+      placeholder: `{{artifact:${id}}}`,
+      source: "visualization",
+    };
+  }
+  if (type === "table" && hasTabularArtifactPayload(result)) {
+    return {
+      id,
+      type: "table",
+      title: "Verified result table",
+      placeholder: `{{artifact:${id}}}`,
+      source: "result",
+      row_count: Array.isArray(result?.rows) ? result.rows.length : undefined,
+    };
+  }
+  if (type === "sql" && diagnostics && typeof diagnostics === "object") {
+    return {
+      id,
+      type: "sql",
+      title: "Generated SQL",
+      placeholder: `{{artifact:${id}}}`,
+      source: "diagnostics",
+    };
+  }
+  if (type === "diagnostics" && diagnostics && typeof diagnostics === "object") {
+    return {
+      id,
+      type: "diagnostics",
+      title: "Runtime diagnostics",
+      placeholder: `{{artifact:${id}}}`,
+      source: "diagnostics",
+    };
+  }
+  return null;
+}
+
+export function normalizeAssistantArtifacts(content, options = {}) {
+  const source = content && typeof content === "object" ? content : {};
+  const rawArtifacts = source.artifacts;
+  const rawItems = Array.isArray(rawArtifacts)
+    ? rawArtifacts
+    : rawArtifacts && typeof rawArtifacts === "object"
+      ? Object.entries(rawArtifacts).map(([id, value]) =>
+          value && typeof value === "object" ? { id, ...value } : { id, value },
+        )
+      : [];
+  const normalized = rawItems
+    .map((item, index) => normalizeAssistantArtifactItem(item, index))
+    .filter(Boolean);
+  const result = options.result || source.result || null;
+  const visualization = options.visualization || source.visualization || null;
+  const diagnostics = options.diagnostics || source.diagnostics || null;
+  const placeholderIds = extractArtifactPlaceholderIds(
+    options.answerMarkdown || source.answer_markdown || source.answer || "",
+  );
+  const seenIds = new Set(normalized.map((item) => item.id));
+
+  placeholderIds.forEach((id) => {
+    if (seenIds.has(id)) {
+      return;
+    }
+    const inferred = inferArtifactForPlaceholder({
+      id,
+      result,
+      visualization,
+      diagnostics,
+    });
+    if (inferred) {
+      normalized.push(inferred);
+      seenIds.add(id);
+    }
+  });
+
+  return normalized;
 }
 
 function normalizeErrorStatus(value) {
@@ -661,7 +890,25 @@ export function buildDiagnosticsHighlights(diagnostics) {
     return [];
   }
   const outcome = normalizeAnalystOutcome(diagnostics);
+  const execution =
+    diagnostics.execution && typeof diagnostics.execution === "object"
+      ? diagnostics.execution
+      : null;
   const highlights = [
+    execution?.status
+      ? { label: "Run", value: String(execution.status).replaceAll("_", " ") }
+      : null,
+    execution?.route ? { label: "Route", value: execution.route } : null,
+    execution?.selected_agent ? { label: "Agent", value: execution.selected_agent } : null,
+    Number.isFinite(Number(execution?.total_sql_queries))
+      ? { label: "SQL", value: String(Number(execution.total_sql_queries)) }
+      : null,
+    Array.isArray(execution?.query_scopes) && execution.query_scopes.length > 0
+      ? { label: "Scope", value: execution.query_scopes.join(", ") }
+      : null,
+    Number.isFinite(Number(execution?.rowcount))
+      ? { label: "Rows", value: String(Number(execution.rowcount)) }
+      : null,
     outcome?.status
       ? { label: "Outcome", value: outcome.status.replaceAll("_", " ") }
       : null,
@@ -687,9 +934,32 @@ export function buildDiagnosticsNotes(diagnostics, visualization) {
     return [];
   }
   const outcome = normalizeAnalystOutcome(diagnostics);
+  const execution =
+    diagnostics.execution && typeof diagnostics.execution === "object"
+      ? diagnostics.execution
+      : null;
   const normalizedVisualization = normalizeVisualizationSpec(visualization);
   const notes = [];
 
+  if (typeof execution?.summary === "string" && execution.summary.trim()) {
+    notes.push(execution.summary.trim());
+  }
+  if (execution?.evidence && typeof execution.evidence === "object") {
+    const evidence = execution.evidence;
+    const fragments = [];
+    if (evidence.governed_attempted) {
+      fragments.push(`${Number(evidence.governed_rounds || 0)} governed round(s)`);
+    }
+    if (Number(evidence.external_sources || 0) > 0) {
+      fragments.push(`${Number(evidence.external_sources)} external source(s)`);
+    }
+    if (evidence.used_fallback) {
+      fragments.push("fallback was used");
+    }
+    if (fragments.length > 0) {
+      notes.push(`Evidence path: ${fragments.join("; ")}.`);
+    }
+  }
   if (outcome?.message) {
     notes.push(outcome.message);
   }
@@ -723,11 +993,70 @@ export function buildDiagnosticsNotes(diagnostics, visualization) {
   return [...new Set(notes.filter(Boolean))];
 }
 
-function readAssistantText(message) {
+function looksLikeMarkdownText(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return false;
+  }
+  return (
+    extractArtifactPlaceholderIds(text).length > 0 ||
+    /(^|\n)\s{0,3}#{1,6}\s+\S/.test(text) ||
+    /(^|\n)\s*[-*+]\s+\S/.test(text) ||
+    /(^|\n)\s*\d+\.\s+\S/.test(text) ||
+    /(^|\n)```/.test(text) ||
+    /\|.+\|/.test(text)
+  );
+}
+
+function readAssistantAnswerMarkdown(message) {
   const content =
     message?.content && typeof message.content === "object" ? message.content : {};
+  const direct =
+    typeof content.answer_markdown === "string" && content.answer_markdown.trim()
+      ? content.answer_markdown.trim()
+      : "";
+  if (direct) {
+    return direct;
+  }
+
+  const presentation =
+    content.presentation && typeof content.presentation === "object"
+      ? content.presentation
+      : null;
+  if (typeof presentation?.answer_markdown === "string" && presentation.answer_markdown.trim()) {
+    return presentation.answer_markdown.trim();
+  }
+
+  const result = content.result && typeof content.result === "object" ? content.result : null;
+  if (typeof result?.answer_markdown === "string" && result.answer_markdown.trim()) {
+    return result.answer_markdown.trim();
+  }
+
+  const answer = typeof content.answer === "string" ? content.answer.trim() : "";
+  if (
+    answer &&
+    (!content.summary || looksLikeMarkdownText(answer) || extractArtifactPlaceholderIds(answer).length > 0)
+  ) {
+    return answer;
+  }
+
+  return "";
+}
+
+function readAssistantText(message, answerMarkdown = "") {
+  const content =
+    message?.content && typeof message.content === "object" ? message.content : {};
+  const diagnostics =
+    content.diagnostics && typeof content.diagnostics === "object" ? content.diagnostics : null;
+  const aiRun = diagnostics?.ai_run && typeof diagnostics.ai_run === "object" ? diagnostics.ai_run : null;
+  const isClarification =
+    (typeof diagnostics?.clarifying_question === "string" && diagnostics.clarifying_question.trim()) ||
+    String(aiRun?.mode || "").trim().toLowerCase() === "clarification";
   return (
+    (isClarification && typeof content.answer === "string" ? content.answer : "") ||
+    answerMarkdown ||
     content.summary ||
+    content.answer ||
     content.text ||
     (typeof content.result?.text === "string" ? content.result.text : "") ||
     ""
@@ -773,21 +1102,39 @@ export function buildConversationTurns(messages, agents) {
           ? assistant.content
           : {};
       const assistantTable = normalizeAssistantTable(assistant);
+      const assistantVisualization = assistantContent.visualization || null;
       const diagnostics =
         assistantContent.diagnostics &&
         typeof assistantContent.diagnostics === "object"
           ? assistantContent.diagnostics
           : null;
+      const assistantAnswerMarkdown = assistant
+        ? readAssistantAnswerMarkdown(assistant)
+        : "";
+      const assistantArtifacts = assistant
+        ? normalizeAssistantArtifacts(assistantContent, {
+            answerMarkdown: assistantAnswerMarkdown,
+            result: assistantTable || assistantContent.result || null,
+            visualization: assistantVisualization,
+            diagnostics,
+          })
+        : [];
       const assistantError =
         assistant?.error && typeof assistant.error === "object" ? assistant.error : null;
       const agentId = String(assistant?.model_snapshot?.agent_id || "");
+      const agentMode = normalizeRuntimeAgentMode(
+        message?.content?.agent_mode || message?.model_snapshot?.agent_mode,
+      );
       return {
         id: String(message.id || createLocalId("turn")),
         prompt: message?.content?.text || "",
+        agentMode,
         createdAt: message.created_at,
-        assistantSummary: assistant ? readAssistantText(assistant) : "",
+        assistantSummary: assistant ? readAssistantText(assistant, assistantAnswerMarkdown) : "",
+        assistantAnswerMarkdown,
+        assistantArtifacts,
         assistantTable,
-        assistantVisualization: assistantContent.visualization || null,
+        assistantVisualization,
         diagnostics,
         errorMessage:
           (typeof assistantError?.message === "string" ? assistantError.message : "") ||
@@ -850,7 +1197,7 @@ export function buildActivityFeed(payload) {
       kind: "Dataset",
       description:
         dataset.description ||
-        `${dataset.connector || "Runtime"} dataset ready for SQL, Dashboard Builder, and agent use.`,
+        `${dataset.connector || "Runtime"} dataset ready for query workspace, dashboards, and agent execution.`,
       timestamp: dataset.updated_at || dataset.created_at,
     });
   });
@@ -862,7 +1209,7 @@ export function buildActivityFeed(payload) {
       title: model.name,
       kind: "Semantic model",
       description:
-        model.description || "Semantic model available for runtime query and dashboard-builder flows.",
+        model.description || "Semantic model available for ask flows, query workspace, and dashboard execution.",
       timestamp: model.updated_at || model.updatedAt || model.created_at,
     });
   });
@@ -874,7 +1221,7 @@ export function buildActivityFeed(payload) {
       title: agent.name,
       kind: "Agent",
       description:
-        agent.description || "Runtime agent definition ready for threads and quick runs.",
+        agent.description || "Runtime agent definition ready for ask flows and guided execution.",
       timestamp: agent.updated_at || agent.updatedAt || agent.created_at,
     });
   });
@@ -894,8 +1241,8 @@ export function buildActivityFeed(payload) {
 
   return items
     .sort((left, right) => {
-      const leftTime = new Date(left.timestamp || 0).getTime();
-      const rightTime = new Date(right.timestamp || 0).getTime();
+      const leftTime = getRuntimeTimestamp(left.timestamp || 0);
+      const rightTime = getRuntimeTimestamp(right.timestamp || 0);
       return rightTime - leftTime;
     })
     .slice(0, 8);

@@ -17,7 +17,8 @@ from langbridge.runtime.hosting.local_auth import (
     RuntimeLocalAuthError,
     RuntimeLocalAuthManager,
     RuntimeLocalSession,
-)   
+)
+from langbridge.runtime.utils.util import _coerce_uuid   
 
 if TYPE_CHECKING:
     from langbridge.runtime.bootstrap.configured_runtime import ConfiguredLocalRuntimeHost
@@ -303,6 +304,11 @@ class RuntimeAuthResolver:
             claims.get(self._config.jwt_workspace_claim),
             field_name=self._config.jwt_workspace_claim,
         )
+        if workspace_id is None:
+            raise RuntimeAuthResolver._unauthorized(
+                f"Runtime auth claim '{self._config.jwt_workspace_claim}' must be a UUID."
+            )
+        
         subject = _coerce_optional_text(claims.get(self._config.jwt_subject_claim))
         actor_id = _coerce_optional_uuid(
             claims.get(self._config.jwt_actor_claim),
@@ -472,13 +478,6 @@ def _bool_env(name: str, *, default: bool) -> bool:
     if value is None:
         return bool(default)
     return value.lower() in {"1", "true", "yes", "on"}
-
-
-def _coerce_uuid(value: Any, *, field_name: str) -> uuid.UUID:
-    try:
-        return uuid.UUID(str(value))
-    except (TypeError, ValueError) as exc:
-        raise RuntimeAuthResolver._unauthorized(f"Runtime auth claim '{field_name}' must be a UUID.") from exc
 
 
 def _coerce_optional_uuid(value: Any, *, field_name: str) -> uuid.UUID | None:

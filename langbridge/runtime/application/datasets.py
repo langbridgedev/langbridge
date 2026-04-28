@@ -22,8 +22,10 @@ from langbridge.runtime.config.models import (
 from langbridge.runtime.models import (
     ConnectorMetadata,
     DatasetColumnMetadata,
+    DatasetMaterializationConfig,
     DatasetMetadata,
     DatasetPolicyMetadata,
+    DatasetSchemaHint,
     DatasetSource,
     DatasetSyncConfig,
 )
@@ -91,7 +93,9 @@ def _merge_dataset_tags(*, existing: list[str], required: list[str]) -> list[str
 class _DatasetSourceInput:
     table_name: str
     resource_name: str
+    request_config: dict[str, Any] | None
     flatten_paths: list[str]
+    extraction_config: dict[str, Any] | None
     sql_text: str
     storage_uri: str | None
     requested_file_format: str
@@ -105,7 +109,9 @@ class _DatasetSourceInput:
             return cls(
                 table_name="",
                 resource_name="",
+                request_config=None,
                 flatten_paths=[],
+                extraction_config=None,
                 sql_text="",
                 storage_uri=None,
                 requested_file_format="",
@@ -117,6 +123,25 @@ class _DatasetSourceInput:
         storage_uri = str(getattr(source_config, "storage_uri", None) or "").strip() or None
         if storage_uri is None and source_path:
             storage_uri = Path(str(source_path)).resolve().as_uri()
+        request_config = getattr(source_config, "request", None)
+        request_payload = None
+        if request_config is not None:
+            request_payload = (
+                request_config.model_dump(mode="json", exclude_none=True)
+                if hasattr(request_config, "model_dump")
+                else dict(request_config)
+            )
+            request_path = str(request_payload.get("path") or "").strip()
+            if request_path:
+                request_payload["path"] = request_path
+        extraction_config = getattr(source_config, "extraction", None)
+        extraction_payload = None
+        if extraction_config is not None:
+            extraction_payload = (
+                extraction_config.model_dump(mode="json", exclude_none=True)
+                if hasattr(extraction_config, "model_dump")
+                else dict(extraction_config)
+            )
         return cls(
             table_name=str(getattr(source_config, "table", None) or "").strip(),
             resource_name=(
@@ -124,7 +149,9 @@ class _DatasetSourceInput:
                 if str(getattr(source_config, "resource", None) or "").strip()
                 else ""
             ),
+            request_config=request_payload,
             flatten_paths=normalize_api_flatten_paths(getattr(source_config, "flatten", None)),
+            extraction_config=extraction_payload,
             sql_text=str(getattr(source_config, "sql", None) or "").strip(),
             storage_uri=storage_uri,
             requested_file_format=str(
@@ -148,6 +175,21 @@ class _DatasetSourceInput:
         return bool(self.resource_name)
 
     @property
+    def is_request(self) -> bool:
+        return isinstance(self.request_config, dict) and bool(str(self.request_config.get("path") or "").strip())
+
+    @property
+    def api_identity(self) -> str:
+        if self.is_resource:
+            return self.resource_name
+        if self.is_request:
+            request_path = str(self.request_config.get("path") or "").strip()
+            if request_path:
+                return request_path
+            return f"request:{stable_payload_hash(str(self.request_config))}"
+        return ""
+
+    @property
     def is_sql(self) -> bool:
         return bool(self.sql_text)
 
@@ -157,7 +199,7 @@ class _DatasetSourceInput:
 
     @property
     def requires_connector(self) -> bool:
-        return self.is_table or self.is_sql or self.is_resource
+        return self.is_table or self.is_sql or self.is_resource or self.is_request
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,7 +244,7 @@ class _DatasetSyncInput:
     @property
     def has_sync(self) -> bool:
         source = self.source
-        return source.is_table or source.is_resource or source.is_sql or source.is_file
+        return source.is_table or source.is_resource or source.is_request or source.is_sql or source.is_file
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +265,9 @@ class _DatasetDefinition:
 def _sync_source_key(source: _DatasetSourceInput) -> str:
     if source.is_resource:
         return f"resource:{source.resource_name}"
+    if source.is_request:
+        request_path = source.api_identity
+        return f"request:{request_path}"
     if source.is_table:
         return f"table:{source.table_name}"
     if source.is_sql:
@@ -235,6 +280,8 @@ def _sync_source_key(source: _DatasetSourceInput) -> str:
 def _sync_source_label(source: _DatasetSourceInput) -> str:
     if source.is_resource:
         return f"API resource path '{source.resource_name}'"
+    if source.is_request:
+        return f"API request '{source.api_identity}'"
     if source.is_table:
         return f"table '{source.table_name}'"
     if source.is_sql:
@@ -246,16 +293,28 @@ def _sync_source_label(source: _DatasetSourceInput) -> str:
 
 def _sync_source_payload(source: _DatasetSourceInput) -> dict[str, Any]:
     if source.is_table:
-        return {"table": source.table_name}
+        return {"kind": "table", "table": source.table_name}
     if source.is_resource:
-        payload: dict[str, Any] = {"resource": source.resource_name}
+        payload: dict[str, Any] = {"kind": "resource", "resource": source.resource_name}
         if source.flatten_paths:
             payload["flatten"] = list(source.flatten_paths)
+        if source.extraction_config is not None:
+            payload["extraction"] = dict(source.extraction_config)
+        return payload
+    if source.is_request:
+        payload = {
+            "kind": "request",
+            "request": dict(source.request_config or {}),
+        }
+        if source.flatten_paths:
+            payload["flatten"] = list(source.flatten_paths)
+        if source.extraction_config is not None:
+            payload["extraction"] = dict(source.extraction_config)
         return payload
     if source.is_sql:
-        return {"sql": source.sql_text}
+        return {"kind": "sql", "sql": source.sql_text}
     if source.is_file:
-        payload = {"storage_uri": source.storage_uri}
+        payload = {"kind": "file", "storage_uri": source.storage_uri}
         if source.requested_file_format:
             payload["format"] = source.requested_file_format
         if source.header is not None:
@@ -283,10 +342,47 @@ class DatasetApplication:
         return dataset.name
 
     @staticmethod
-    def _dataset_semantic_model(*, configured_record) -> str | None:
-        if configured_record is None:
-            return None
-        return configured_record.semantic_model_name
+    def _semantic_dataset_relation_name(*, dataset: DatasetMetadata, configured_record) -> str | None:
+        if configured_record is not None:
+            return configured_record.relation_name
+        relation_identity = dict(dataset.relation_identity_json or {})
+        relation_name = str(relation_identity.get("relation_name") or "").strip()
+        if relation_name:
+            return relation_name
+        table_name = str(dataset.table_name or "").strip()
+        if table_name:
+            return table_name
+        return str(dataset.sql_alias or "").strip() or None
+
+    def _dataset_semantic_models(self, *, dataset: DatasetMetadata, configured_record) -> list[str]:
+        relation_name = self._semantic_dataset_relation_name(dataset=dataset, configured_record=configured_record)
+        if not relation_name:
+            return []
+        normalized_relation_name = relation_name.strip().lower()
+        matches: list[str] = []
+        for model_name, record in self._host._semantic_models.items():
+            semantic_model = record.semantic_model
+            datasets_payload = (
+                semantic_model.datasets
+                if semantic_model is not None
+                else ((record.content_json or {}).get("datasets") or {})
+            )
+            if not isinstance(datasets_payload, dict):
+                continue
+            for dataset_key, dataset_entry in datasets_payload.items():
+                candidate_relation_name = ""
+                if semantic_model is not None and hasattr(dataset_entry, "get_relation_name"):
+                    candidate_relation_name = str(dataset_entry.get_relation_name(dataset_key) or "").strip()
+                elif isinstance(dataset_entry, dict):
+                    candidate_relation_name = str(
+                        dataset_entry.get("relation_name")
+                        or dataset_entry.get("relationName")
+                        or dataset_key
+                    ).strip()
+                if candidate_relation_name.lower() == normalized_relation_name:
+                    matches.append(model_name)
+                    break
+        return matches
 
     @staticmethod
     def _sync_source_payload(dataset) -> dict[str, Any]:
@@ -403,6 +499,10 @@ class DatasetApplication:
                 connector_name = connector.name if connector is not None else None
             sync_state = await self._sync_state_snapshot(dataset=dataset)
             management_mode = self._management_mode_value(dataset.management_mode)
+            semantic_models = self._dataset_semantic_models(
+                dataset=dataset,
+                configured_record=configured_record,
+            )
             items.append(
                 {
                     "id": dataset.id,
@@ -410,11 +510,14 @@ class DatasetApplication:
                     "label": self._dataset_label(dataset=dataset, configured_record=configured_record),
                     "description": dataset.description,
                     "connector": connector_name,
-                    "semantic_model": self._dataset_semantic_model(configured_record=configured_record),
+                    "semantic_models": semantic_models,
+                    "semantic_model": next(iter(semantic_models), None),
+                    "materialization": dataset.materialization_json,
                     "materialization_mode": resolve_dataset_materialization_mode(
                         explicit_materialization_mode=dataset.materialization_mode_value,
                     ).value,
                     "source": dataset.source_json,
+                    "schema_hint": dataset.schema_hint_json,
                     "sync": dataset.sync_json,
                     "status": dataset.status_value,
                     "sync_status": None if sync_state is None else sync_state["status"],
@@ -438,6 +541,10 @@ class DatasetApplication:
             policy = await self._host._dataset_policy_repository.get_for_dataset(dataset_id=dataset.id)
             sync_state = await self._sync_state_snapshot(dataset=dataset)
         management_mode = self._management_mode_value(dataset.management_mode)
+        semantic_models = self._dataset_semantic_models(
+            dataset=dataset,
+            configured_record=configured_record,
+        )
         return {
             "id": dataset.id,
             "name": dataset.name,
@@ -446,12 +553,15 @@ class DatasetApplication:
             "sql_alias": dataset.sql_alias,
             "connector": connector.name if connector is not None else None,
             "connector_id": connector.id if connector is not None else None,
-            "semantic_model": self._dataset_semantic_model(configured_record=configured_record),
+            "semantic_models": semantic_models,
+            "semantic_model": next(iter(semantic_models), None),
             "dataset_type": dataset.dataset_type_value,
+            "materialization": dataset.materialization_json,
             "materialization_mode": resolve_dataset_materialization_mode(
                 explicit_materialization_mode=dataset.materialization_mode_value,
             ).value,
             "source": dataset.source_json,
+            "schema_hint": dataset.schema_hint_json,
             "sync": dataset.sync_json,
             "source_kind": dataset.source_kind_value,
             "storage_kind": dataset.storage_kind_value,
@@ -537,10 +647,10 @@ class DatasetApplication:
             return None
         return dict(dataset.source_json or {})
 
-    def _sync_request_from_dataset(self, *, dataset: DatasetMetadata) -> dict[str, Any] | None:
-        if dataset.sync is None:
+    def _materialization_request_from_dataset(self, *, dataset: DatasetMetadata) -> dict[str, Any] | None:
+        if dataset.materialization is None:
             return None
-        return dict(dataset.sync_json or {})
+        return dict(dataset.materialization_json or {})
 
     @staticmethod
     def _policy_request_from_dataset(policy: DatasetPolicyMetadata | None) -> dict[str, Any]:
@@ -591,12 +701,12 @@ class DatasetApplication:
             connector_type = str(
                 connector.connector_type.value if connector.connector_type is not None else ""
             ).strip().lower()
-            if sync_source.is_resource:
+            if sync_source.is_resource or sync_source.is_request:
                 required_tags = [
                     "managed",
                     "api-connector",
                     connector_type,
-                    f"resource:{sync_source.resource_name.strip().lower()}",
+                    f"resource:{sync_source.api_identity.strip().lower()}",
                 ]
             elif sync_source.is_table:
                 required_tags = [
@@ -656,7 +766,7 @@ class DatasetApplication:
             return existing_connector
         if materialization_mode == DatasetMaterializationMode.SYNCED or source.requires_connector:
             raise BusinessValidationError(
-                f"Dataset '{dataset_name}' requires a connector for table, sql, or synced sources."
+                f"Dataset '{dataset_name}' requires a connector for table, sql, api, or synced sources."
             )
         return None
 
@@ -669,7 +779,7 @@ class DatasetApplication:
         if connector is not None:
             return connector
         raise BusinessValidationError(
-            f"Dataset '{dataset_name}' requires a connector for table, sql, or synced sources."
+            f"Dataset '{dataset_name}' requires a connector for table, sql, api, or synced sources."
         )
 
     def _validate_synced_dataset(
@@ -689,10 +799,10 @@ class DatasetApplication:
         if not sync.has_sync:
             raise BusinessValidationError(
                 f"Dataset '{dataset_name}' requests materialization_mode 'synced', "
-                "but is missing sync.source."
+                "but is missing source/materialization.sync."
             )
         sync_source = sync.source
-        if sync_source.is_resource:
+        if sync_source.is_resource or sync_source.is_request:
             plugin = self._host._resolve_connector_plugin_for_type(resolved_connector.connector_type_value)
             if plugin is None or plugin.api_connector_class is None:
                 raise BusinessValidationError(
@@ -744,7 +854,7 @@ class DatasetApplication:
                 "but that connector does not support synced datasets."
             )
         sync_source = _DatasetSourceInput.from_source_config(sync_config.source)
-        if not (sync_source.is_resource or sync_source.is_table or sync_source.is_sql):
+        if not (sync_source.is_resource or sync_source.is_table or sync_source.is_sql or sync_source.is_request):
             raise BusinessValidationError(
                 f"Dataset '{dataset.name}' is missing sync.source."
             )
@@ -906,7 +1016,7 @@ class DatasetApplication:
                 f"Dataset '{dataset_name}' requests materialization_mode 'live', "
                 f"but connector '{resolved_connector.name}' does not support live datasets."
             )
-        if source.is_resource:
+        if source.is_resource or source.is_request:
             plugin = self._host._resolve_connector_plugin_for_type(resolved_connector.connector_type_value)
             if plugin is None or plugin.api_connector_class is None:
                 raise BusinessValidationError(
@@ -989,7 +1099,7 @@ class DatasetApplication:
                     f"Dataset '{dataset_name}' is missing a sync contract."
                 )
             sync_source = _DatasetSourceInput.from_source_config(sync.source)
-            if sync_source.is_resource:
+            if sync_source.is_resource or sync_source.is_request:
                 source_kind = DatasetSourceKind.API
             elif sync_source.is_table or sync_source.is_sql:
                 source_kind = DatasetSourceKind.DATABASE
@@ -1012,7 +1122,7 @@ class DatasetApplication:
                 storage_uri=None,
                 file_config=self._synced_file_config(),
             )
-        if source.is_resource:
+        if source.is_resource or source.is_request:
             self._require_connector(dataset_name=dataset_name, connector=connector)
             return _DatasetDefinition(
                 catalog_name=None,
@@ -1113,21 +1223,30 @@ class DatasetApplication:
         source: _DatasetSourceInput,
         definition: _DatasetDefinition,
     ) -> DatasetSource | None:
-        if materialization_mode != DatasetMaterializationMode.LIVE:
-            return None
         if source.is_table:
-            return DatasetSource(table=source.table_name)
+            return DatasetSource(kind="table", table=source.table_name)
         if source.is_resource:
             return DatasetSource(
+                kind="resource",
                 resource=source.resource_name,
                 flatten=source.flatten_paths or None,
+                extraction=source.extraction_config,
+            )
+        if source.is_request:
+            return DatasetSource(
+                kind="request",
+                request=dict(source.request_config or {}),
+                flatten=source.flatten_paths or None,
+                extraction=source.extraction_config,
             )
         if source.is_sql:
-            return DatasetSource(sql=source.sql_text)
-        if definition.storage_uri is None:
-            raise BusinessValidationError("File-backed live datasets require storage_uri.")
+            return DatasetSource(kind="sql", sql=source.sql_text)
+        file_storage_uri = source.storage_uri or definition.storage_uri
+        if file_storage_uri is None:
+            raise BusinessValidationError("File-backed datasets require storage_uri.")
         payload: dict[str, Any] = {
-            "storage_uri": definition.storage_uri,
+            "kind": "file",
+            "storage_uri": file_storage_uri,
             "format": str(
                 (definition.file_config or {}).get("format")
                 or (definition.file_config or {}).get("file_format")
@@ -1294,7 +1413,7 @@ class DatasetApplication:
             LocalRuntimeDatasetRecord(
                 id=dataset.id,
                 name=dataset.name,
-                label=self._runtime_dataset_label(dataset.name),
+                label=dataset.label or self._runtime_dataset_label(dataset.name),
                 description=dataset.description,
                 connector_name=self._runtime_record_connector_name(connector),
                 relation_name=relation_name,
@@ -1386,6 +1505,7 @@ class DatasetApplication:
             created_by=actor_id,
             updated_by=actor_id,
             name=dataset_name,
+            label=normalized_request.label or self._runtime_dataset_label(dataset_name),
             sql_alias=dataset_alias,
             description=self._dataset_description(
                 description=normalized_request.description,
@@ -1399,9 +1519,25 @@ class DatasetApplication:
                 sync_source=sync.source,
             ),
             dataset_type=definition.dataset_type,
-            materialization_mode=materialization_mode,
+            materialization={
+                "mode": materialization_mode,
+                "sync": None if resolved_sync is None else {
+                    "strategy": resolved_sync.strategy,
+                    "cadence": resolved_sync.cadence,
+                    "sync_on_start": resolved_sync.sync_on_start,
+                    "cursor_field": resolved_sync.cursor_field,
+                    "initial_cursor": resolved_sync.initial_cursor,
+                    "lookback_window": resolved_sync.lookback_window,
+                    "backfill_start": resolved_sync.backfill_start,
+                    "backfill_end": resolved_sync.backfill_end,
+                },
+            },
             source=live_source,
-            sync=resolved_sync,
+            schema_hint=(
+                None
+                if normalized_request.schema_hint is None
+                else normalized_request.schema_hint.model_dump(mode="json")
+            ),
             source_kind=definition.source_kind,
             connector_kind=(
                 connector.connector_type.value.lower()
@@ -1477,26 +1613,31 @@ class DatasetApplication:
             fields_set = set(getattr(request, "model_fields_set", set()))
             payload = {
                 "name": dataset.name,
+                "label": (
+                    request.label
+                    if "label" in fields_set
+                    else dataset.label
+                ),
                 "description": (
                     request.description
                     if "description" in fields_set
                     else dataset.description
                 ),
                 "connector": None if connector is None else connector.name,
-                "materialization_mode": (
-                    request.materialization_mode
-                    if "materialization_mode" in fields_set and request.materialization_mode is not None
-                    else dataset.materialization_mode_value
+                "materialization": (
+                    request.materialization.model_dump(mode="json")
+                    if "materialization" in fields_set and request.materialization is not None
+                    else self._materialization_request_from_dataset(dataset=dataset)
                 ),
                 "source": (
                     request.source.model_dump(mode="json")
                     if "source" in fields_set and request.source is not None
                     else self._source_request_from_dataset(dataset=dataset)
                 ),
-                "sync": (
-                    request.sync.model_dump(mode="json")
-                    if "sync" in fields_set and request.sync is not None
-                    else self._sync_request_from_dataset(dataset=dataset)
+                "schema_hint": (
+                    request.schema_hint.model_dump(mode="json")
+                    if "schema_hint" in fields_set and request.schema_hint is not None
+                    else dataset.schema_hint_json
                 ),
                 "tags": (
                     list(request.tags or [])
@@ -1572,7 +1713,7 @@ class DatasetApplication:
             elif definition.dataset_type == DatasetType.FILE:
                 if (
                     "source" in fields_set
-                    or "materialization_mode" in fields_set
+                    or "materialization" in fields_set
                     or dataset.dataset_type != DatasetType.FILE
                     or not existing_columns
                 ):
@@ -1583,13 +1724,14 @@ class DatasetApplication:
                         definition=definition,
                         now=now,
                     )
-            elif "source" in fields_set or "materialization_mode" in fields_set:
+            elif "source" in fields_set or "materialization" in fields_set:
                 next_columns = []
             dataset.description = self._dataset_description(
                 description=normalized_request.description,
                 materialization_mode=materialization_mode,
                 sync_source=sync.source,
             )
+            dataset.label = normalized_request.label or self._runtime_dataset_label(dataset.name)
             dataset.connection_id = None if connector is None else connector.id
             dataset.updated_by = actor_id
             dataset.tags = self._dataset_tags(
@@ -1599,9 +1741,27 @@ class DatasetApplication:
                 sync_source=sync.source,
             )
             dataset.dataset_type = definition.dataset_type
-            dataset.materialization_mode = materialization_mode
+            dataset.materialization = DatasetMaterializationConfig.model_validate(
+                {
+                    "mode": materialization_mode,
+                    "sync": None if resolved_sync is None else {
+                        "strategy": resolved_sync.strategy,
+                        "cadence": resolved_sync.cadence,
+                        "sync_on_start": resolved_sync.sync_on_start,
+                        "cursor_field": resolved_sync.cursor_field,
+                        "initial_cursor": resolved_sync.initial_cursor,
+                        "lookback_window": resolved_sync.lookback_window,
+                        "backfill_start": resolved_sync.backfill_start,
+                        "backfill_end": resolved_sync.backfill_end,
+                    },
+                }
+            )
             dataset.source = live_source
-            dataset.sync = resolved_sync
+            dataset.schema_hint = (
+                None
+                if normalized_request.schema_hint is None
+                else DatasetSchemaHint.model_validate(normalized_request.schema_hint.model_dump(mode="json"))
+            )
             dataset.source_kind = definition.source_kind
             dataset.connector_kind = (
                 connector.connector_type.value.lower()

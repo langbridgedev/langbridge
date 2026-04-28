@@ -11,7 +11,7 @@ Inside this repo, the runtime is a single Python package with internal module bo
 - `langbridge.plugins`: connector registry and extension surface
 - `langbridge.semantic`: semantic model contracts and loaders
 - `langbridge.federation`: federated planning and execution
-- `langbridge.orchestrator`: agent and tool orchestration
+- `langbridge.ai`: agent orchestration, analyst workflows, planning, verification, and presentation
 - `langbridge.client`: SDK for local and runtime-host access
 - `langbridge.mcp`: MCP server assembly
 - `langbridge.ui`: packaged runtime UI

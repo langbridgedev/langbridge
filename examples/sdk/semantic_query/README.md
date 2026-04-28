@@ -10,7 +10,7 @@ It runs entirely against a configured local runtime built from the monolith
 - `LangbridgeClient.local(...)`
 - dataset listing and preview
 - semantic query
-- direct SQL query
+- dataset SQL query
 - agent ask against a configured local agent
 - canonical local agent authoring through `agents[].definition.tools`
 
@@ -62,7 +62,7 @@ jupyter notebook examples/sdk/semantic_query/example.ipynb
 2. Listing runtime datasets
 3. Previewing dataset rows through the runtime dataset service
 4. Running semantic query against `commerce_performance`
-5. Running direct SQL against the configured connector
+5. Running dataset SQL against the runtime dataset surface
 6. Asking a configured local analytics agent
 
 ## Notes
@@ -70,4 +70,5 @@ jupyter notebook examples/sdk/semantic_query/example.ipynb
 - this example is runtime-local, not cloud-hosted
 - the runtime context is workspace-scoped even in local mode
 - the config file in this folder is aligned with the seeded warehouse structure
+- source SQL is still available by passing `query_scope="source"` with a connector reference
 - the agent config in `langbridge_config.yml` uses the canonical `definition.tools` shape and shows both semantic-model and dataset-backed SQL tool bindings

@@ -1,5 +1,6 @@
 import { Copy, Download, RefreshCw, Trash2 } from "lucide-react";
 
+import { FederationDiagnosticsPanel } from "../FederationDiagnosticsPanel";
 import { PageEmpty, Panel } from "../PagePrimitives";
 import { formatValue } from "../../lib/format";
 import {
@@ -680,6 +681,13 @@ export function DashboardBuilderWidgetInspector({
                 <summary>Generated SQL</summary>
                 <pre className="code-block compact">{activeWidget.result.generated_sql}</pre>
               </details>
+            ) : null}
+            {activeWidget.result?.federation_diagnostics ? (
+              <FederationDiagnosticsPanel
+                diagnostics={activeWidget.result.federation_diagnostics}
+                title="Federation diagnostics"
+                description="Inspect how this semantic widget executed across sources."
+              />
             ) : null}
           </div>
         ) : (

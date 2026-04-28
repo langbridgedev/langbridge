@@ -17,25 +17,18 @@ dependencies = [
   "opentelemetry-exporter-otlp==1.39.1",
   "opentelemetry-instrumentation-fastapi==0.60b1",
   "opentelemetry-instrumentation-logging==0.60b1",
-  "dependency-injector==4.48.2",
   "apscheduler==3.11.2",
   "sqlalchemy==2.0.43",
   "aiosqlite==0.20.0",
   "asyncpg==0.30.0",
-  "pydantic-settings==2.11.0",
   "python-jose[cryptography]==3.3.0",
   "httpx==0.27.2",
   "PyYAML==6.0.2",
-  "authlib==1.3.1",
   "psycopg[binary]==3.2.3",
   "itsdangerous==2.2.0",
-  "cryptography==46.0.0",
   "sqlglot==27.25.2",
   "openai==2.2.0",
   "anthropic>=0.39.0",
-  "langchain-openai>=0.1.0",
-  "langchain-anthropic>=0.1.0",
-  "langchain==0.3.27",
   "mcp==1.17.0",
   "pandas==2.3.3",
   "numpy==1.26.4",
@@ -65,3 +58,19 @@ exclude = ["venv*", "__pycache__*", "tests*"]
   "alembic/script.py.mako",
   "alembic/versions/*.py",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+markers = [
+  "unit: fast, isolated tests that do not boot the runtime host or external services",
+  "integration: tests that exercise multiple runtime components, HTTP app wiring, persistence, or filesystem-backed configs",
+  "contract: public API, schema, job, and response-shape compatibility tests",
+  "slow: tests that are expected to be slower than normal unit coverage",
+  "ai: Langbridge AI orchestration, analyst, presentation, and LLM-provider tests",
+  "runtime: runtime host, bootstrap, services, persistence, SDK, and runtime API tests",
+  "semantic: semantic model, query, SQL planning, and vector semantic tests",
+  "federation: federation planning, execution, pushdown, and diagnostics tests",
+  "connectors: connector package, connector runtime, and remote-source tests",
+]
+addopts = "--strict-markers"

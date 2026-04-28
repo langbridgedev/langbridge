@@ -14,6 +14,7 @@ from langbridge.federation.models import (
     StageType,
     VirtualTableBinding,
 )
+from langbridge.runtime.utils.util import _coerce_uuid, _string_or_none
 
 
 class StageCacheInputKind(str, Enum):
@@ -47,7 +48,6 @@ class StageCacheInput(BaseModel):
             StageCacheInputPolicy.REVISION,
             StageCacheInputPolicy.DEPENDENCY,
         } and bool(str(self.freshness_key or "").strip())
-
 
 class StageCacheDescriptor(BaseModel):
     cacheable: bool = False
@@ -258,19 +258,3 @@ def _descriptor_policy(value: DatasetFreshnessPolicy) -> StageCacheInputPolicy:
     if value == DatasetFreshnessPolicy.VOLATILE:
         return StageCacheInputPolicy.VOLATILE
     return StageCacheInputPolicy.UNKNOWN
-
-
-def _string_or_none(value: object) -> str | None:
-    normalized = str(value or "").strip()
-    return normalized or None
-
-
-def _coerce_uuid(value: object) -> UUID | None:
-    if value in {None, ""}:
-        return None
-    if isinstance(value, UUID):
-        return value
-    try:
-        return UUID(str(value))
-    except (TypeError, ValueError):
-        return None

@@ -4,6 +4,7 @@ from typing import Any
 __all__ = [
     "AgentExecutionResult",
     "AgentExecutionService",
+    "AgentExecutionServiceTooling",
     "ConnectorSyncRuntime",
     "DatasetExecutionResolver",
     "DatasetQueryService",
@@ -42,24 +43,30 @@ def __getattr__(name: str) -> Any:
             "synthetic_file_connector_id": synthetic_file_connector_id,
         }
         return values[name]
-    if name in {"AgentExecutionResult", "AgentExecutionService"}:
-        from langbridge.runtime.services.agent_execution_service import (
+    if name in {
+        "AgentExecutionResult",
+        "AgentExecutionService",
+        "AgentExecutionServiceTooling",
+    }:
+        from langbridge.runtime.services.agents import (
             AgentExecutionResult,
             AgentExecutionService,
+            AgentExecutionServiceTooling,
         )
 
         return {
             "AgentExecutionResult": AgentExecutionResult,
             "AgentExecutionService": AgentExecutionService,
+            "AgentExecutionServiceTooling": AgentExecutionServiceTooling,
         }[name]
     if name == "DatasetQueryService":
-        from langbridge.runtime.services.dataset_query_service import (
+        from langbridge.runtime.services.dataset_query import (
             DatasetQueryService,
         )
 
         return DatasetQueryService
     if name in {"ConnectorSyncRuntime", "DatasetSyncService", "MaterializedDatasetResult"}:
-        from langbridge.runtime.services.dataset_sync_service import (
+        from langbridge.runtime.services.dataset_sync import (
             ConnectorSyncRuntime,
             DatasetSyncService,
             MaterializedDatasetResult,
@@ -89,13 +96,13 @@ def __getattr__(name: str) -> Any:
 
         return SemanticQueryExecutionService
     if name == "SemanticVectorSearchService":
-        from langbridge.runtime.services.semantic_vector_search_service import (
+        from langbridge.runtime.services.semantic_vector_search import (
             SemanticVectorSearchService,
         )
 
         return SemanticVectorSearchService
     if name == "SqlQueryService":
-        from langbridge.runtime.services.sql_query_service import SqlQueryService
+        from langbridge.runtime.services.sql_query import SqlQueryService
 
         return SqlQueryService
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

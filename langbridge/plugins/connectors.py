@@ -1,8 +1,8 @@
 """
 Connector registry responsible for managing available connectors.
 """
-
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from importlib import import_module
 from importlib.metadata import entry_points
@@ -39,10 +39,7 @@ _BUILTIN_PLUGIN_MODULES = (
     "langbridge.connectors.builtin.mysql",
     "langbridge.connectors.builtin.sqlite",
     "langbridge.connectors.nosql.mongodb",
-    "langbridge.connectors.sql.bigquery",
-    "langbridge.connectors.sql.mariadb",
-    "langbridge.connectors.sql.oracle",
-    "langbridge.connectors.sql.redshift",
+    "langbridge.connectors.saas.basic_http",
     "langbridge.connectors.sql.sqlserver",
     "langbridge.connectors.vector.faiss",
     "langbridge.connectors.vector.qdrant",
@@ -57,10 +54,7 @@ _BUILTIN_CONNECTOR_MODULES = (
     "langbridge.connectors.builtin.mysql.connector",
     "langbridge.connectors.builtin.sqlite.connector",
     "langbridge.connectors.nosql.mongodb.connector",
-    "langbridge.connectors.sql.bigquery.connector",
-    "langbridge.connectors.sql.mariadb.connector",
-    "langbridge.connectors.sql.oracle.connector",
-    "langbridge.connectors.sql.redshift.connector",
+    "langbridge.connectors.saas.basic_http.connector",
     "langbridge.connectors.sql.sqlserver.connector",
     "langbridge.connectors.vector.faiss.connector",
     "langbridge.connectors.vector.qdrant.connector",

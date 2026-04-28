@@ -73,7 +73,7 @@ def date_trunc(granularity: str, col: exp.Expression, dialect: str = "tsql") -> 
         raise ValueError(f"Unsupported granularity '{granularity}'.")
 
     d = (dialect or "tsql").lower()
-    if d in {"duckdb", "postgres", "postgresql"}:
+    if d in {"duckdb", "postgres", "postgresql", "sqlite", "snowflake"}:
         return exp.DateTrunc(this=col, unit=exp.Literal.string(unit))
 
     base = exp.Literal.number(0)
@@ -185,7 +185,7 @@ def parse_relative_date_range(
     match = _THIS_LAST_NEXT_RE.match(normalized)
     if match:
         direction, unit = match.groups()
-        if dialect_key in {"duckdb", "postgres", "postgresql"}:
+        if dialect_key in {"duckdb", "postgres", "postgresql", "snowflake"}:
             start_of_period = date_trunc(unit, current_date, dialect=dialect)
             if direction == "this":
                 return start_of_period, _shift_datetime(

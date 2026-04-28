@@ -4,17 +4,19 @@ import { Link } from "react-router-dom";
 import { formatRelativeTime } from "../../lib/runtimeUi";
 import { PageEmpty } from "../PagePrimitives";
 
-export function QuickActionPanel({ actions }) {
+export function QuickActionPanel({ actions, showHeader = true }) {
   return (
     <div className="command-action-stack">
-      <div className="command-panel-heading">
-        <div>
-          <p className="command-panel-eyebrow">Quick actions</p>
-          <p className="command-panel-copy">
-            Move directly from setup to analysis without leaving the runtime shell.
-          </p>
+      {showHeader ? (
+        <div className="command-panel-heading">
+          <div>
+            <p className="command-panel-eyebrow">Quick actions</p>
+            <p className="command-panel-copy">
+              Move directly from setup to analysis without leaving the runtime shell.
+            </p>
+          </div>
         </div>
-      </div>
+      ) : null}
       <div className="command-action-grid">
         {actions.map((action) => {
           const Icon = action.icon;

@@ -15,8 +15,8 @@ from langbridge.runtime.hosting.auth import RuntimeAuthPrincipal, RuntimeAuthRes
 from langbridge.runtime.bootstrap import ConfiguredLocalRuntimeHost
 from langbridge.runtime.models.jobs import (
     CreateDatasetPreviewJobRequest,
-    CreateSqlJobRequest,
-    SqlWorkbenchMode,
+    SqlQueryRequest,
+    SqlQueryScope,
 )
 
 DEFAULT_MCP_MOUNT_PATH = "/mcp"
@@ -37,7 +37,6 @@ def build_runtime_mcp_server(
     mount_path: str = DEFAULT_MCP_MOUNT_PATH,
     debug: bool = False,
 ) -> tuple[FastMCP, Any]:
-    normalized_mount_path = _normalize_mount_path(mount_path)
     tool_availability = _build_mcp_tool_availability(runtime_host)
     available_mcp_tools = [
         tool_name
@@ -88,7 +87,7 @@ def build_runtime_mcp_server(
                     configured_host._default_agent.config.name if configured_host._default_agent else None
                 ),
                 "capabilities": capabilities,
-                "mcp_endpoint": normalized_mount_path,
+                "mcp_endpoint": mount_path,
                 "available_mcp_tools": available_mcp_tools,
                 "mcp_tool_status": tool_availability,
                 "resource_summary": _build_runtime_resource_summary(runtime_host),
@@ -210,6 +209,7 @@ def build_runtime_mcp_server(
         @server.tool(name=_MCP_QUERY_SQL_TOOL_NAME)
         async def query_sql(
             query: str,
+            query_scope: str | None = None,
             connection_name: str | None = None,
             selected_datasets: list[str] | None = None,
             requested_limit: int | None = None,
@@ -217,74 +217,43 @@ def build_runtime_mcp_server(
             explain: bool = False,
             context: Context = None,
         ) -> dict[str, Any]:
-            """Run direct SQL or federated SQL against the runtime."""
+            """Run semantic, dataset, or source SQL against the runtime."""
             configured_host = await resolve_runtime_host(context)
             normalized_datasets = [uuid.UUID(str(dataset_id)) for dataset_id in (selected_datasets or [])]
-            explicit_direct = bool(connection_name)
-            if explicit_direct:
-                try:
-                    payload = await configured_host.execute_sql_text(
-                        query=query,
-                        connection_name=connection_name,
-                        requested_limit=requested_limit,
-                    )
-                except Exception as exc:
-                    return {
-                        "sql_job_id": str(uuid.uuid4()),
-                        "status": "failed",
-                        "error": {"message": str(exc)},
-                        "query": query,
-                    }
-                return _to_jsonable(
-                    {
-                        "sql_job_id": uuid.uuid4(),
-                        "status": "succeeded",
-                        "columns": list(payload.get("columns", [])),
-                        "rows": list(payload.get("rows", [])),
-                        "row_count_preview": int(payload.get("row_count_preview") or 0),
-                        "total_rows_estimate": payload.get("total_rows_estimate"),
-                        "bytes_scanned": payload.get("bytes_scanned"),
-                        "duration_ms": payload.get("duration_ms"),
-                        "redaction_applied": bool(payload.get("redaction_applied")),
-                        "query": query,
-                        "generated_sql": payload.get("generated_sql"),
-                    }
-                )
-
-            sql_job_id = uuid.uuid4()
-            create_request = CreateSqlJobRequest(
-                sql_job_id=sql_job_id,
-                workspace_id=configured_host.context.workspace_id,
-                actor_id=configured_host.context.actor_id,
-                workbench_mode=SqlWorkbenchMode.dataset,
-                connection_id=None,
-                execution_mode="federated",
-                query=query,
-                query_dialect="tsql",
-                params={},
-                requested_limit=requested_limit,
-                requested_timeout_seconds=requested_timeout_seconds,
-                enforced_limit=requested_limit or 100,
-                enforced_timeout_seconds=requested_timeout_seconds or 30,
-                allow_dml=False,
-                allow_federation=True,
-                selected_datasets=normalized_datasets,
-                explain=bool(explain),
-                correlation_id=configured_host.context.request_id,
+            resolved_scope = (
+                SqlQueryScope(str(query_scope).strip().lower())
+                if query_scope is not None
+                else (SqlQueryScope.source if connection_name else SqlQueryScope.dataset)
             )
             try:
-                payload = await configured_host.execute_sql(request=create_request)
+                payload = await configured_host.query_sql(
+                    request=SqlQueryRequest(
+                        query_scope=resolved_scope,
+                        query=query,
+                        connection_name=connection_name,
+                        selected_datasets=normalized_datasets,
+                        query_dialect="tsql",
+                        params={},
+                        requested_limit=requested_limit,
+                        requested_timeout_seconds=requested_timeout_seconds,
+                        explain=bool(explain),
+                    )
+                )
             except Exception as exc:
                 return {
-                    "sql_job_id": str(sql_job_id),
+                    "sql_job_id": str(uuid.uuid4()),
                     "status": "failed",
                     "error": {"message": str(exc)},
                     "query": query,
                 }
             return _to_jsonable(
                 {
-                    "sql_job_id": sql_job_id,
+                    "sql_job_id": payload.get("sql_job_id") or uuid.uuid4(),
+                    "query_scope": payload.get("query_scope") or resolved_scope.value,
                     "status": "succeeded",
+                    "semantic_model_id": payload.get("semantic_model_id"),
+                    "semantic_model_ids": list(payload.get("semantic_model_ids", [])),
+                    "connector_id": payload.get("connector_id"),
                     "columns": list(payload.get("columns", [])),
                     "rows": list(payload.get("rows", [])),
                     "row_count_preview": int(payload.get("row_count_preview") or 0),
@@ -292,7 +261,7 @@ def build_runtime_mcp_server(
                     "bytes_scanned": payload.get("bytes_scanned"),
                     "duration_ms": payload.get("duration_ms"),
                     "redaction_applied": bool(payload.get("redaction_applied")),
-                    "query": query,
+                    "query": payload.get("query") or query,
                     "generated_sql": payload.get("generated_sql"),
                 }
             )
@@ -690,11 +659,6 @@ def _build_runtime_capabilities(
         if normalized and normalized not in capabilities:
             capabilities.append(normalized)
     return capabilities
-
-
-def _normalize_mount_path(value: str) -> str:
-    normalized = "/" + str(value or "").strip().strip("/")
-    return "/" if normalized == "//" else normalized
 
 
 def _to_jsonable(value: Any) -> Any:

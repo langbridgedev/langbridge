@@ -8,14 +8,22 @@ import yaml
 
 from langbridge.runtime.application.errors import ApplicationError
 from langbridge.runtime.config.models import LocalRuntimeSemanticModelConfig
+from langbridge.runtime.models import SqlQueryRequest
 from langbridge.runtime.models.metadata import (
     LifecycleState,
     ManagementMode,
     SemanticModelMetadata,
 )
 from langbridge.runtime.persistence.mappers.semantic_models import to_semantic_model_record
+from langbridge.runtime.services.semantic_sql_query_service import (
+    build_semantic_sql_metadata_columns_by_source,
+    resolve_semantic_sql_projection_value,
+)
+from langbridge.runtime.services.semantic_query_execution_service import (
+    SemanticQueryExecutionService,
+)
 from langbridge.semantic.query import SemanticQuery
-from langbridge.semantic.loader import SemanticModelError, load_semantic_model, load_unified_semantic_model
+from langbridge.semantic.loader import SemanticModelError, load_semantic_graph, load_semantic_model
 
 if TYPE_CHECKING:
     from langbridge.runtime.bootstrap.configured_runtime import ConfiguredLocalRuntimeHost
@@ -115,21 +123,21 @@ class SemanticApplication:
                 content_yaml = semantic_model.yml_dump()
             except SemanticModelError:
                 try:
-                    unified_model = load_unified_semantic_model(copy.deepcopy(payload))
+                    semantic_graph = load_semantic_graph(copy.deepcopy(payload))
                 except SemanticModelError as exc:
                     raise ValueError(str(exc)) from exc
                 known_semantic_model_ids = {record.id for record in self._host._semantic_models.values()}
                 missing_source_models = sorted(
                     str(source.id)
-                    for source in unified_model.source_models
+                    for source in semantic_graph.source_models
                     if source.id not in known_semantic_model_ids
                 )
                 if missing_source_models:
                     raise ValueError(
-                        "Unified semantic model references unknown source semantic model ids: "
+                        "Semantic graph references unknown source semantic model ids: "
                         f"{', '.join(missing_source_models)}."
                     )
-                content_json = unified_model.model_dump(mode="json", exclude_none=True)
+                content_json = semantic_graph.model_dump(mode="json", exclude_none=True)
                 content_yaml = yaml.safe_dump(content_json, sort_keys=False).strip()
 
             now = datetime.now(timezone.utc)
@@ -239,21 +247,21 @@ class SemanticApplication:
                 content_yaml = semantic_model.yml_dump()
             except SemanticModelError:
                 try:
-                    unified_model = load_unified_semantic_model(copy.deepcopy(payload))
+                    semantic_graph = load_semantic_graph(copy.deepcopy(payload))
                 except SemanticModelError as exc:
                     raise ValueError(str(exc)) from exc
                 known_semantic_model_ids = {record.id for record in self._host._semantic_models.values()}
                 missing_source_models = sorted(
                     str(source.id)
-                    for source in unified_model.source_models
+                    for source in semantic_graph.source_models
                     if source.id not in known_semantic_model_ids
                 )
                 if missing_source_models:
                     raise ValueError(
-                        "Unified semantic model references unknown source semantic model ids: "
+                        "Semantic graph references unknown source semantic model ids: "
                         f"{', '.join(missing_source_models)}."
                     )
-                content_json = unified_model.model_dump(mode="json", exclude_none=True)
+                content_json = semantic_graph.model_dump(mode="json", exclude_none=True)
                 content_yaml = yaml.safe_dump(content_json, sort_keys=False).strip()
 
             now = datetime.now(timezone.utc)
@@ -339,15 +347,21 @@ class SemanticApplication:
         time_dimensions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         semantic_model_records = self._host._resolve_semantic_models(semantic_models)
-        unified_records = [record for record in semantic_model_records if record.semantic_model is None]
-        if unified_records:
+        selected_graph_record = next(
+            (record for record in semantic_model_records if record.semantic_model is None),
+            None,
+        )
+        configured_graph = None
+        if selected_graph_record is not None:
             if len(semantic_model_records) > 1:
                 raise ValueError(
-                    "Configured unified semantic models cannot be combined with other semantic_models in a single request."
+                    "Configured semantic graphs cannot be combined with other semantic_models in a single request."
                 )
-            raise ValueError(
-                f"Configured unified semantic model '{unified_records[0].name}' "
-                "cannot be queried directly; select its source semantic_models instead."
+            configured_graph = SemanticQueryExecutionService.parse_semantic_graph_config_from_record(
+                selected_graph_record
+            )
+            semantic_model_records = self._host._resolve_semantic_models_by_id(
+                configured_graph.semantic_model_ids
             )
         semantic_query = SemanticQuery(
             measures=self._host._normalize_semantic_members(
@@ -374,7 +388,7 @@ class SemanticApplication:
         )
         execution_query = semantic_query
         async with self._host._runtime_operation_scope() as uow:
-            if len(semantic_model_records) == 1:
+            if selected_graph_record is None and len(semantic_model_records) == 1:
                 semantic_model_record = semantic_model_records[0]
                 result = await self._host._runtime_host.query_semantic(
                     workspace_id=self._host.context.workspace_id,
@@ -385,21 +399,22 @@ class SemanticApplication:
                 semantic_model_id = semantic_model_record.id
                 connector_id = None
             else:
-                configured_unified = self._host._resolve_configured_unified_model(
-                    semantic_models=semantic_model_records,
-                )
-                execution_query = self._host._rewrite_semantic_query_for_unified_execution(
+                if configured_graph is None:
+                    configured_graph = self._host._resolve_configured_semantic_graph(
+                        semantic_models=semantic_model_records,
+                    )
+                execution_query = self._host._rewrite_semantic_query_for_semantic_graph_execution(
                     semantic_query=semantic_query,
                     semantic_models=semantic_model_records,
-                    configured_unified=configured_unified,
+                    configured_graph=configured_graph,
                 )
-                result = await self._host._runtime_host.query_unified_semantic(
+                result = await self._host._runtime_host.query_semantic_graph(
                     workspace_id=self._host.context.workspace_id,
                     semantic_model_ids=[record.id for record in semantic_model_records],
                     semantic_query=execution_query,
-                    source_models=(configured_unified.source_models if configured_unified is not None else None),
-                    relationships=(configured_unified.relationships if configured_unified is not None else None),
-                    metrics=(configured_unified.metrics if configured_unified is not None else None),
+                    source_models=(configured_graph.source_models if configured_graph is not None else None),
+                    relationships=(configured_graph.relationships if configured_graph is not None else None),
+                    metrics=(configured_graph.metrics if configured_graph is not None else None),
                 )
                 semantic_model_ids = list(result.response.semantic_model_ids)
                 semantic_model_id = None
@@ -423,6 +438,11 @@ class SemanticApplication:
             "annotations": list(result.response.annotations or []),
             "metadata": list(result.response.metadata or []),
             "generated_sql": result.compiled_sql,
+            "federation_diagnostics": (
+                result.response.federation_diagnostics.model_dump(mode="json")
+                if result.response.federation_diagnostics is not None
+                else None
+            ),
             "semantic_model_ids": semantic_model_ids,
         }
         if semantic_model_id is not None:
@@ -430,6 +450,85 @@ class SemanticApplication:
         if connector_id is not None:
             response_payload["connector_id"] = connector_id
         return response_payload
+
+    async def query_semantic_sql(self, *, request: SqlQueryRequest) -> dict[str, Any]:
+        if request.explain:
+            raise ValueError(
+                "Semantic SQL scope does not support explain mode; execute the query normally to inspect generated_sql."
+            )
+
+        parsed_query = self._host._runtime_host.parse_semantic_sql_query(
+            query=request.query,
+            query_dialect=request.query_dialect,
+            params=request.params,
+        )
+        semantic_model_record = self._host._resolve_semantic_model_record(parsed_query.semantic_model_ref)
+        if semantic_model_record.semantic_model is None:
+            raise ValueError(
+                f"Configured semantic graph '{semantic_model_record.name}' "
+                "cannot be queried through semantic SQL yet; semantic SQL requires a concrete executable semantic model."
+            )
+
+        plan = self._host._runtime_host.build_semantic_sql_query(
+            parsed_query=parsed_query,
+            semantic_model=semantic_model_record.semantic_model,
+            requested_limit=request.requested_limit,
+        )
+        payload = await self.query_semantic_models(
+            semantic_models=[semantic_model_record.name],
+            measures=list(plan.semantic_query.measures),
+            dimensions=list(plan.semantic_query.dimensions),
+            filters=[
+                item.model_dump(by_alias=True, exclude_none=True)
+                for item in plan.semantic_query.filters
+            ],
+            limit=plan.semantic_query.limit,
+            order=plan.semantic_query.order,
+            time_dimensions=[
+                item.model_dump(by_alias=True, exclude_none=True)
+                for item in plan.semantic_query.time_dimensions
+            ],
+        )
+
+        dataset_names = set(semantic_model_record.semantic_model.datasets.keys())
+        metadata_columns_by_source = build_semantic_sql_metadata_columns_by_source(
+            payload.get("metadata", [])
+        )
+
+        rows: list[dict[str, Any]] = []
+        for row in payload.get("rows", []):
+            if not isinstance(row, dict):
+                continue
+            rows.append(
+                {
+                    projection.output_name: resolve_semantic_sql_projection_value(
+                        row=row,
+                        projection=projection,
+                        metadata_columns_by_source=metadata_columns_by_source,
+                        dataset_names=dataset_names,
+                    )
+                    for projection in plan.projections
+                }
+            )
+
+        return {
+            "semantic_model_id": payload.get("semantic_model_id"),
+            "semantic_model_ids": list(payload.get("semantic_model_ids", [])),
+            "connector_id": payload.get("connector_id"),
+            "columns": [
+                {"name": projection.output_name, "type": None}
+                for projection in plan.projections
+            ],
+            "rows": rows,
+            "row_count_preview": len(rows),
+            "total_rows_estimate": None,
+            "bytes_scanned": None,
+            "duration_ms": None,
+            "redaction_applied": False,
+            "query": plan.rendered_query,
+            "generated_sql": payload.get("generated_sql"),
+            "federation_diagnostics": payload.get("federation_diagnostics"),
+        }
 
     async def refresh_semantic_vector_search(self, *args: Any, **kwargs: Any) -> Any:
         async with self._host._runtime_operation_scope() as uow:

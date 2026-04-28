@@ -58,6 +58,14 @@ When the `mcp` feature is enabled, the host also mounts the streamable MCP endpo
 
 The current host serves configured local runtimes.
 
+### SQL Query Scopes
+
+`POST /api/runtime/v1/sql/query` uses an explicit `query_scope` field:
+
+- `semantic`: governed SQL over one runtime semantic model. The SQL `FROM` target must be a semantic model name, and the request compiles through the semantic query path rather than direct source SQL.
+- `dataset`: dataset-backed runtime SQL over runtime datasets. `selected_datasets` is optional and narrows planner scope.
+- `source`: direct connector or source SQL. This scope requires `connection_name` or `connection_id`.
+
 ## SDK Access Patterns
 
 `LangbridgeClient` supports three main runtime-facing modes:

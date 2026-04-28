@@ -3,9 +3,11 @@ from typing import Any
 
 from langbridge.runtime.models import (
     DatasetColumnMetadata,
+    DatasetMaterializationConfig,
     DatasetMetadata,
     DatasetPolicyMetadata,
     DatasetRevision,
+    DatasetSchemaHint,
     DatasetSource,
     DatasetSyncConfig,
 )
@@ -114,6 +116,8 @@ def from_dataset_record(value: Any | None) -> DatasetMetadata | None:
     columns_raw = getattr(value, "columns", None) or []
     materialization_mode = _infer_dataset_record_materialization_mode(value)
     source = _infer_dataset_record_source(value, materialization_mode=materialization_mode)
+    schema_hint = _infer_dataset_record_schema_hint(value)
+    materialization = _infer_dataset_record_materialization(value, materialization_mode=materialization_mode)
     return DatasetMetadata(
         id=getattr(value, "id"),
         workspace_id=getattr(value, "workspace_id"),
@@ -132,16 +136,14 @@ def from_dataset_record(value: Any | None) -> DatasetMetadata | None:
             or getattr(value, "updated_by", None)
         ),
         name=str(getattr(value, "name")),
+        label=getattr(value, "label", None),
         sql_alias=str(getattr(value, "sql_alias")),
         description=getattr(value, "description", None),
         tags=list(getattr(value, "tags", None) or getattr(value, "tags_json", None) or []),
         dataset_type=getattr(value, "dataset_type"),
-        materialization_mode=materialization_mode,
+        materialization=materialization,
         source=source,
-        sync=(
-            getattr(value, "sync", None)
-            or getattr(value, "sync_json", None)
-        ),
+        schema_hint=schema_hint,
         source_kind=getattr(value, "source_kind", None),
         connector_kind=getattr(value, "connector_kind", None),
         storage_kind=getattr(value, "storage_kind", None),
@@ -194,6 +196,20 @@ def _infer_dataset_record_materialization_mode(value: Any) -> Any:
     return "live"
 
 
+def _infer_dataset_record_materialization(
+    value: Any,
+    *,
+    materialization_mode: Any,
+) -> DatasetMaterializationConfig:
+    materialization_payload = {"mode": materialization_mode}
+    sync_payload = getattr(value, "sync", None) or getattr(value, "sync_json", None)
+    if not _is_blank_value(sync_payload):
+        payload = dict(sync_payload)
+        payload.pop("source", None)
+        materialization_payload["sync"] = payload
+    return DatasetMaterializationConfig.model_validate(materialization_payload)
+
+
 def _infer_dataset_record_source(
     value: Any,
     *,
@@ -201,9 +217,22 @@ def _infer_dataset_record_source(
 ) -> Any:
     explicit = getattr(value, "source", None) or getattr(value, "source_json", None)
     if not _is_blank_value(explicit):
+        if isinstance(explicit, dict):
+            payload = dict(explicit)
+            payload.pop("schema_hint", None)
+            payload.pop("schema_hint_dynamic", None)
+            return payload
         return explicit
 
     if str(materialization_mode or "").strip().lower() == "synced":
+        sync_payload = getattr(value, "sync", None) or getattr(value, "sync_json", None) or {}
+        if isinstance(sync_payload, dict):
+            source_payload = sync_payload.get("source")
+            if isinstance(source_payload, dict):
+                payload = dict(source_payload)
+                payload.pop("schema_hint", None)
+                payload.pop("schema_hint_dynamic", None)
+                return payload
         return None
 
     storage_uri = str(getattr(value, "storage_uri", None) or "").strip()
@@ -226,6 +255,33 @@ def _infer_dataset_record_source(
     return None
 
 
+def _infer_dataset_record_schema_hint(value: Any) -> DatasetSchemaHint | None:
+    source_payload = getattr(value, "source", None) or getattr(value, "source_json", None) or {}
+    if not isinstance(source_payload, dict):
+        sync_payload = getattr(value, "sync", None) or getattr(value, "sync_json", None) or {}
+        if isinstance(sync_payload, dict):
+            source_payload = sync_payload.get("source") or {}
+    if not isinstance(source_payload, dict):
+        return None
+    columns = source_payload.get("schema_hint")
+    dynamic = bool(source_payload.get("schema_hint_dynamic", False))
+    if not columns and not dynamic:
+        return None
+    normalized_columns = []
+    for column in columns or []:
+        if not isinstance(column, dict):
+            continue
+        payload = dict(column)
+        if payload.get("type") is None and payload.get("data_type") is not None:
+            payload["type"] = payload.pop("data_type")
+        normalized_columns.append(payload)
+    payload = {
+        "columns": normalized_columns,
+        "dynamic": dynamic,
+    }
+    return DatasetSchemaHint.model_validate(payload)
+
+
 def _is_blank_value(value: Any) -> bool:
     if value is None or value == "":
         return True
@@ -244,6 +300,7 @@ def to_dataset_record(value: DatasetMetadata | DatasetRecord) -> DatasetRecord:
         created_by_actor_id=value.created_by,
         updated_by_actor_id=value.updated_by,
         name=value.name,
+        label=value.label,
         sql_alias=value.sql_alias,
         description=value.description,
         tags_json=list(value.tags),
@@ -253,7 +310,7 @@ def to_dataset_record(value: DatasetMetadata | DatasetRecord) -> DatasetRecord:
             None
             if value.source is None
             else (
-                value.source_json
+                _source_json_with_schema_hint(value)
                 if isinstance(value.source, DatasetSource)
                 else DatasetSource.model_validate(value.source).model_dump(mode="json")
             )
@@ -291,6 +348,26 @@ def to_dataset_record(value: DatasetMetadata | DatasetRecord) -> DatasetRecord:
         management_mode=str(value.management_mode.value or "runtime_managed"),
         lifecycle_state=str(value.lifecycle_state.value or "active"),
     )
+
+
+def _source_json_with_schema_hint(value: DatasetMetadata) -> dict[str, Any]:
+    payload = dict(value.source_json or {})
+    if value.schema_hint is None:
+        return payload
+    payload["schema_hint"] = [
+        {
+            "name": column.name,
+            "data_type": column.type,
+            "nullable": bool(column.nullable),
+            **({"description": column.description} if column.description is not None else {}),
+            **({"path": column.path} if column.path is not None else {}),
+            **({"default_value": column.default_value} if column.default_value is not None else {}),
+        }
+        for column in value.schema_hint.columns
+    ]
+    if value.schema_hint.dynamic:
+        payload["schema_hint_dynamic"] = True
+    return payload
 
 
 def from_dataset_revision_record(value: Any | None) -> DatasetRevision | None:

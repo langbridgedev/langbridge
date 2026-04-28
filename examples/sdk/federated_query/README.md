@@ -14,7 +14,7 @@ Sources:
 - `LangbridgeClient.local(...)`
 - dataset preview across multiple source types
 - semantic query across federated sources
-- direct federated SQL across multiple datasets
+- dataset SQL across multiple runtime datasets
 - canonical local agent authoring through `agents[].definition.tools`
 
 ## Files
@@ -64,11 +64,11 @@ jupyter notebook examples/sdk/federated_query/example.ipynb
 1. Building a configured local runtime with `LangbridgeClient.local(config_path="langbridge_config.yml")`
 2. Previewing each runtime dataset
 3. Running a semantic query across sales, CRM, and CSV-backed data
-4. Running federated SQL joins at runtime without passing manual alias mappings
+4. Running dataset SQL joins at runtime without passing manual alias mappings
 
-## Federated SQL Ergonomics
+## Dataset SQL Ergonomics
 
-The notebook now uses `client.sql.query(...)` without `selected_datasets` for the standard
+The notebook now uses `client.sql.query(query_scope="dataset", ...)` without `selected_datasets` for the standard
 cross-dataset example. The runtime federates across all eligible workspace datasets and derives
 canonical SQL aliases from dataset metadata such as `sales_orders`, `crm_contacts`, and
 `marketing_campaigns`.
@@ -77,6 +77,7 @@ When you want to narrow planner scope, you can still pass dataset ids:
 
 ```python
 sql_result = client.sql.query(
+    query_scope="dataset",
     query="SELECT ...",
     selected_datasets=[
         dataset_ids["sales_orders"],

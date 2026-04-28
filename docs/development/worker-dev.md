@@ -26,6 +26,6 @@ The main runtime execution code lives in:
 - `langbridge/runtime/services/`
 - `langbridge/runtime/execution/`
 - `langbridge/federation/`
-- `langbridge/orchestrator/`
+- `langbridge/ai/`
 
 For local development, use `docs/development/local-dev.md`.

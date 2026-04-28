@@ -13,9 +13,9 @@ from langbridge.runtime.models.metadata import (
     _normalize_enum_value,
 )
 from langbridge.runtime.models.semantic import (
-    UnifiedSemanticMetricRequest,
-    UnifiedSemanticRelationshipRequest,
-    UnifiedSemanticSourceModelRequest,
+    SemanticGraphMetricRequest,
+    SemanticGraphRelationshipRequest,
+    SemanticGraphSourceModelRequest,
 )
 from langbridge.runtime.models.state import ConnectorSyncMode
 
@@ -35,6 +35,13 @@ class JobType(str, Enum):
 class SqlWorkbenchMode(str, Enum):
     dataset = "dataset"
     direct_sql = "direct_sql"
+
+
+class SqlQueryScope(str, Enum):
+    semantic = "semantic"
+    dataset = "dataset"
+    source = "source"
+
 
 def _actor_id_field() -> Any:
     return Field()
@@ -106,6 +113,64 @@ class SqlSelectedDataset(RuntimeRequestModel):
 
         self.alias = alias
         self.sql_alias = sql_alias
+        return self
+
+
+class SqlQueryRequest(RuntimeRequestModel):
+    query_scope: SqlQueryScope
+    query: str = Field(..., min_length=1)
+    connection_id: uuid.UUID | None = None
+    connection_name: str | None = None
+    selected_datasets: list[uuid.UUID] = Field(default_factory=list)
+    query_dialect: str = "tsql"
+    params: dict[str, Any] = Field(default_factory=dict)
+    requested_limit: int | None = Field(default=None, ge=1)
+    requested_timeout_seconds: int | None = Field(default=None, ge=1)
+    explain: bool = False
+
+    @field_validator("query_scope", mode="before")
+    @classmethod
+    def _normalize_query_scope(cls, value: Any) -> SqlQueryScope:
+        normalized = str(getattr(value, "value", value) or "").strip().lower()
+        if not normalized:
+            raise ValueError("query_scope is required.")
+        return SqlQueryScope(normalized)
+
+    @model_validator(mode="after")
+    def _validate_scope(self) -> "SqlQueryRequest":
+        normalized_selected: list[uuid.UUID] = []
+        for dataset_id in self.selected_datasets:
+            if dataset_id not in normalized_selected:
+                normalized_selected.append(dataset_id)
+        self.selected_datasets = normalized_selected
+
+        self.query = str(self.query or "").strip()
+        if not self.query:
+            raise ValueError("query is required.")
+        self.query_dialect = str(self.query_dialect or "tsql").strip().lower() or "tsql"
+
+        if self.query_scope == SqlQueryScope.semantic:
+            if self.connection_id is not None or self.connection_name:
+                raise ValueError(
+                    "Semantic SQL scope does not accept connection_id or connection_name."
+                )
+            if self.selected_datasets:
+                raise ValueError("Semantic SQL scope does not accept selected_datasets.")
+            return self
+
+        if self.query_scope == SqlQueryScope.dataset:
+            if self.connection_id is not None or self.connection_name:
+                raise ValueError(
+                    "Dataset SQL scope does not accept connection_id or connection_name."
+                )
+            return self
+
+        if self.connection_id is not None and self.connection_name:
+            raise ValueError("Specify only one of connection_id or connection_name for source SQL scope.")
+        if self.connection_id is None and not self.connection_name:
+            raise ValueError("Source SQL scope requires connection_id or connection_name.")
+        if self.selected_datasets:
+            raise ValueError("Source SQL scope does not accept selected_datasets.")
         return self
 
 
@@ -188,14 +253,22 @@ class CreateSemanticQueryJobRequest(RuntimeJobRequestModel):
     job_type: JobType = JobType.SEMANTIC_QUERY
     workspace_id: uuid.UUID
     actor_id: uuid.UUID = _actor_id_field()
-    query_scope: Literal["semantic_model", "unified"] = "semantic_model"
+    query_scope: Literal["semantic_model", "semantic_graph"] = "semantic_model"
     semantic_model_id: uuid.UUID | None = None
     connector_id: uuid.UUID | None = None
     semantic_model_ids: list[uuid.UUID] | None = None
-    source_models: list[UnifiedSemanticSourceModelRequest] | None = None
-    relationships: list[UnifiedSemanticRelationshipRequest] | None = None
-    metrics: dict[str, UnifiedSemanticMetricRequest] | None = None
+    source_models: list[SemanticGraphSourceModelRequest] | None = None
+    relationships: list[SemanticGraphRelationshipRequest] | None = None
+    metrics: dict[str, SemanticGraphMetricRequest] | None = None
     query: dict[str, Any]
+
+    @field_validator("query_scope", mode="before")
+    @classmethod
+    def _normalize_query_scope(cls, value: Any) -> str:
+        normalized = str(getattr(value, "value", value) or "").strip().lower()
+        if normalized == "unified":
+            return "semantic_graph"
+        return normalized or "semantic_model"
 
     @model_validator(mode="after")
     def _validate_scope_payload(self) -> "CreateSemanticQueryJobRequest":
@@ -204,10 +277,10 @@ class CreateSemanticQueryJobRequest(RuntimeJobRequestModel):
                 raise ValueError("semantic_model_id is required for semantic_model query scope.")
             return self
 
-        if self.query_scope == "unified":
+        if self.query_scope == "semantic_graph":
             if not self.semantic_model_ids:
                 raise ValueError(
-                    "semantic_model_ids must include at least one model id for unified query scope."
+                    "semantic_model_ids must include at least one model id for semantic_graph query scope."
                 )
             return self
 
@@ -339,3 +412,7 @@ class CreateAgentJobRequest(RuntimeJobRequestModel):
     workspace_id: uuid.UUID
     actor_id: uuid.UUID = _actor_id_field()
     thread_id: uuid.UUID
+    correlation_id: str | None = None
+    mcp: bool = False
+    
+    agent_mode: Literal["auto", "sql", "context_analysis", "research"] = "auto"

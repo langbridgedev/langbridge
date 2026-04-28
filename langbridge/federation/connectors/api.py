@@ -12,6 +12,10 @@ from langbridge.connectors.base.resource_paths import (
     materialize_api_resource_rows,
 )
 from langbridge.federation.connectors.base import RemoteExecutionResult, RemoteSource, SourceCapabilities
+from langbridge.federation.executor.offload import (
+    FederationExecutionOffloader,
+    run_federation_blocking,
+)
 from langbridge.federation.models.plans import SourceSubplan
 from langbridge.federation.models.virtual_dataset import TableStatistics, VirtualTableBinding
 
@@ -30,11 +34,13 @@ class ApiConnectorRemoteSource(RemoteSource):
         connector: ApiConnector,
         bindings: list[VirtualTableBinding],
         logger: logging.Logger | None = None,
+        blocking_executor: FederationExecutionOffloader | None = None,
     ) -> None:
         self.source_id = source_id
         self._connector = connector
         self._bindings = {binding.table_key: binding for binding in bindings}
         self._logger = logger or logging.getLogger(__name__)
+        self._blocking_executor = blocking_executor
 
     def capabilities(self) -> SourceCapabilities:
         return SourceCapabilities(
@@ -51,21 +57,36 @@ class ApiConnectorRemoteSource(RemoteSource):
     async def execute(self, subplan: SourceSubplan) -> RemoteExecutionResult:
         self._logger.debug("Executing remote subplan stage=%s source=%s", subplan.stage_id, self.source_id)
         started = time.perf_counter()
-        connection = duckdb.connect(database=":memory:")
-        try:
-            await self._register_bindings(connection=connection)
-            sql = (subplan.sql or "").strip()
-            if not sql:
-                binding = self._require_binding(subplan.table_key)
-                sql = f"SELECT * FROM {self._qualified_relation_name(binding)}"
-            result = connection.execute(sql)
-            table = result.fetch_arrow_table()
-            return RemoteExecutionResult(
-                table=table if isinstance(table, pa.Table) else pa.table({}),
-                elapsed_ms=int((time.perf_counter() - started) * 1000),
+        binding_payloads: list[dict[str, Any]] = []
+        for binding in self._bindings.values():
+            resource_path = self._resource_path(binding)
+            root_resource_name = api_resource_root(resource_path)
+            extract_result = await self._connector.extract_resource(resource_name=root_resource_name)
+            binding_payloads.append(
+                {
+                    "binding": binding,
+                    "resource_path": resource_path,
+                    "records": list(extract_result.records or []),
+                    "primary_key": await self._resource_primary_key(root_resource_name),
+                    "flatten_paths": self._flatten_paths(binding),
+                }
             )
-        finally:
-            connection.close()
+
+        sql = (subplan.sql or "").strip()
+        if not sql:
+            binding = self._require_binding(subplan.table_key)
+            sql = f"SELECT * FROM {self._qualified_relation_name(binding)}"
+
+        table = await run_federation_blocking(
+            self._blocking_executor,
+            self._execute_subplan_blocking,
+            sql,
+            binding_payloads,
+        )
+        return RemoteExecutionResult(
+            table=table,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+        )
 
     async def estimate_table_stats(self, binding: VirtualTableBinding) -> TableStatistics:
         table_binding = self._require_binding(binding.table_key)
@@ -73,7 +94,17 @@ class ApiConnectorRemoteSource(RemoteSource):
             return table_binding.stats
 
         try:
-            arrow_table = await self._fetch_binding_table(table_binding)
+            extract_result = await self._connector.extract_resource(
+                resource_name=api_resource_root(self._resource_path(table_binding))
+            )
+            arrow_table = await run_federation_blocking(
+                self._blocking_executor,
+                self._build_arrow_table,
+                self._resource_path(table_binding),
+                list(extract_result.records or []),
+                await self._resource_primary_key(api_resource_root(self._resource_path(table_binding))),
+                self._flatten_paths(table_binding),
+            )
             row_count = float(arrow_table.num_rows)
             bytes_per_row = 128.0
             if arrow_table.num_rows > 0:
@@ -83,6 +114,66 @@ class ApiConnectorRemoteSource(RemoteSource):
             table_name = self._qualified_relation_name(table_binding)
             self._logger.warning("Falling back to heuristic stats for source=%s table=%s", self.source_id, table_name)
             return TableStatistics(row_count_estimate=1_000_000.0, bytes_per_row=128.0)
+
+    def _execute_subplan_blocking(
+        self,
+        sql: str,
+        binding_payloads: list[dict[str, Any]],
+    ) -> pa.Table:
+        connection = duckdb.connect(database=":memory:")
+        try:
+            for index, payload in enumerate(binding_payloads):
+                binding = payload["binding"]
+                arrow_table = self._build_arrow_table(
+                    payload["resource_path"],
+                    payload["records"],
+                    payload["primary_key"],
+                    payload["flatten_paths"],
+                )
+                temp_name = self._temporary_relation_name(index=index, binding=binding)
+                connection.register(temp_name, arrow_table)
+                if binding.schema_name:
+                    connection.execute(
+                        f"CREATE SCHEMA IF NOT EXISTS {self._quote_identifier(binding.schema_name)}"
+                    )
+                connection.execute(
+                    "CREATE OR REPLACE VIEW "
+                    f"{self._qualified_relation_name(binding)} AS SELECT * FROM {self._quote_identifier(temp_name)}"
+                )
+
+            result = connection.execute(sql)
+            table = result.fetch_arrow_table()
+            return table if isinstance(table, pa.Table) else pa.table({})
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _build_arrow_table(
+        resource_path: str,
+        records: list[dict[str, Any]],
+        primary_key: str | None,
+        flatten_paths: list[str],
+    ) -> pa.Table:
+        rows = materialize_api_resource_rows(
+            resource_path=resource_path,
+            records=records,
+            primary_key=primary_key,
+            flatten=flatten_paths,
+        )
+        return _records_to_arrow(rows.rows)
+
+    async def _fetch_binding_table(self, binding: VirtualTableBinding) -> pa.Table:
+        resource_path = self._resource_path(binding)
+        root_resource_name = api_resource_root(resource_path)
+        extract_result = await self._connector.extract_resource(resource_name=root_resource_name)
+        return await run_federation_blocking(
+            self._blocking_executor,
+            self._build_arrow_table,
+            resource_path,
+            list(extract_result.records or []),
+            await self._resource_primary_key(root_resource_name),
+            self._flatten_paths(binding),
+        )
 
     async def _register_bindings(
         self,
@@ -101,18 +192,6 @@ class ApiConnectorRemoteSource(RemoteSource):
                 "CREATE OR REPLACE VIEW "
                 f"{self._qualified_relation_name(binding)} AS SELECT * FROM {self._quote_identifier(temp_name)}"
             )
-
-    async def _fetch_binding_table(self, binding: VirtualTableBinding) -> pa.Table:
-        resource_path = self._resource_path(binding)
-        root_resource_name = api_resource_root(resource_path)
-        extract_result = await self._connector.extract_resource(resource_name=root_resource_name)
-        rows = materialize_api_resource_rows(
-            resource_path=resource_path,
-            records=list(extract_result.records or []),
-            primary_key=await self._resource_primary_key(root_resource_name),
-            flatten=self._flatten_paths(binding),
-        )
-        return _records_to_arrow(rows.rows)
 
     def _require_binding(self, table_key: str) -> VirtualTableBinding:
         binding = self._bindings.get(table_key)

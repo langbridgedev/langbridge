@@ -1,3 +1,35 @@
+function normalizeRuntimeDateString(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return text;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return `${text}T00:00:00Z`;
+  }
+  if (
+    /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(text)
+  ) {
+    return `${text.replace(" ", "T")}Z`;
+  }
+  return text;
+}
+
+export function parseRuntimeDate(value) {
+  if (value instanceof Date) {
+    return new Date(value.getTime());
+  }
+  if (typeof value === "number") {
+    return new Date(value);
+  }
+  const normalized = normalizeRuntimeDateString(value);
+  return new Date(normalized);
+}
+
+export function getRuntimeTimestamp(value) {
+  const date = parseRuntimeDate(value);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
 export function formatValue(value) {
   if (value === null || value === undefined || value === "") {
     return "n/a";
@@ -30,7 +62,7 @@ export function formatDateTime(value) {
   if (!value) {
     return "n/a";
   }
-  const date = new Date(value);
+  const date = parseRuntimeDate(value);
   if (Number.isNaN(date.getTime())) {
     return String(value);
   }

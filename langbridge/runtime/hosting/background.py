@@ -498,46 +498,23 @@ def build_semantic_vector_refresh_default_task(
             if inspect.isawaitable(result):
                 return await result
             return result
+        can_refresh_method = getattr(context.runtime_host, "can_refresh_semantic_vector_search", None)
+        refresh_method = getattr(context.runtime_host, "refresh_semantic_vector_search", None)
+        if can_refresh_method is None or refresh_method is None:
+            raise RuntimeError(
+                "Runtime host does not expose semantic vector refresh methods. "
+                "Pass a refresher callback when registering this default task."
+            )
+        can_refresh = await can_refresh_method()
 
-        can_refresh = getattr(
-            context.runtime_host,
-            "can_refresh_semantic_vector_search",
-            None,
-        )
-        if callable(can_refresh) and not bool(can_refresh()):
-            reason_getter = getattr(
-                context.runtime_host,
-                "semantic_vector_refresh_unavailable_reason",
-                None,
-            )
-            reason = (
-                reason_getter()
-                if callable(reason_getter)
-                else "Semantic vector refresh is not configured for this runtime host."
-            )
+        if can_refresh is False:
             context.manager._logger.info(
                 "Skipping background task '%s': %s",
                 context.task_name,
-                reason,
+                "Runtime host indicates semantic vector search cannot be refreshed.",
             )
             return None
-
-        for method_name in (
-            "refresh_semantic_vector_search",
-            "refresh_semantic_vectors",
-            "refresh_semantic_search_index",
-        ):
-            method = getattr(context.runtime_host, method_name, None)
-            if method is None:
-                continue
-            result = method()
-            if inspect.isawaitable(result):
-                return await result
-            return result
-        raise RuntimeError(
-            "Runtime host does not expose a semantic vector refresh method. "
-            "Pass a refresher callback when registering this default task."
-        )
+        return await refresh_method()
 
     return RuntimeBackgroundTaskDefinition.default(
         name=name,
@@ -545,6 +522,36 @@ def build_semantic_vector_refresh_default_task(
         schedule=schedule,
         run_on_startup=run_on_startup,
         description=description or "Refresh semantic vector search state.",
+    )
+
+def build_cleanup_default_task(
+    *,
+    schedule: BackgroundTaskSchedule,
+    name: str = "cleanup",
+    run_on_startup: bool = False,
+    description: str | None = None,
+    cleaner: BackgroundTaskHandler | None = None,
+) -> RuntimeBackgroundTaskDefinition:
+    async def _handler(context: BackgroundTaskExecutionContext) -> Any:
+        if cleaner is not None:
+            result = cleaner(context)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+        cleanup_method = getattr(context.runtime_host, "cleanup_resources", None)
+        if cleanup_method is None:
+            raise RuntimeError(
+                "Runtime host does not expose a cleanup method. "
+                "Pass a cleaner callback when registering this default task."
+            )
+        return await cleanup_method()
+
+    return RuntimeBackgroundTaskDefinition.default(
+        name=name,
+        handler=_handler,
+        schedule=schedule,
+        run_on_startup=run_on_startup,
+        description=description or "Perform routine cleanup tasks.",
     )
 
 
@@ -558,4 +565,5 @@ __all__ = [
     "build_connector_sync_default_task",
     "build_dataset_sync_default_task",
     "build_semantic_vector_refresh_default_task",
+    "build_cleanup_default_task",
 ]

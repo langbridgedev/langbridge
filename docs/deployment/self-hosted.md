@@ -34,6 +34,12 @@ The current host serves configured local runtimes and exposes:
 - `GET /api/runtime/v1/connectors/{connector_name}/sync/states`
 - interactive docs at `/api/runtime/docs`
 
+`POST /api/runtime/v1/sql/query` is an explicit scoped SQL surface:
+
+- `query_scope: "semantic"` runs governed SQL against one semantic model and delegates into the semantic execution path
+- `query_scope: "dataset"` runs dataset-backed runtime SQL over runtime datasets
+- `query_scope: "source"` runs direct connector or source SQL and requires `connection_name` or `connection_id`
+
 ## Runtime Metadata Migrations
 
 Runtime metadata schema changes are now managed by Alembic revisions in the

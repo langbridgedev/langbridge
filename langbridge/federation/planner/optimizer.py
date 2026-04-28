@@ -1,12 +1,19 @@
 ﻿
 from dataclasses import dataclass
+import re
 
 import sqlglot
 from sqlglot import exp
 
 from langbridge.federation.utils import enforce_preview_limit
-from langbridge.federation.connectors import estimate_bytes
-from langbridge.federation.models.plans import JoinStrategy, LogicalPlan, SourceSubplan
+from langbridge.federation.connectors import SourceCapabilities, estimate_bytes
+from langbridge.federation.models.plans import (
+    JoinStrategy,
+    LogicalPlan,
+    PushdownDecision,
+    PushdownDiagnostics,
+    SourceSubplan,
+)
 from langbridge.federation.models.virtual_dataset import TableStatistics, VirtualDataset
 from langbridge.federation.planner.parser import (
     extract_required_columns,
@@ -25,6 +32,7 @@ class OptimizedPlan:
     join_order: list[str]
     join_strategies: dict[str, JoinStrategy]
     pushdown_full_query: bool
+    pushdown_reasons: list[str]
 
 
 class FederatedOptimizer:
@@ -39,6 +47,7 @@ class FederatedOptimizer:
         virtual_dataset: VirtualDataset,
         stats_by_table: dict[str, TableStatistics],
         source_dialects: dict[str, str],
+        source_capabilities: dict[str, SourceCapabilities],
         input_dialect: str,
         local_dialect: str,
     ) -> OptimizedPlan:
@@ -67,23 +76,83 @@ class FederatedOptimizer:
             _binding_requires_logical_name_rewrite(virtual_dataset.tables[table.table_key])
             for table in logical_plan.tables.values()
         )
-        requires_cross_dialect_rewrite = any(
-            _normalize_dialect(source_dialects.get(table.source_id)) != _normalize_dialect(input_dialect)
+        requires_cross_dialect_transpile = any(
+            _normalize_dialect(source_dialects.get(table.source_id, input_dialect))
+            != _normalize_dialect(input_dialect)
             for table in logical_plan.tables.values()
         )
-        pushdown_full_query = (
-            len(distinct_sources) == 1
-            and not logical_plan.has_cte
-            and not requires_physical_name_rewrite
-            and not requires_logical_name_rewrite
-            and not requires_cross_dialect_rewrite
+        single_source_id = next(iter(distinct_sources)) if len(distinct_sources) == 1 else None
+        single_source_target_dialect = (
+            source_dialects.get(single_source_id, input_dialect)
+            if single_source_id is not None
+            else input_dialect
         )
+        single_source_capabilities = (
+            source_capabilities.get(single_source_id)
+            if single_source_id is not None
+            else None
+        )
+        can_remote_rewrite_full_query = (
+            single_source_id is not None
+            and all(
+                _binding_can_support_full_query_rewrite(virtual_dataset.tables[table.table_key])
+                for table in logical_plan.tables.values()
+            )
+        )
+        has_join = bool(logical_plan.joins)
+        has_filter = where_expr is not None
+        has_limit = logical_plan.limit is not None
+        has_aggregation = bool(logical_plan.group_by_sql or logical_plan.having_sql) or expression.find(exp.AggFunc) is not None
+        cross_dialect_block_reason = _cross_dialect_full_query_block_reason(
+            expression=expression,
+            input_dialect=input_dialect,
+            target_dialect=single_source_target_dialect,
+        )
+        pushdown_reasons = _full_query_pushdown_reasons(
+            distinct_source_count=len(distinct_sources),
+            has_cte=logical_plan.has_cte,
+            requires_physical_name_rewrite=(
+                requires_physical_name_rewrite and not can_remote_rewrite_full_query
+            ),
+            requires_logical_name_rewrite=(
+                requires_logical_name_rewrite and not can_remote_rewrite_full_query
+            ),
+            cross_dialect_block_reason=cross_dialect_block_reason,
+            has_join=has_join,
+            has_filter=has_filter,
+            has_aggregation=has_aggregation,
+            has_limit=has_limit,
+            source_capabilities=single_source_capabilities,
+        )
+        pushdown_full_query = not pushdown_reasons
 
         source_subplans: list[SourceSubplan] = []
         if pushdown_full_query:
             source_id = next(iter(distinct_sources))
             target_dialect = source_dialects.get(source_id, input_dialect)
-            full_sql = _transpile(logical_plan.sql, read=input_dialect, write=target_dialect)
+            rewritten_expression = (
+                _rewrite_expression_for_full_query_pushdown(
+                    expression=expression,
+                    logical_plan=logical_plan,
+                    virtual_dataset=virtual_dataset,
+                )
+                if can_remote_rewrite_full_query and (
+                    requires_physical_name_rewrite or requires_logical_name_rewrite
+                )
+                else expression
+            )
+            full_sql = _transpile(
+                rewritten_expression.sql(dialect=input_dialect),
+                read=input_dialect,
+                write=target_dialect,
+            )
+            query_projection = ["*"] if has_unqualified else sorted(
+                {
+                    f"{alias}.{column}"
+                    for alias, columns in required_columns.items()
+                    for column in columns
+                }
+            )
             source_subplans.append(
                 SourceSubplan(
                     stage_id="scan_full_query",
@@ -91,6 +160,56 @@ class FederatedOptimizer:
                     alias=logical_plan.from_alias,
                     table_key=logical_plan.tables[logical_plan.from_alias].table_key,
                     sql=full_sql,
+                    pushdown=PushdownDiagnostics(
+                        full_query=PushdownDecision(
+                            pushed=True,
+                            supported=True,
+                            reason=(
+                                "Single-source query can execute remotely after mapping logical tables to physical relations."
+                                if can_remote_rewrite_full_query and (
+                                    requires_physical_name_rewrite or requires_logical_name_rewrite
+                                )
+                                else (
+                                    "Single-source query can execute remotely after transpiling to the source dialect."
+                                    if requires_cross_dialect_transpile
+                                    else "Single-source query can execute remotely without local rewrite."
+                                )
+                            ),
+                        ),
+                        filter=PushdownDecision(
+                            pushed=has_filter,
+                            supported=True if has_filter else None,
+                            details=[logical_plan.where_sql] if logical_plan.where_sql else [],
+                        ),
+                        projection=PushdownDecision(
+                            pushed=bool(query_projection),
+                            supported=True,
+                            details=query_projection,
+                            reason=(
+                                "Wildcard selection requires the full row shape."
+                                if "*" in query_projection
+                                else None
+                            ),
+                        ),
+                        aggregation=PushdownDecision(
+                            pushed=has_aggregation,
+                            supported=True if has_aggregation else None,
+                            details=list(logical_plan.group_by_sql or []),
+                        ),
+                        limit=PushdownDecision(
+                            pushed=has_limit,
+                            supported=True if has_limit else None,
+                            details=[str(logical_plan.limit)] if logical_plan.limit is not None else [],
+                        ),
+                        join=PushdownDecision(
+                            pushed=has_join,
+                            supported=True if has_join else None,
+                            details=[
+                                f"{join.left_alias} {join.join_type} {join.right_alias}"
+                                for join in logical_plan.joins
+                            ],
+                        ),
+                    ),
                 )
             )
             local_stage_sql = "SELECT * FROM scan_full_query"
@@ -104,6 +223,7 @@ class FederatedOptimizer:
                 join_order=join_order,
                 join_strategies=join_strategies,
                 pushdown_full_query=True,
+                pushdown_reasons=[],
             )
 
         for alias, table_ref in logical_plan.tables.items():
@@ -112,29 +232,56 @@ class FederatedOptimizer:
             if has_unqualified and "*" not in projected_columns:
                 projected_columns = ["*"]
 
-            pushed_filters = predicate_map.get(alias) or []
+            alias_filters = predicate_map.get(alias) or []
             source_id = table_ref.source_id
             target_dialect = source_dialects.get(source_id, input_dialect)
-            pushable_filters = [
+            capabilities = source_capabilities.get(source_id, SourceCapabilities())
+            pushable_filters = (
+                [
+                    predicate
+                    for predicate in alias_filters
+                    if _can_push_filter(
+                        predicate=predicate,
+                        input_dialect=input_dialect,
+                        target_dialect=target_dialect,
+                    )
+                ]
+                if capabilities.pushdown_filter
+                else []
+            )
+            rejected_filters = [
                 predicate
-                for predicate in pushed_filters
-                if _can_push_filter(
-                    predicate=predicate,
-                    input_dialect=input_dialect,
-                    target_dialect=target_dialect,
-                )
+                for predicate in alias_filters
+                if predicate not in pushable_filters
             ]
+            pushed_limit = (
+                logical_plan.limit
+                if _can_push_limit_to_scan(
+                    logical_plan=logical_plan,
+                    expression=expression,
+                    source_capabilities=capabilities,
+                    rejected_filters=rejected_filters,
+                )
+                else None
+            )
+            pushed_projection = capabilities.pushdown_projection and not (
+                not projected_columns or "*" in projected_columns
+            )
             sql = _build_scan_sql(
                 alias=alias,
                 binding=binding,
-                projected_columns=projected_columns,
+                projected_columns=projected_columns if capabilities.pushdown_projection else ["*"],
                 pushed_filters=pushable_filters,
-                pushed_limit=None,
+                pushed_limit=pushed_limit,
                 dialect=target_dialect,
             )
             stats = stats_by_table.get(table_ref.table_key) or binding.stats or TableStatistics()
             estimated_rows = stats.row_count_estimate
             estimated_bytes = estimate_bytes(rows=estimated_rows, bytes_per_row=stats.bytes_per_row)
+            pushed_filter_sql = [
+                predicate.sql(dialect=target_dialect)
+                for predicate in pushable_filters
+            ]
             source_subplans.append(
                 SourceSubplan(
                     stage_id=f"scan_{alias}",
@@ -142,14 +289,87 @@ class FederatedOptimizer:
                     alias=alias,
                     table_key=table_ref.table_key,
                     sql=sql,
-                    projected_columns=projected_columns,
-                    pushed_filters=[
-                        expr.sql(dialect=target_dialect)
-                        for expr in pushable_filters
-                    ],
-                    pushed_limit=None,
+                    projected_columns=(projected_columns if capabilities.pushdown_projection else []),
+                    pushed_filters=pushed_filter_sql,
+                    pushed_limit=pushed_limit,
                     estimated_rows=estimated_rows,
                     estimated_bytes=estimated_bytes,
+                    pushdown=PushdownDiagnostics(
+                        full_query=PushdownDecision(
+                            pushed=False,
+                            supported=True,
+                            reason=_first_reason(
+                                pushdown_reasons,
+                                fallback="Local compute is required for this stage.",
+                            ),
+                        ),
+                        filter=PushdownDecision(
+                            pushed=bool(pushed_filter_sql),
+                            supported=capabilities.pushdown_filter,
+                            reason=_filter_pushdown_reason(
+                                has_alias_filters=bool(alias_filters),
+                                supports_filter=capabilities.pushdown_filter,
+                                rejected_filters=rejected_filters,
+                            ),
+                            details=pushed_filter_sql,
+                        ),
+                        projection=PushdownDecision(
+                            pushed=pushed_projection,
+                            supported=capabilities.pushdown_projection,
+                            reason=_projection_pushdown_reason(
+                                projected_columns=projected_columns,
+                                supports_projection=capabilities.pushdown_projection,
+                            ),
+                            details=projected_columns if pushed_projection else [],
+                        ),
+                        aggregation=PushdownDecision(
+                            pushed=False,
+                            supported=capabilities.pushdown_aggregation if has_aggregation else None,
+                            reason=(
+                                _stage_pushdown_reason(
+                                    supports_feature=capabilities.pushdown_aggregation,
+                                    full_query_reasons=pushdown_reasons,
+                                    unsupported_reason=(
+                                        "Unsupported connector/source capability: aggregation pushdown is unavailable."
+                                    ),
+                                )
+                                if has_aggregation
+                                else None
+                            ),
+                        ),
+                        limit=PushdownDecision(
+                            pushed=pushed_limit is not None,
+                            supported=capabilities.pushdown_limit if has_limit else None,
+                            reason=(
+                                _scan_limit_pushdown_reason(
+                                    logical_plan=logical_plan,
+                                    expression=expression,
+                                    source_capabilities=capabilities,
+                                    rejected_filters=rejected_filters,
+                                    full_query_reasons=pushdown_reasons,
+                                )
+                                if has_limit
+                                else None
+                            ),
+                            details=[str(pushed_limit)] if pushed_limit is not None else [],
+                        ),
+                        join=PushdownDecision(
+                            pushed=False,
+                            supported=capabilities.pushdown_join if has_join else None,
+                            reason=(
+                                _stage_pushdown_reason(
+                                    supports_feature=capabilities.pushdown_join,
+                                    full_query_reasons=pushdown_reasons,
+                                    unsupported_reason=(
+                                        "Unsupported connector/source capability: join pushdown is unavailable."
+                                    ),
+                                )
+                                if has_join
+                                else None
+                            ),
+                            details=[],
+                        ),
+                    ),
                 )
             )
 
@@ -176,6 +396,7 @@ class FederatedOptimizer:
             join_order=join_order,
             join_strategies=join_strategies,
             pushdown_full_query=False,
+            pushdown_reasons=pushdown_reasons,
         )
 
 
@@ -273,6 +494,8 @@ _CROSS_DIALECT_SIMPLE_PREDICATE_NODES = (
     exp.Or,
 )
 
+_SAFE_UNQUOTED_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 def _can_push_filter(
     *,
@@ -339,11 +562,41 @@ def _rewrite_filter_for_scan(
         rewritten = node.copy()
         if should_rebind:
             rewritten.set("table", exp.Identifier(this=alias, quoted=False))
+        if isinstance(rewritten.this, exp.Identifier):
+            rewritten.set(
+                "this",
+                _normalize_scan_identifier(
+                    identifier=rewritten.this,
+                    binding=binding,
+                ),
+            )
         rewritten.set("db", None)
         rewritten.set("catalog", None)
         return rewritten
 
     return expression.transform(_replace)
+
+
+def _normalize_scan_identifier(
+    *,
+    identifier: exp.Identifier,
+    binding,
+) -> exp.Identifier:
+    metadata = binding.metadata if isinstance(getattr(binding, "metadata", None), dict) else {}
+    if not bool(metadata.get("physical_sql")):
+        return identifier
+    if not bool(getattr(identifier, "quoted", False)):
+        return identifier
+
+    raw_identifier = str(getattr(identifier, "this", "") or "").strip()
+    if not raw_identifier:
+        return identifier
+    if raw_identifier != raw_identifier.lower():
+        return identifier
+    if _SAFE_UNQUOTED_IDENTIFIER_RE.fullmatch(raw_identifier) is None:
+        return identifier
+
+    return exp.Identifier(this=raw_identifier, quoted=False)
 
 
 def _binding_requires_scan_level_rewrite(binding) -> bool:
@@ -387,6 +640,290 @@ def _binding_requires_logical_name_rewrite(binding) -> bool:
     if not logical_names or not physical_names:
         return False
     return not logical_names.issubset(physical_names)
+
+
+def _binding_can_support_full_query_rewrite(binding) -> bool:
+    metadata = binding.metadata if isinstance(getattr(binding, "metadata", None), dict) else {}
+    physical_sql = metadata.get("physical_sql")
+    if isinstance(physical_sql, str) and physical_sql.strip():
+        return False
+    return True
+
+
+def _rewrite_expression_for_full_query_pushdown(
+    *,
+    expression: exp.Expression,
+    logical_plan: LogicalPlan,
+    virtual_dataset: VirtualDataset,
+) -> exp.Expression:
+    bindings_by_alias = {
+        alias: virtual_dataset.tables[table.table_key]
+        for alias, table in logical_plan.tables.items()
+    }
+
+    def _column_alias(node: exp.Column) -> str | None:
+        table_name = str(node.table or "").strip().lower()
+        if not table_name:
+            return None
+        schema_name = str(node.db or "").strip().lower() or None
+        catalog_name = str(node.catalog or "").strip().lower() or None
+
+        for alias, binding in bindings_by_alias.items():
+            metadata = binding.metadata if isinstance(getattr(binding, "metadata", None), dict) else {}
+            physical_catalog = metadata.get("physical_catalog", binding.catalog)
+            physical_schema = metadata.get("physical_schema", binding.schema_name)
+            physical_table = metadata.get("physical_table", binding.table)
+
+            valid_tables = {
+                str(alias).strip().lower(),
+                str(binding.table_key).strip().lower(),
+                str(binding.table).strip().lower(),
+                str(physical_table).strip().lower(),
+                str(metadata.get("dataset_alias") or "").strip().lower(),
+            }
+            if table_name not in {value for value in valid_tables if value}:
+                continue
+
+            valid_schemas = {
+                str(schema).strip().lower()
+                for schema in (binding.schema_name, physical_schema)
+                if str(schema).strip()
+            }
+            if schema_name is not None and valid_schemas and schema_name not in valid_schemas:
+                continue
+
+            valid_catalogs = {
+                str(catalog).strip().lower()
+                for catalog in (binding.catalog, physical_catalog)
+                if str(catalog).strip()
+            }
+            if catalog_name is not None and valid_catalogs and catalog_name not in valid_catalogs:
+                continue
+
+            return alias
+        return None
+
+    def _replace(node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.Column):
+            alias = _column_alias(node)
+            if alias is None:
+                return node
+            rewritten = node.copy()
+            rewritten.set("table", exp.Identifier(this=alias, quoted=False))
+            rewritten.set("db", None)
+            rewritten.set("catalog", None)
+            return rewritten
+
+        if not isinstance(node, exp.Table):
+            return node
+
+        alias = str(node.alias_or_name or "").strip()
+        binding = bindings_by_alias.get(alias)
+        if binding is None:
+            return node
+
+        metadata = binding.metadata if isinstance(getattr(binding, "metadata", None), dict) else {}
+        physical_sql = metadata.get("physical_sql")
+        if isinstance(physical_sql, str) and physical_sql.strip():
+            return node
+
+        physical_catalog = metadata.get("physical_catalog", binding.catalog)
+        physical_schema = metadata.get("physical_schema", binding.schema_name)
+        physical_table = metadata.get("physical_table", binding.table)
+        if bool(metadata.get("skip_catalog_in_pushdown")):
+            physical_catalog = None
+
+        rewritten = exp.table_(
+            physical_table,
+            db=physical_schema or None,
+            catalog=physical_catalog or None,
+            alias=alias or None,
+            quoted=False,
+        )
+        return rewritten
+
+    return expression.copy().transform(_replace)
+
+
+def _full_query_pushdown_reasons(
+    *,
+    distinct_source_count: int,
+    has_cte: bool,
+    requires_physical_name_rewrite: bool,
+    requires_logical_name_rewrite: bool,
+    cross_dialect_block_reason: str | None,
+    has_join: bool,
+    has_filter: bool,
+    has_aggregation: bool,
+    has_limit: bool,
+    source_capabilities: SourceCapabilities | None,
+) -> list[str]:
+    reasons: list[str] = []
+    if distinct_source_count != 1:
+        reasons.append("Cross-source query requires local federation stages.")
+    if has_cte:
+        reasons.append("Local rewrite is required because the query contains a CTE.")
+    if requires_physical_name_rewrite:
+        reasons.append("Local rewrite is required to map logical tables to physical relations.")
+    if requires_logical_name_rewrite:
+        reasons.append("Local rewrite is required to preserve runtime dataset aliases.")
+    if cross_dialect_block_reason:
+        reasons.append(cross_dialect_block_reason)
+    if source_capabilities is None:
+        return _dedupe_reasons(reasons)
+    if has_filter and not source_capabilities.pushdown_filter:
+        reasons.append("Unsupported connector/source capability: filter pushdown is unavailable.")
+    if not source_capabilities.pushdown_projection:
+        reasons.append("Unsupported connector/source capability: projection pushdown is unavailable.")
+    if has_aggregation and not source_capabilities.pushdown_aggregation:
+        reasons.append("Unsupported connector/source capability: aggregation pushdown is unavailable.")
+    if has_limit and not source_capabilities.pushdown_limit:
+        reasons.append("Unsupported connector/source capability: limit pushdown is unavailable.")
+    if has_join and not source_capabilities.pushdown_join:
+        reasons.append("Unsupported connector/source capability: join pushdown is unavailable.")
+    return _dedupe_reasons(reasons)
+
+
+def _cross_dialect_full_query_block_reason(
+    *,
+    expression: exp.Expression,
+    input_dialect: str,
+    target_dialect: str,
+) -> str | None:
+    if _normalize_dialect(input_dialect) == _normalize_dialect(target_dialect):
+        return None
+
+    anonymous_functions = sorted(
+        {
+            str(function.name or "").strip().upper()
+            for function in expression.find_all(exp.Anonymous)
+            if str(function.name or "").strip()
+        }
+    )
+    if not anonymous_functions:
+        return None
+
+    functions = ", ".join(anonymous_functions)
+    return (
+        "Local rewrite is required because cross-dialect full-query pushdown contains "
+        f"unrecognized function(s) that may not run on the source dialect: {functions}."
+    )
+
+
+def _dedupe_reasons(reasons: list[str]) -> list[str]:
+    deduped: list[str] = []
+    for reason in reasons:
+        if reason not in deduped:
+            deduped.append(reason)
+    return deduped
+
+
+def _first_reason(reasons: list[str], *, fallback: str | None = None) -> str | None:
+    if reasons:
+        return reasons[0]
+    return fallback
+
+
+def _filter_pushdown_reason(
+    *,
+    has_alias_filters: bool,
+    supports_filter: bool,
+    rejected_filters: list[exp.Expression],
+) -> str | None:
+    if not has_alias_filters:
+        return None
+    if not supports_filter:
+        return "Unsupported connector/source capability: filter pushdown is unavailable."
+    if rejected_filters:
+        return "Some filters remained local because they required dialect-specific rewrite."
+    return None
+
+
+def _projection_pushdown_reason(
+    *,
+    projected_columns: list[str],
+    supports_projection: bool,
+) -> str | None:
+    if not supports_projection:
+        return "Unsupported connector/source capability: projection pushdown is unavailable."
+    if not projected_columns or "*" in projected_columns:
+        return "Wildcard selection requires the full row shape for this stage."
+    return None
+
+
+def _stage_pushdown_reason(
+    *,
+    supports_feature: bool,
+    full_query_reasons: list[str],
+    unsupported_reason: str,
+) -> str | None:
+    if not supports_feature:
+        return unsupported_reason
+    return _first_reason(
+        full_query_reasons,
+        fallback="Local compute is required for this stage.",
+    )
+
+
+def _can_push_limit_to_scan(
+    *,
+    logical_plan: LogicalPlan,
+    expression: exp.Expression,
+    source_capabilities: SourceCapabilities,
+    rejected_filters: list[exp.Expression],
+) -> bool:
+    if logical_plan.limit is None:
+        return False
+    if not source_capabilities.pushdown_limit:
+        return False
+    if len(logical_plan.tables) != 1:
+        return False
+    if logical_plan.has_cte or logical_plan.joins:
+        return False
+    if logical_plan.group_by_sql or logical_plan.having_sql:
+        return False
+    if logical_plan.order_by_sql or logical_plan.offset is not None:
+        return False
+    if rejected_filters:
+        return False
+    if expression.find(exp.AggFunc) is not None:
+        return False
+    if expression.find(exp.Distinct) is not None:
+        return False
+    if expression.find(exp.Qualify) is not None:
+        return False
+    if expression.find(exp.Union) is not None:
+        return False
+    if expression.find(exp.Window) is not None:
+        return False
+    return True
+
+
+def _scan_limit_pushdown_reason(
+    *,
+    logical_plan: LogicalPlan,
+    expression: exp.Expression,
+    source_capabilities: SourceCapabilities,
+    rejected_filters: list[exp.Expression],
+    full_query_reasons: list[str],
+) -> str | None:
+    if logical_plan.limit is None:
+        return None
+    if _can_push_limit_to_scan(
+        logical_plan=logical_plan,
+        expression=expression,
+        source_capabilities=source_capabilities,
+        rejected_filters=rejected_filters,
+    ):
+        return None
+    if not source_capabilities.pushdown_limit:
+        return "Unsupported connector/source capability: limit pushdown is unavailable."
+    if len(logical_plan.tables) == 1:
+        return "Local limit remains after the remote scan because applying it before local computation could change results."
+    return _first_reason(
+        full_query_reasons,
+        fallback="Local compute is required for this stage.",
+    )
 
 
 def _choose_join_order(

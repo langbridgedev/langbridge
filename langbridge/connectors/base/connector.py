@@ -230,6 +230,22 @@ class ApiConnector(Connector):
         """
         raise NotImplementedError
 
+    async def extract_request(
+        self,
+        request: Mapping[str, Any],
+        *,
+        since: str | None = None,
+        cursor: str | None = None,
+        limit: int | None = None,
+        extraction: Mapping[str, Any] | None = None,
+    ) -> ApiExtractResult:
+        """
+        Extract one ad hoc request payload from the API source.
+        Connectors that do not support request-shaped datasets should override
+        this or let the default implementation raise.
+        """
+        raise ConnectorError("This API connector does not support ad hoc request extraction.")
+
     @abstractmethod
     async def sync_resource(
         self,
