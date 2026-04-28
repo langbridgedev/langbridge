@@ -300,14 +300,14 @@ class RuntimeAuthResolver:
         return payload
 
     def _principal_from_claims(self, claims: dict[str, Any]) -> RuntimeAuthPrincipal:
-        
-        try:
-            workspace_id = _coerce_uuid(
-                claims.get(self._config.jwt_workspace_claim),
-                field_name=self._config.jwt_workspace_claim,
+        workspace_id = _coerce_uuid(
+            claims.get(self._config.jwt_workspace_claim),
+            field_name=self._config.jwt_workspace_claim,
+        )
+        if workspace_id is None:
+            raise RuntimeAuthResolver._unauthorized(
+                f"Runtime auth claim '{self._config.jwt_workspace_claim}' must be a UUID."
             )
-        except Exception as exc:
-            raise RuntimeAuthResolver._unauthorized(f"Runtime auth claim '{claims.get(self._config.jwt_workspace_claim)}' must be a UUID.") from exc
         
         subject = _coerce_optional_text(claims.get(self._config.jwt_subject_claim))
         actor_id = _coerce_optional_uuid(

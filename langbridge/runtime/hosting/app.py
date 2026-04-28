@@ -120,6 +120,7 @@ def create_runtime_api_app(
     )
     task_manager = RuntimeBackgroundTaskManager(
         runtime_host=host,
+        default_tasks=default_background_tasks,
         custom_tasks=background_tasks,
     )
     mcp_server = None
@@ -742,6 +743,8 @@ def create_runtime_api_app(
             }
             if body.agent_mode is not None:
                 ask_kwargs["agent_mode"] = body.agent_mode
+            if body.metadata_json is not None:
+                ask_kwargs["metadata_json"] = body.metadata_json
             result = await configured_host.ask_agent(**ask_kwargs)
         except HTTPException:
             raise
@@ -786,6 +789,8 @@ def create_runtime_api_app(
         }
         if body.agent_mode is not None:
             stream_kwargs["agent_mode"] = body.agent_mode
+        if body.metadata_json is not None:
+            stream_kwargs["metadata_json"] = body.metadata_json
         return _build_runtime_sse_response(
             _stream_runtime_run_events(
                 request=request,
@@ -1354,8 +1359,6 @@ async def _register_runtime_semantic_vector_refresh_task(
     task_manager: RuntimeBackgroundTaskManager,
     runtime_host: RuntimeHost,
 ) -> None:
-    if not isinstance(runtime_host, ConfiguredLocalRuntimeHost):
-        return
     if runtime_host.services.semantic_vector_search is None:
         return
     can_refresh = await runtime_host.can_refresh_semantic_vector_search()

@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from langbridge.ai.events import AIEventEmitter, AIEventSource
 from langbridge.ai.llm.base import LLMProvider
 from langbridge.runtime.embeddings import EmbeddingProvider
-from langbridge.runtime.services.semantic_vector_search_service import SemanticVectorSearchService
+from langbridge.runtime.services.semantic_vector_search import SemanticVectorSearchService
 
 
 class VectorStoreLike(Protocol):

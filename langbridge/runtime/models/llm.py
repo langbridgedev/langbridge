@@ -13,6 +13,7 @@ class LLMProvider(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     AZURE = "azure"
+    OLLAMA = "ollama"
 
 
 class LLMConnectionSecret(RuntimeModel):

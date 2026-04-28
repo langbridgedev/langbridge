@@ -2,6 +2,13 @@ import logging
 import sys
 import types
 
+import pytest
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
 
 def _ensure_opentelemetry_stub() -> None:
     if "opentelemetry" in sys.modules:

@@ -21,7 +21,7 @@ from langbridge.federation.planner import FederatedPlanner
 from langbridge.federation.service import FederatedQueryService
 from langbridge.semantic.model import SemanticModel
 
-from tests.federation.mock import MockArrowRemoteSource
+from tests.helpers.federation_mock import MockArrowRemoteSource
 from tests.helpers.semantic_harness import SemanticHarness
 from tests.helpers.sql_normalize import normalize_rows, normalize_sql
 

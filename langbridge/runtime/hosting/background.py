@@ -243,8 +243,8 @@ class RuntimeBackgroundTaskManager:
         for task in self.list_tasks():
             if task.enabled and task.run_on_startup:
                 startup_tasks.append(self._run_definition_as_task(task))
-        # if startup_tasks:
-        #     await asyncio.gather(*startup_tasks)
+        if startup_tasks:
+            await asyncio.gather(*startup_tasks)
 
     async def stop(self) -> None:
         if not self._started:

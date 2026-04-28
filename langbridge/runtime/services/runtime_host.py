@@ -12,21 +12,17 @@ from langbridge.runtime.providers import (
     SemanticVectorIndexMetadataProvider,
     SyncStateProvider,
 )
-from langbridge.runtime.services.agent_execution_service import AgentExecutionService
-from langbridge.runtime.services.agent_execution_service_v2 import AgentExecutionServiceV2
-from langbridge.runtime.services.dataset_query_service import DatasetQueryService
-from langbridge.runtime.services.dataset_sync_service import ConnectorSyncRuntime
+from langbridge.runtime.services.agents import AgentExecutionService
+from langbridge.runtime.services.dataset_query import DatasetQueryService
+from langbridge.runtime.services.dataset_sync import ConnectorSyncRuntime
 from langbridge.runtime.services.semantic_query_execution_service import (
     SemanticQueryExecutionService,
 )
 from langbridge.runtime.services.semantic_sql_query_service import SemanticSqlQueryService
-from langbridge.runtime.services.semantic_vector_search_service import (
+from langbridge.runtime.services.semantic_vector_search import (
     SemanticVectorSearchService,
 )
-from langbridge.runtime.services.sql_query_service import SqlQueryService
-
-AgentExecutionRuntime = AgentExecutionService | AgentExecutionServiceV2
-
+from langbridge.runtime.services.sql_query import SqlQueryService
 
 @dataclass(slots=True)
 class RuntimeProviders:
@@ -46,9 +42,7 @@ class RuntimeServices:
     sql_query: SqlQueryService
     dataset_query: DatasetQueryService
     dataset_sync: ConnectorSyncRuntime
-    agent_execution: AgentExecutionRuntime | None
-    agent_execution_v1: AgentExecutionService | None = None
-    agent_execution_v2: AgentExecutionServiceV2 | None = None
+    agent_execution: AgentExecutionService | None
     semantic_sql_query: SemanticSqlQueryService | None = None
 
 
@@ -143,8 +137,10 @@ class RuntimeHost:
     async def can_refresh_semantic_vector_search(self) -> bool:
         if self.services.semantic_vector_search is None:
             return False
-        capability = await self.services.semantic_vector_search.can_refresh()
-        return capability
+        capability = self.services.semantic_vector_search.can_refresh()
+        if inspect.isawaitable(capability):
+            capability = await capability
+        return bool(capability)
 
     async def cleanup_resources(self) -> None:
         # Placeholder for any cleanup logic that might be needed in the future

@@ -64,6 +64,7 @@ class AgentApplication:
         thread_id: uuid.UUID | None = None,
         title: str | None = None,
         agent_mode: str | None = None,
+        metadata_json: dict[str, Any] | None = None,
         mcp: bool = False,
     ) -> dict[str, Any]:
         prepared = await self._prepare_agent_run(
@@ -72,6 +73,7 @@ class AgentApplication:
             thread_id=thread_id,
             title=title,
             agent_mode=agent_mode,
+            metadata_json=metadata_json,
         )
         collector = CollectingAgentEventEmitter()
         try:
@@ -100,6 +102,7 @@ class AgentApplication:
         thread_id: uuid.UUID | None = None,
         title: str | None = None,
         agent_mode: str | None = None,
+        metadata_json: dict[str, Any] | None = None,
     ) -> AsyncIterator[RuntimeRunStreamEvent | None]:
         prepared = await self._prepare_agent_run(
             prompt=prompt,
@@ -107,6 +110,7 @@ class AgentApplication:
             thread_id=thread_id,
             title=title,
             agent_mode=agent_mode,
+            metadata_json=metadata_json,
         )
         sequence = 1
         await self._host._run_streams.open_run(
@@ -253,6 +257,7 @@ class AgentApplication:
         thread_id: uuid.UUID | None,
         title: str | None,
         agent_mode: str | None,
+        metadata_json: dict[str, Any] | None = None,
     ) -> PreparedAgentRun:
         agent = self._host._resolve_agent(agent_name)
         actor_id = self._host._resolve_actor_id()
@@ -295,6 +300,7 @@ class AgentApplication:
                     thread.title = str(title).strip()
                 await self._host._thread_repository.save(thread)
 
+            metadata_payload = dict(metadata_json) if isinstance(metadata_json, dict) else None
             user_message = RuntimeThreadMessage(
                 id=uuid.uuid4(),
                 thread_id=thread_id,
@@ -302,8 +308,13 @@ class AgentApplication:
                 content={
                     "text": str(prompt or "").strip(),
                     "agent_mode": str(agent_mode or "auto").strip() or "auto",
+                    **({"metadata_json": metadata_payload} if metadata_payload is not None else {}),
+                    **({"context": {"metadata_json": metadata_payload}} if metadata_payload is not None else {}),
                 },
-                model_snapshot={"agent_mode": str(agent_mode or "auto").strip() or "auto"},
+                model_snapshot={
+                    "agent_mode": str(agent_mode or "auto").strip() or "auto",
+                    **({"metadata_json": metadata_payload} if metadata_payload is not None else {}),
+                },
                 created_at=timestamp,
             )
             user_message = self._host._thread_message_repository.add(user_message)

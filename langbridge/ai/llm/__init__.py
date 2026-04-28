@@ -31,6 +31,11 @@ try:  # pragma: no cover
 except Exception:  # pragma: no cover
     AzureOpenAIProvider = None  # type: ignore
 
+try:  # pragma: no cover
+    from .ollama import OllamaProvider  # type: ignore  # noqa: F401
+except Exception:  # pragma: no cover
+    OllamaProvider = None  # type: ignore
+
 __all__ = [
     'LLMProvider',
     'LLMProviderName',
@@ -47,4 +52,5 @@ __all__ = [
     'OpenAIProvider',
     'AnthropicProvider',
     'AzureOpenAIProvider',
+    'OllamaProvider',
 ]

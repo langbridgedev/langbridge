@@ -18,7 +18,12 @@ from langbridge.ai.base import (
 )
 from langbridge.ai.events import AIEventEmitter, AIEventSource
 from langbridge.ai.llm.base import LLMProvider
-from langbridge.ai.modes import analyst_output_contract_for_task_input, normalize_analyst_task_input
+from langbridge.ai.modes import AnalystAgentMode, analyst_output_contract_for_task_input, normalize_analyst_task_input
+from langbridge.ai.orchestration.continuation import (
+    ContinuationState,
+    ContinuationStateBuilder,
+    FollowUpResolver,
+)
 from langbridge.ai.orchestration.execution import PlanExecutionState
 from langbridge.ai.orchestration.final_review import (
     FinalReviewAction,
@@ -35,6 +40,7 @@ from langbridge.ai.orchestration.plan_review import (
 )
 from langbridge.ai.orchestration.planner import ExecutionPlan, PlannerAgent, PlanStep
 from langbridge.ai.orchestration.verification import AgentVerifier, VerificationOutcome, VerificationReasonCode
+from langbridge.ai.question_intent import AnalystQuestionIntent
 from langbridge.ai.registry import AgentRegistry
 
 
@@ -138,7 +144,10 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
         context: dict[str, Any] | None = None,
         force_plan: bool = False,
     ) -> MetaControllerRun:
-        runtime_context = dict(context or {})
+        runtime_context = self._augment_follow_up_context(
+            question=question,
+            context=dict(context or {}),
+        )
         specifications = self._available_specifications()
         await self._emit_ai_event(
             event_type="MetaControllerStarted",
@@ -147,12 +156,30 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             details={"available_agents": [specification.name for specification in specifications]},
         )
 
-        decision = await self._route_with_llm(
+        decision = self._resolve_follow_up_route(
             question=question,
             context=runtime_context,
             specifications=self._registry.specifications(),
             force_plan=force_plan,
         )
+        if decision is None:
+            decision = await self._route_with_llm(
+                question=question,
+                context=runtime_context,
+                specifications=self._registry.specifications(),
+                force_plan=force_plan,
+            )
+        else:
+            await self._emit_ai_event(
+                event_type="FollowUpResolutionApplied",
+                message=decision.rationale,
+                source="meta-controller",
+                details={
+                    "action": decision.action.value,
+                    "agent_name": decision.agent_name,
+                    "task_kind": decision.task_kind.value if decision.task_kind else None,
+                },
+            )
         await self._emit_ai_event(
             event_type="AgentRouteSelected",
             message=decision.rationale,
@@ -205,8 +232,13 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
                     input_payload,
                     requested_mode=runtime_context.get("requested_agent_mode") or runtime_context.get("agent_mode"),
                 )
-            plan = self._build_direct_plan(
+            execution_question = self._resolved_execution_question(
                 question=question,
+                context=runtime_context,
+                decision=decision,
+            )
+            plan = self._build_direct_plan(
+                question=execution_question,
                 specification=target,
                 task_kind=decision.task_kind,
                 input_payload=input_payload,
@@ -286,7 +318,13 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             if parsed.get(key) in ("", None):
                 parsed[key] = None
         decision = MetaControllerDecision.model_validate(parsed)
-        decision = self._normalize_route_decision(decision, context=context)
+        decision = self._normalize_route_decision(
+            decision,
+            question=question,
+            context=context,
+            specifications=specifications,
+            force_plan=force_plan,
+        )
         if force_plan and decision.action == MetaControllerAction.direct:
             raise ValueError("Meta-controller LLM selected direct route despite force_plan.")
         return decision
@@ -310,25 +348,350 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             )
         return specification
 
-    @staticmethod
     def _normalize_route_decision(
+        self,
         decision: MetaControllerDecision,
         *,
+        question: str,
         context: dict[str, Any],
+        specifications: list[AgentSpecification],
+        force_plan: bool = False,
     ) -> MetaControllerDecision:
+        if decision.action == MetaControllerAction.clarify and not force_plan:
+            redirected = self._redirect_premature_analyst_clarification(
+                decision=decision,
+                question=question,
+                context=context,
+                specifications=specifications,
+            )
+            if redirected is not None:
+                decision = redirected
         if decision.action != MetaControllerAction.direct:
             return decision
         if decision.task_kind != AgentTaskKind.analyst:
             return decision
         requested_mode = context.get("requested_agent_mode") or context.get("agent_mode")
+        requested_mode_text = str(requested_mode or "").strip().lower()
+        normalized_input = normalize_analyst_task_input(
+            decision.input,
+            requested_mode=requested_mode,
+        )
+        follow_up_input = MetaControllerAgent._follow_up_analyst_input(
+            context=context,
+            requested_mode=requested_mode,
+        )
+        if (
+            normalized_input.get("agent_mode") == AnalystAgentMode.context_analysis.value
+            and requested_mode_text != AnalystAgentMode.context_analysis.value
+            and "agent_mode" not in follow_up_input
+        ):
+            normalized_input.pop("agent_mode", None)
+        merged_input = {**follow_up_input, **normalized_input}
+        if (
+            requested_mode_text in {"", AnalystAgentMode.auto.value}
+            and "agent_mode" not in merged_input
+            and "agent_mode" not in follow_up_input
+            and AnalystQuestionIntent.is_assumption_first_question(question)
+            and self._agent_supports_analyst_mode(
+                agent_name=decision.agent_name,
+                specifications=specifications,
+                mode=AnalystAgentMode.research,
+            )
+        ):
+            merged_input["agent_mode"] = AnalystAgentMode.research.value
+        if (
+            decision.task_kind == AgentTaskKind.analyst
+            and requested_mode_text in {"", AnalystAgentMode.auto.value}
+            and "agent_mode" not in merged_input
+        ):
+            merged_input["agent_mode"] = AnalystAgentMode.auto.value
         return decision.model_copy(
             update={
-                "input": normalize_analyst_task_input(
-                    decision.input,
-                    requested_mode=requested_mode,
-                )
+                "input": merged_input
             }
         )
+
+    def _redirect_premature_analyst_clarification(
+        self,
+        *,
+        decision: MetaControllerDecision,
+        question: str,
+        context: dict[str, Any],
+        specifications: list[AgentSpecification],
+    ) -> MetaControllerDecision | None:
+        if not self._looks_like_assumption_first_analyst_question(question):
+            return None
+        analyst_spec = self._single_available_analyst_spec(specifications)
+        if analyst_spec is None:
+            return None
+        supported_modes = (
+            analyst_spec.metadata.get("supported_modes")
+            if isinstance(analyst_spec.metadata, dict)
+            else None
+        )
+        input_payload: dict[str, Any] = {}
+        requested_mode = str(context.get("requested_agent_mode") or context.get("agent_mode") or "").strip().lower()
+        if requested_mode and requested_mode != AnalystAgentMode.auto.value:
+            input_payload["agent_mode"] = requested_mode
+        elif isinstance(supported_modes, list) and AnalystAgentMode.research.value in supported_modes:
+            input_payload["agent_mode"] = AnalystAgentMode.research.value
+        else:
+            input_payload["agent_mode"] = AnalystAgentMode.auto.value
+        return MetaControllerDecision(
+            action=MetaControllerAction.direct,
+            rationale=(
+                "One analyst can inspect governed data first and answer with explicit assumptions instead of "
+                f"asking an upfront clarification. Original clarification: {decision.rationale}"
+            ),
+            agent_name=analyst_spec.name,
+            task_kind=AgentTaskKind.analyst,
+            input=input_payload,
+            clarification_question=None,
+            plan_guidance=None,
+        )
+
+    @staticmethod
+    def _single_available_analyst_spec(
+        specifications: list[AgentSpecification],
+    ) -> AgentSpecification | None:
+        analysts = [specification for specification in specifications if specification.supports(AgentTaskKind.analyst)]
+        if len(analysts) != 1:
+            return None
+        return analysts[0]
+
+    @staticmethod
+    def _looks_like_assumption_first_analyst_question(question: str) -> bool:
+        return AnalystQuestionIntent.is_assumption_first_question(question)
+
+    @staticmethod
+    def _agent_supports_analyst_mode(
+        *,
+        agent_name: str | None,
+        specifications: list[AgentSpecification],
+        mode: AnalystAgentMode,
+    ) -> bool:
+        if not agent_name:
+            return False
+        for specification in specifications:
+            if specification.name != agent_name:
+                continue
+            supported_modes = (
+                specification.metadata.get("supported_modes")
+                if isinstance(specification.metadata, dict)
+                else None
+            )
+            return isinstance(supported_modes, list) and mode.value in supported_modes
+        return False
+
+    @classmethod
+    def _augment_follow_up_context(
+        cls,
+        *,
+        question: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        augmented = dict(context)
+        continuation_state = ContinuationStateBuilder.from_context(context=augmented, question=question)
+        if continuation_state is not None:
+            augmented["continuation_state"] = continuation_state.compact_payload()
+            if not isinstance(augmented.get("analysis_state"), dict) and continuation_state.analysis_state is not None:
+                augmented["analysis_state"] = continuation_state.analysis_state.model_dump(mode="json")
+            if (
+                not isinstance(augmented.get("visualization_state"), dict)
+                and continuation_state.visualization_state is not None
+            ):
+                augmented["visualization_state"] = continuation_state.visualization_state.model_dump(mode="json")
+            if not isinstance(augmented.get("result"), dict) and isinstance(continuation_state.result, dict):
+                augmented["result"] = dict(continuation_state.result)
+            if not isinstance(augmented.get("visualization"), dict) and isinstance(continuation_state.visualization, dict):
+                augmented["visualization"] = dict(continuation_state.visualization)
+            if not isinstance(augmented.get("research"), dict) and isinstance(continuation_state.research, dict):
+                augmented["research"] = dict(continuation_state.research)
+            if not augmented.get("sources") and continuation_state.sources:
+                augmented["sources"] = list(continuation_state.sources)
+        resolution = cls._resolve_follow_up_resolution(
+            question=question,
+            continuation_state=continuation_state,
+        )
+        if resolution:
+            resolution_payload = resolution.model_dump(mode="json", exclude_none=True)
+            if resolution.filters:
+                resolution_payload["filter"] = resolution.filters[0].single_value_payload()
+            augmented["follow_up_resolution"] = resolution_payload
+        return augmented
+
+    @classmethod
+    def _resolve_follow_up_resolution(
+        cls,
+        *,
+        question: str,
+        continuation_state: ContinuationState | None,
+    ):
+        return FollowUpResolver.resolve(
+            question=question,
+            continuation_state=continuation_state,
+        )
+
+    def _resolve_follow_up_route(
+        self,
+        *,
+        question: str,
+        context: dict[str, Any],
+        specifications: list[AgentSpecification],
+        force_plan: bool,
+    ) -> MetaControllerDecision | None:
+        if force_plan:
+            return None
+        requested_mode = str(context.get("requested_agent_mode") or context.get("agent_mode") or "").strip().lower()
+        resolution = context.get("follow_up_resolution")
+        if not isinstance(resolution, dict):
+            return None
+        resolution_kind = str(resolution.get("kind") or "").strip().lower()
+        if resolution_kind == "clarify_follow_up":
+            clarification_question = str(
+                resolution.get("clarification_question") or resolution.get("rationale") or ""
+            ).strip()
+            if not clarification_question:
+                return None
+            return MetaControllerDecision(
+                action=MetaControllerAction.clarify,
+                rationale=clarification_question,
+                clarification_question=clarification_question,
+            )
+        suggested_mode = str(resolution.get("suggested_agent_mode") or "").strip().lower()
+        allowed_requested_modes = {
+            "visualize_prior_result": {"", "auto", "context_analysis"},
+            "analyze_prior_result": {"", "auto", "context_analysis"},
+            "requery_prior_analysis": {"", "auto", "sql"},
+        }.get(resolution_kind)
+        if not allowed_requested_modes or requested_mode not in allowed_requested_modes:
+            return None
+        target = self._resolve_follow_up_target(resolution=resolution, specifications=specifications)
+        if target is None:
+            return None
+        return MetaControllerDecision(
+            action=MetaControllerAction.direct,
+            rationale=str(
+                resolution.get("rationale")
+                or "Reuse the prior verified result for the requested chart follow-up."
+            ),
+            agent_name=target.name,
+            task_kind=AgentTaskKind.analyst,
+            input={
+                "agent_mode": suggested_mode or "context_analysis",
+                "reuse_last_result": bool(resolution.get("reuse_last_result")),
+                "follow_up_intent": resolution_kind or "visualize_prior_result",
+                "chart_request": question if resolution_kind == "visualize_prior_result" else None,
+                "resolved_from_prior_question": bool(resolution.get("resolved_question")),
+                **(
+                    {"follow_up_chart_type": resolution.get("chart_type")}
+                    if resolution.get("chart_type")
+                    else {}
+                ),
+                **(
+                    {"follow_up_focus_field": resolution.get("focus_field")}
+                    if resolution.get("focus_field")
+                    else {}
+                ),
+                **(
+                    {"follow_up_dimension": resolution.get("dimension")}
+                    if resolution.get("dimension")
+                    else {}
+                ),
+                **(
+                    {"follow_up_period": resolution.get("period")}
+                    if resolution.get("period")
+                    else {}
+                ),
+                **(
+                    {"follow_up_filter": resolution.get("filter")}
+                    if resolution.get("filter")
+                    else {}
+                ),
+                **(
+                    {"follow_up_filters": resolution.get("filters")}
+                    if resolution.get("filters")
+                    else {}
+                ),
+                **(
+                    {"active_filters": resolution.get("active_filters")}
+                    if resolution.get("active_filters")
+                    else {}
+                ),
+            },
+        )
+
+    @staticmethod
+    def _resolve_follow_up_target(
+        *,
+        resolution: dict[str, Any],
+        specifications: list[AgentSpecification],
+    ) -> AgentSpecification | None:
+        preferred_name = str(resolution.get("selected_agent") or "").strip()
+        analyst_specs = [
+            specification
+            for specification in specifications
+            if specification.supports(AgentTaskKind.analyst)
+        ]
+        if preferred_name:
+            for specification in analyst_specs:
+                if specification.name == preferred_name:
+                    return specification
+        if len(analyst_specs) == 1:
+            return analyst_specs[0]
+        return None
+
+    @classmethod
+    def _follow_up_analyst_input(
+        cls,
+        *,
+        context: dict[str, Any],
+        requested_mode: Any,
+    ) -> dict[str, Any]:
+        resolution = context.get("follow_up_resolution")
+        if not isinstance(resolution, dict):
+            return {}
+        resolution_kind = str(resolution.get("kind") or "").strip().lower()
+        suggested_mode = str(resolution.get("suggested_agent_mode") or "").strip().lower()
+        if resolution_kind not in {"visualize_prior_result", "analyze_prior_result", "requery_prior_analysis"}:
+            return {}
+        normalized_requested = str(requested_mode or "").strip().lower()
+        payload: dict[str, Any] = {
+            "reuse_last_result": bool(resolution.get("reuse_last_result")),
+            "follow_up_intent": resolution_kind,
+        }
+        if resolution.get("chart_type"):
+            payload["follow_up_chart_type"] = resolution.get("chart_type")
+        if resolution.get("focus_field"):
+            payload["follow_up_focus_field"] = resolution.get("focus_field")
+        if resolution.get("dimension"):
+            payload["follow_up_dimension"] = resolution.get("dimension")
+        if resolution.get("period"):
+            payload["follow_up_period"] = resolution.get("period")
+        if resolution.get("filter"):
+            payload["follow_up_filter"] = resolution.get("filter")
+        if resolution.get("filters"):
+            payload["follow_up_filters"] = resolution.get("filters")
+        if resolution.get("active_filters"):
+            payload["active_filters"] = resolution.get("active_filters")
+        if normalized_requested in {"", "auto", suggested_mode} and suggested_mode:
+            payload["agent_mode"] = suggested_mode
+        return payload
+
+    @staticmethod
+    def _resolved_execution_question(
+        *,
+        question: str,
+        context: dict[str, Any],
+        decision: MetaControllerDecision,
+    ) -> str:
+        if decision.action != MetaControllerAction.direct:
+            return question
+        resolution = context.get("follow_up_resolution")
+        if not isinstance(resolution, dict):
+            return question
+        resolved_question = str(resolution.get("resolved_question") or "").strip()
+        return resolved_question or question
 
     @staticmethod
     def _build_direct_plan(
@@ -717,6 +1080,18 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
                     final_review=final_review_decision,
                 )
 
+            if final_review_decision.action == FinalReviewAction.revise_answer:
+                revised_in_presentation = await self._attempt_presentation_revision_after_final_review(
+                    execution_mode=execution_mode,
+                    state=state,
+                    question=question,
+                    context=context,
+                    diagnostics=diagnostics,
+                    final_review=final_review_decision,
+                )
+                if revised_in_presentation is not None:
+                    return revised_in_presentation
+
             if final_review_decision.action in {FinalReviewAction.revise_answer, FinalReviewAction.replan}:
                 if state.replan_count >= state.max_replans:
                     return await self._finish_with_mode(
@@ -804,14 +1179,155 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
                     diagnostics={**diagnostics, "final_review": final_review_payload},
                 )
 
-        return await self._finish_with_mode(
+        return await self._finish_final_with_presented_review(
             execution_mode=execution_mode,
             state=state,
             question=question,
             context=context,
-            presentation_mode="final",
             diagnostics=diagnostics,
-            final_review=final_review_decision,
+            initial_final_review=final_review_decision,
+        )
+
+    async def _finish_final_with_presented_review(
+        self,
+        *,
+        execution_mode: str,
+        state: PlanExecutionState,
+        question: str,
+        context: dict[str, Any],
+        diagnostics: dict[str, Any],
+        initial_final_review: FinalReviewDecision | None,
+    ) -> MetaControllerRun:
+        final = await self._present(
+            question=question,
+            context={
+                **state.context,
+                **context,
+                "step_results": state.step_results_payload(),
+                "plan": state.current_plan.model_dump(mode="json"),
+            },
+            mode="final",
+        )
+        presented_answer_package = self._build_presented_answer_package(
+            state=state,
+            presented_final=final,
+        )
+        presented_review = await self._review_final_answer(
+            question=question,
+            state=state,
+            answer_package=presented_answer_package,
+        )
+        if presented_review is None or presented_review.action == FinalReviewAction.approve:
+            return self._build_run(
+                execution_mode=execution_mode,
+                state=state,
+                final=final,
+                diagnostics=diagnostics,
+                status="completed",
+                final_review=presented_review or initial_final_review,
+            )
+
+        if presented_review.updated_context:
+            state.context = {**state.context, **presented_review.updated_context}
+        final_review_payload = presented_review.model_dump(mode="json")
+
+        if presented_review.action == FinalReviewAction.ask_clarification:
+            clarification_question = (
+                presented_review.clarification_question
+                or presented_review.rationale
+                or "Clarification needed."
+            )
+            return await self._finish_with_mode(
+                execution_mode=execution_mode,
+                state=state,
+                question=question,
+                context={**context, "clarification_question": clarification_question},
+                presentation_mode="clarification",
+                diagnostics={
+                    **diagnostics,
+                    "stop_reason": "final_review_clarification_after_presentation",
+                    "final_review": final_review_payload,
+                },
+                final_review=presented_review,
+            )
+
+        if presented_review.action == FinalReviewAction.abort:
+            return await self._finish_with_mode(
+                execution_mode=execution_mode,
+                state=state,
+                question=question,
+                context={**context, "error": presented_review.rationale},
+                presentation_mode="failure",
+                diagnostics={
+                    **diagnostics,
+                    "stop_reason": "final_review_abort_after_presentation",
+                    "final_review": final_review_payload,
+                },
+                final_review=presented_review,
+            )
+
+        if presented_review.action == FinalReviewAction.revise_answer:
+            revised_in_presentation = await self._attempt_presentation_revision_after_final_review(
+                execution_mode=execution_mode,
+                state=state,
+                question=question,
+                context=context,
+                diagnostics=diagnostics,
+                final_review=presented_review,
+            )
+            if revised_in_presentation is not None:
+                return revised_in_presentation
+
+        if presented_review.action in {FinalReviewAction.revise_answer, FinalReviewAction.replan}:
+            if state.replan_count >= state.max_replans:
+                return await self._finish_with_mode(
+                    execution_mode=execution_mode,
+                    state=state,
+                    question=question,
+                    context={
+                        **context,
+                        "error": (
+                            "Final review requested another analytical pass, "
+                            "but the replan budget is exhausted."
+                        ),
+                    },
+                    presentation_mode="failure",
+                    diagnostics={
+                        **diagnostics,
+                        "stop_reason": "final_review_replan_budget_exhausted",
+                        "final_review": final_review_payload,
+                    },
+                    final_review=presented_review,
+                )
+            state.replan_count += 1
+            replan_updates = {
+                "final_review_action": presented_review.action.value,
+                "final_review_rationale": presented_review.rationale,
+                "final_review_issues": list(presented_review.issues),
+                "reviewed_answer_package": presented_answer_package,
+                **presented_review.updated_context,
+            }
+            state.context = {**state.context, **replan_updates}
+            state.current_plan = await self._planner.replan(
+                state=state,
+                context_updates=replan_updates,
+                specifications=self._registry.specifications(),
+            )
+            return await self._execute_plan(
+                execution_mode=execution_mode,
+                state=state,
+                question=question,
+                context=context,
+                diagnostics={**diagnostics, "final_review": final_review_payload},
+            )
+
+        return self._build_run(
+            execution_mode=execution_mode,
+            state=state,
+            final=final,
+            diagnostics={**diagnostics, "final_review": final_review_payload},
+            status="completed",
+            final_review=presented_review,
         )
 
     async def _finish_with_mode(
@@ -843,6 +1359,80 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             status=self._status_for_presentation_mode(presentation_mode),
             final_review=final_review,
         )
+
+    async def _attempt_presentation_revision_after_final_review(
+        self,
+        *,
+        execution_mode: str,
+        state: PlanExecutionState,
+        question: str,
+        context: dict[str, Any],
+        diagnostics: dict[str, Any],
+        final_review: FinalReviewDecision,
+    ) -> MetaControllerRun | None:
+        revision_context = self._presentation_revision_context(final_review)
+        revised_final = await self._present(
+            question=question,
+            context={
+                **state.context,
+                **context,
+                **revision_context,
+                "step_results": state.step_results_payload(),
+                "plan": state.current_plan.model_dump(mode="json"),
+            },
+            mode="final",
+        )
+        revised_answer_package = self._build_presented_answer_package(
+            state=state,
+            presented_final=revised_final,
+        )
+        revised_review = await self._review_final_answer(
+            question=question,
+            state=state,
+            answer_package=revised_answer_package,
+        )
+        if revised_review is None or revised_review.action == FinalReviewAction.approve:
+            return self._build_run(
+                execution_mode=execution_mode,
+                state=state,
+                final=revised_final,
+                diagnostics={
+                    **diagnostics,
+                    "stop_reason": "final_review_presentation_revision",
+                },
+                status="completed",
+                final_review=revised_review or final_review,
+            )
+        if revised_review.action == FinalReviewAction.ask_clarification:
+            clarification_question = str(revised_review.clarification_question or "").strip() or revised_review.rationale
+            return await self._finish_with_mode(
+                execution_mode=execution_mode,
+                state=state,
+                question=question,
+                context={**context, "clarification_question": clarification_question},
+                presentation_mode="clarification",
+                diagnostics={
+                    **diagnostics,
+                    "stop_reason": "final_review_clarification_after_presentation_revision",
+                    "final_review": revised_review.model_dump(mode="json"),
+                },
+                final_review=revised_review,
+            )
+        if revised_review.action == FinalReviewAction.abort:
+            return await self._finish_with_mode(
+                execution_mode=execution_mode,
+                state=state,
+                question=question,
+                context={**context, "error": revised_review.rationale},
+                presentation_mode="failure",
+                diagnostics={
+                    **diagnostics,
+                    "stop_reason": "final_review_abort_after_presentation_revision",
+                    "final_review": revised_review.model_dump(mode="json"),
+                },
+                final_review=revised_review,
+            )
+        return None
 
     async def _finish_iteration_exhausted(
         self,
@@ -945,11 +1535,15 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             return None
         evidence = answer_package.get("evidence")
         result = answer_package.get("result")
-        research = {
-            key: value
-            for key, value in answer_package.items()
-            if key in {"sources", "findings", "follow_ups", "synthesis"}
-        }
+        research = (
+            dict(answer_package.get("research"))
+            if isinstance(answer_package.get("research"), dict)
+            else {
+                key: value
+                for key, value in answer_package.items()
+                if key in {"sources", "findings", "follow_ups", "synthesis"}
+            }
+        )
         task = AgentTask(
             task_id="final-review",
             task_kind=AgentTaskKind.orchestration,
@@ -1011,6 +1605,38 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             "answer": answer,
         }
         return {key: value for key, value in package.items() if value is not None}
+
+    @staticmethod
+    def _build_presented_answer_package(
+        *,
+        state: PlanExecutionState,
+        presented_final: dict[str, Any],
+    ) -> dict[str, Any]:
+        latest_output = state.latest_record.result.output if state.latest_record is not None else {}
+        if not isinstance(latest_output, dict):
+            latest_output = {}
+        package = dict(latest_output)
+        for key, value in presented_final.items():
+            if value is not None:
+                package[key] = value
+        answer = package.get("answer") or package.get("analysis") or package.get("summary") or ""
+        package["answer"] = answer
+        return {key: value for key, value in package.items() if value is not None}
+
+    @staticmethod
+    def _presentation_revision_context(final_review: FinalReviewDecision) -> dict[str, Any]:
+        revision_request = {
+            "reason_code": final_review.reason_code.value,
+            "rationale": final_review.rationale,
+            "issues": list(final_review.issues),
+            **final_review.updated_context,
+        }
+        return {
+            "presentation_revision_request": revision_request,
+            "final_review_rationale": final_review.rationale,
+            "final_review_issues": list(final_review.issues),
+            **final_review.updated_context,
+        }
 
     @staticmethod
     def _execution_mode_from_plan(*, plan: ExecutionPlan, requested_mode: str) -> str | None:

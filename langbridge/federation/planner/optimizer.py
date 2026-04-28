@@ -76,13 +76,19 @@ class FederatedOptimizer:
             _binding_requires_logical_name_rewrite(virtual_dataset.tables[table.table_key])
             for table in logical_plan.tables.values()
         )
-        requires_cross_dialect_rewrite = any(
-            _normalize_dialect(source_dialects.get(table.source_id)) != _normalize_dialect(input_dialect)
+        requires_cross_dialect_transpile = any(
+            _normalize_dialect(source_dialects.get(table.source_id, input_dialect))
+            != _normalize_dialect(input_dialect)
             for table in logical_plan.tables.values()
         )
         single_source_id = next(iter(distinct_sources)) if len(distinct_sources) == 1 else None
+        single_source_target_dialect = (
+            source_dialects.get(single_source_id, input_dialect)
+            if single_source_id is not None
+            else input_dialect
+        )
         single_source_capabilities = (
-            source_capabilities.get(single_source_id, SourceCapabilities())
+            source_capabilities.get(single_source_id)
             if single_source_id is not None
             else None
         )
@@ -97,6 +103,11 @@ class FederatedOptimizer:
         has_filter = where_expr is not None
         has_limit = logical_plan.limit is not None
         has_aggregation = bool(logical_plan.group_by_sql or logical_plan.having_sql) or expression.find(exp.AggFunc) is not None
+        cross_dialect_block_reason = _cross_dialect_full_query_block_reason(
+            expression=expression,
+            input_dialect=input_dialect,
+            target_dialect=single_source_target_dialect,
+        )
         pushdown_reasons = _full_query_pushdown_reasons(
             distinct_source_count=len(distinct_sources),
             has_cte=logical_plan.has_cte,
@@ -106,7 +117,7 @@ class FederatedOptimizer:
             requires_logical_name_rewrite=(
                 requires_logical_name_rewrite and not can_remote_rewrite_full_query
             ),
-            requires_cross_dialect_rewrite=requires_cross_dialect_rewrite,
+            cross_dialect_block_reason=cross_dialect_block_reason,
             has_join=has_join,
             has_filter=has_filter,
             has_aggregation=has_aggregation,
@@ -158,7 +169,11 @@ class FederatedOptimizer:
                                 if can_remote_rewrite_full_query and (
                                     requires_physical_name_rewrite or requires_logical_name_rewrite
                                 )
-                                else "Single-source query can execute remotely without local rewrite."
+                                else (
+                                    "Single-source query can execute remotely after transpiling to the source dialect."
+                                    if requires_cross_dialect_transpile
+                                    else "Single-source query can execute remotely without local rewrite."
+                                )
                             ),
                         ),
                         filter=PushdownDecision(
@@ -646,7 +661,59 @@ def _rewrite_expression_for_full_query_pushdown(
         for alias, table in logical_plan.tables.items()
     }
 
+    def _column_alias(node: exp.Column) -> str | None:
+        table_name = str(node.table or "").strip().lower()
+        if not table_name:
+            return None
+        schema_name = str(node.db or "").strip().lower() or None
+        catalog_name = str(node.catalog or "").strip().lower() or None
+
+        for alias, binding in bindings_by_alias.items():
+            metadata = binding.metadata if isinstance(getattr(binding, "metadata", None), dict) else {}
+            physical_catalog = metadata.get("physical_catalog", binding.catalog)
+            physical_schema = metadata.get("physical_schema", binding.schema_name)
+            physical_table = metadata.get("physical_table", binding.table)
+
+            valid_tables = {
+                str(alias).strip().lower(),
+                str(binding.table_key).strip().lower(),
+                str(binding.table).strip().lower(),
+                str(physical_table).strip().lower(),
+                str(metadata.get("dataset_alias") or "").strip().lower(),
+            }
+            if table_name not in {value for value in valid_tables if value}:
+                continue
+
+            valid_schemas = {
+                str(schema).strip().lower()
+                for schema in (binding.schema_name, physical_schema)
+                if str(schema).strip()
+            }
+            if schema_name is not None and valid_schemas and schema_name not in valid_schemas:
+                continue
+
+            valid_catalogs = {
+                str(catalog).strip().lower()
+                for catalog in (binding.catalog, physical_catalog)
+                if str(catalog).strip()
+            }
+            if catalog_name is not None and valid_catalogs and catalog_name not in valid_catalogs:
+                continue
+
+            return alias
+        return None
+
     def _replace(node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.Column):
+            alias = _column_alias(node)
+            if alias is None:
+                return node
+            rewritten = node.copy()
+            rewritten.set("table", exp.Identifier(this=alias, quoted=False))
+            rewritten.set("db", None)
+            rewritten.set("catalog", None)
+            return rewritten
+
         if not isinstance(node, exp.Table):
             return node
 
@@ -684,7 +751,7 @@ def _full_query_pushdown_reasons(
     has_cte: bool,
     requires_physical_name_rewrite: bool,
     requires_logical_name_rewrite: bool,
-    requires_cross_dialect_rewrite: bool,
+    cross_dialect_block_reason: str | None,
     has_join: bool,
     has_filter: bool,
     has_aggregation: bool,
@@ -700,8 +767,8 @@ def _full_query_pushdown_reasons(
         reasons.append("Local rewrite is required to map logical tables to physical relations.")
     if requires_logical_name_rewrite:
         reasons.append("Local rewrite is required to preserve runtime dataset aliases.")
-    if requires_cross_dialect_rewrite:
-        reasons.append("Dialect mismatch requires local rewrite before execution.")
+    if cross_dialect_block_reason:
+        reasons.append(cross_dialect_block_reason)
     if source_capabilities is None:
         return _dedupe_reasons(reasons)
     if has_filter and not source_capabilities.pushdown_filter:
@@ -715,6 +782,32 @@ def _full_query_pushdown_reasons(
     if has_join and not source_capabilities.pushdown_join:
         reasons.append("Unsupported connector/source capability: join pushdown is unavailable.")
     return _dedupe_reasons(reasons)
+
+
+def _cross_dialect_full_query_block_reason(
+    *,
+    expression: exp.Expression,
+    input_dialect: str,
+    target_dialect: str,
+) -> str | None:
+    if _normalize_dialect(input_dialect) == _normalize_dialect(target_dialect):
+        return None
+
+    anonymous_functions = sorted(
+        {
+            str(function.name or "").strip().upper()
+            for function in expression.find_all(exp.Anonymous)
+            if str(function.name or "").strip()
+        }
+    )
+    if not anonymous_functions:
+        return None
+
+    functions = ", ".join(anonymous_functions)
+    return (
+        "Local rewrite is required because cross-dialect full-query pushdown contains "
+        f"unrecognized function(s) that may not run on the source dialect: {functions}."
+    )
 
 
 def _dedupe_reasons(reasons: list[str]) -> list[str]:

@@ -533,6 +533,28 @@ pre {
   background: var(--shell-bg);
 }
 
+.app-shell.chat-route .shell-main {
+  background: var(--chat-canvas);
+}
+
+.app-shell.chat-route .page-shell {
+  min-height: calc(100vh - 48px);
+}
+
+.app-shell.chat-route .thread-agent-select,
+.app-shell.chat-route .thread-mode-select {
+  border-color: var(--chat-border);
+  background-color: var(--chat-panel-strong);
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+.app-shell.chat-route .thread-agent-select option,
+.app-shell.chat-route .thread-mode-select option {
+  background-color: var(--chat-panel-strong);
+  color: var(--text-primary);
+}
+
 .shell-header,
 .panel,
 .hero-panel,
@@ -2947,10 +2969,205 @@ pre {
   gap: 24px;
 }
 
+.chat-home-shell--assistant {
+  width: min(100%, 1180px);
+  gap: 26px;
+  min-height: calc(100vh - 112px);
+  padding: 10px 0 28px;
+}
+
+.chat-home-assistant-stage {
+  position: relative;
+  display: grid;
+  min-height: calc(100vh - 270px);
+  align-items: center;
+  padding: clamp(36px, 7vh, 88px) 0 18px;
+}
+
+.chat-home-assistant-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chat-home-assistant-center {
+  width: min(100%, 820px);
+  display: grid;
+  gap: 22px;
+  justify-self: center;
+}
+
+.chat-home-copy--assistant {
+  justify-items: center;
+  max-width: 100%;
+  text-align: center;
+}
+
+.chat-home-kicker {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--chat-border);
+  border-radius: 999px;
+  background: var(--chat-panel);
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.chat-home-copy--assistant h2 {
+  font-size: clamp(2.25rem, 6vw, 4rem);
+  line-height: 1.04;
+}
+
+.chat-home-copy--assistant .chat-home-copy-text {
+  max-width: 560px;
+  font-size: 1rem;
+}
+
+.chat-home-assistant-composer {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--chat-border) 82%, transparent);
+  border-radius: 30px;
+  background: var(--chat-panel-strong);
+  box-shadow: 0 22px 64px -50px rgba(15, 23, 42, 0.55);
+}
+
+.chat-home-assistant-input {
+  width: 100%;
+  min-height: 86px;
+  max-height: 220px;
+  resize: none;
+  padding: 14px 16px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 1.02rem;
+  line-height: 1.62;
+  outline: none;
+}
+
+.chat-home-assistant-input::placeholder {
+  color: color-mix(in srgb, var(--text-muted) 76%, transparent);
+}
+
+.chat-home-assistant-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.chat-home-assistant-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.chat-home-control-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 5px 4px 12px;
+  border: 1px solid var(--chat-border);
+  border-radius: 999px;
+  background: var(--chat-panel-strong);
+}
+
+.chat-home-control-pill span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.chat-home-control-pill .thread-agent-select {
+  min-height: 28px;
+  max-width: 220px;
+  padding: 0 28px 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background-color: var(--chat-panel);
+  box-shadow: none;
+}
+
+.chat-home-mode-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.chat-home-assistant-submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.chat-home-selected-mode {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.chat-home-send-button {
+  width: 42px;
+  height: 42px;
+}
+
+.chat-home-suggestion-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.chat-home-suggestion {
+  min-height: 74px;
+  padding: 13px 14px;
+  border: 1px solid color-mix(in srgb, var(--chat-border) 78%, transparent);
+  border-radius: 20px;
+  background: var(--chat-panel);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.chat-home-suggestion:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+  background: var(--chat-panel-strong);
+  color: var(--text-primary);
+}
+
+.chat-home-suggestion:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .chat-home-hero,
 .chat-home-section,
-.thread-chat-stage,
-.thread-chat-rename {
+.thread-chat-stage {
   border: 1px solid var(--chat-border);
   border-radius: 30px;
   background: var(--chat-panel);
@@ -3155,6 +3372,11 @@ pre {
   margin: 0 auto;
 }
 
+.chat-home-history--assistant {
+  width: min(100%, 980px);
+  padding-top: 4px;
+}
+
 .chat-home-history-head {
   display: flex;
   align-items: center;
@@ -3169,6 +3391,12 @@ pre {
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+}
+
+.chat-home-history-head p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.84rem;
 }
 
 .chat-home-history-strip {
@@ -3189,6 +3417,13 @@ pre {
   color: var(--text-primary);
   text-align: left;
   transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.chat-home-history--assistant .chat-home-history-item {
+  min-width: 240px;
+  border-radius: 18px;
+  background: var(--chat-panel);
+  box-shadow: none;
 }
 
 .chat-home-history-item:hover {
@@ -3337,14 +3572,126 @@ pre {
   padding: 4px 6px 0;
 }
 
+.thread-chat-header--modern {
+  position: sticky;
+  top: 0;
+  z-index: 9;
+  align-items: center;
+  padding: 10px 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--chat-border) 70%, transparent);
+  background: color-mix(in srgb, var(--chat-canvas) 94%, transparent);
+  backdrop-filter: blur(20px);
+}
+
 .thread-chat-title {
   display: grid;
   gap: 6px;
   max-width: 760px;
 }
 
+.thread-chat-title--modern {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1 1 auto;
+  max-width: min(100%, 760px);
+}
+
 .thread-chat-title h1 {
   font-size: clamp(1.35rem, 2.4vw, 1.9rem);
+}
+
+.thread-chat-title--modern h1 {
+  overflow: hidden;
+  max-width: 100%;
+  font-size: 1rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-chat-title--modern p {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-title-edit-form {
+  display: grid;
+  grid-template-columns: minmax(140px, 420px) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.thread-title-edit-input {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--chat-border);
+  border-radius: 14px;
+  background: var(--chat-panel-strong);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  outline: none;
+}
+
+.thread-title-edit-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--chat-border));
+  box-shadow: var(--focus-ring);
+}
+
+.thread-title-edit-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--chat-border);
+  border-radius: 999px;
+  background: var(--chat-panel);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.thread-title-edit-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+  background: var(--chat-subtle-bg);
+}
+
+.thread-title-edit-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.thread-title-edit-error {
+  grid-column: 1 / -1;
+  color: var(--danger);
+  font-size: 0.78rem;
+}
+
+.thread-status-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--success);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--success) 14%, transparent);
+}
+
+.thread-status-dot.pending {
+  background: var(--accent);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 16%, transparent);
+  animation: thread-progress-pulse 1.6s ease-in-out infinite;
 }
 
 .thread-chat-actions,
@@ -3355,13 +3702,20 @@ pre {
   flex-wrap: wrap;
 }
 
-.thread-chat-rename,
-.thread-chat-stage {
-  width: 100%;
+.thread-chat-actions--modern {
+  justify-content: flex-end;
+  flex: 0 0 auto;
 }
 
-.thread-chat-rename {
-  padding: 24px;
+.ghost-button.compact {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+}
+
+.thread-chat-stage {
+  width: 100%;
 }
 
 .thread-chat-stage {
@@ -3371,8 +3725,22 @@ pre {
   background: var(--chat-canvas);
 }
 
+.thread-detail-shell--chat .thread-chat-stage {
+  min-height: calc(100vh - 130px);
+  padding: 12px 0 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .thread-chat-context {
   padding: 0;
+}
+
+.thread-detail-shell--chat .thread-chat-context {
+  width: min(100%, 880px);
+  justify-content: center;
+  margin: 0 auto;
 }
 
 .thread-chat-context .chip {
@@ -3389,13 +3757,18 @@ pre {
   padding-right: 0;
 }
 
+.thread-transcript-scroll--chat {
+  width: min(100%, 920px);
+  margin: 0 auto;
+}
+
 .thread-transcript-scroll--chat .conversation-turn-shell:last-child {
   scroll-margin-top: 96px;
   scroll-margin-bottom: 160px;
 }
 
 .thread-detail-shell--chat .thread-conversation-stack {
-  gap: 20px;
+  gap: 28px;
 }
 
 .thread-empty-state--chat {
@@ -3472,7 +3845,7 @@ pre {
 }
 
 .thread-detail-shell--chat .thread-assistant-shell {
-  width: min(100%, 1220px);
+  width: min(100%, 900px);
   gap: 8px;
   padding: 0;
   border: 0;
@@ -3740,6 +4113,180 @@ pre {
   margin-bottom: 0;
 }
 
+.artifact-markdown-card {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.artifact-markdown-card:first-child {
+  margin-top: 0;
+}
+
+.artifact-markdown-card:last-child {
+  margin-bottom: 0;
+}
+
+.artifact-markdown-card-head {
+  display: grid;
+  gap: 3px;
+}
+
+.artifact-markdown-card-head span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.artifact-markdown-card-head strong {
+  color: var(--text-primary);
+  font-size: 0.92rem;
+}
+
+.artifact-markdown-missing,
+.artifact-markdown-supporting {
+  margin: 14px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--chat-border);
+  border-radius: 16px;
+  background: var(--chat-subtle-bg);
+  color: var(--text-secondary);
+}
+
+.artifact-markdown-missing code {
+  color: var(--text-primary);
+}
+
+.artifact-markdown-supporting summary {
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.artifact-markdown-supporting .code-block.compact {
+  margin-top: 10px;
+}
+
+.runtime-result-artifacts {
+  padding-top: 10px;
+}
+
+.runtime-artifact-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.runtime-artifact-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  max-width: min(100%, 220px);
+  padding: 8px 12px;
+  border: 1px solid var(--chat-border);
+  border-radius: 16px;
+  background: var(--chat-panel-strong);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.runtime-artifact-button:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+  background: var(--chat-subtle-bg);
+}
+
+.runtime-artifact-button .button-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--accent-strong);
+}
+
+.runtime-artifact-button span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.runtime-artifact-button strong {
+  overflow: hidden;
+  font-size: 0.84rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-artifact-button small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-artifact-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(15, 23, 42, 0.22);
+  backdrop-filter: blur(2px);
+}
+
+.runtime-artifact-drawer {
+  width: min(100vw, 720px);
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-left: 1px solid var(--panel-border);
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 10%, transparent), transparent 36%),
+    var(--panel-bg);
+  box-shadow: -30px 0 70px -42px rgba(15, 23, 42, 0.45);
+}
+
+.runtime-artifact-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 24px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.runtime-artifact-header h3 {
+  margin: 0;
+  font-size: 1.2rem;
+  letter-spacing: -0.02em;
+}
+
+.runtime-artifact-header p:not(.eyebrow) {
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.runtime-artifact-body {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  overflow: auto;
+  padding: 22px 24px 28px;
+}
+
+.runtime-artifact-body .chart-preview,
+.runtime-artifact-body .table-wrap,
+.runtime-artifact-body .code-block.compact {
+  border-radius: 18px;
+}
+
 .thread-detail-shell--chat .runtime-result-stack--chat .diagnostics-disclosure,
 .thread-detail-shell--chat .federation-diagnostics-panel {
   padding: 0;
@@ -3751,6 +4298,18 @@ pre {
 .thread-detail-shell--chat .runtime-result-stack--chat .diagnostics-disclosure summary {
   color: var(--text-muted);
   font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.thread-detail-shell--chat .runtime-result-stack--chat .diagnostics-disclosure--supporting {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--chat-border) 72%, transparent);
+}
+
+.diagnostics-summary-meta {
+  color: var(--text-muted);
+  font-size: 0.76rem;
   font-weight: 600;
 }
 
@@ -3774,10 +4333,11 @@ pre {
   bottom: 12px;
   z-index: 8;
   gap: 12px;
-  margin-top: 4px;
+  width: min(100%, 880px);
+  margin: 8px auto 0;
   padding: 14px 16px;
   border-top: 0;
-  border-radius: 24px;
+  border-radius: 26px;
   background: color-mix(in srgb, var(--chat-input-bg) 94%, transparent);
   box-shadow:
     0 18px 48px rgba(6, 13, 22, 0.12),
@@ -3793,6 +4353,11 @@ pre {
   flex-wrap: wrap;
 }
 
+.thread-composer-meta--modern {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
 .thread-chat-agent-field--inline {
   min-width: min(100%, 200px);
   gap: 4px;
@@ -3802,6 +4367,11 @@ pre {
   min-height: 36px;
   border-radius: 12px;
   padding-block: 6px;
+  background-color: var(--chat-panel-strong);
+}
+
+.thread-chat-mode-field {
+  min-width: min(100%, 148px);
 }
 
 .thread-mode-selector {
@@ -3850,6 +4420,14 @@ pre {
   background: var(--chat-panel-strong);
 }
 
+.thread-composer-input-shell--modern {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 22px;
+}
+
 .thread-composer-utility {
   display: inline-flex;
   align-items: center;
@@ -3861,6 +4439,15 @@ pre {
   background: var(--chat-panel);
   color: var(--text-primary);
   transition: transform 140ms ease, opacity 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.thread-composer-utility--text {
+  width: auto;
+  min-width: 0;
+  gap: 7px;
+  padding: 0 12px;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .thread-composer-utility:hover:not(:disabled) {
@@ -3898,7 +4485,21 @@ pre {
   line-height: 1.4;
 }
 
-.thread-detail-shell--chat .thread-composer-input.thread-composer-input--singleline:focus {
+.thread-detail-shell--chat .thread-composer-input.thread-composer-input--textarea {
+  min-height: 42px;
+  max-height: 180px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 0.96rem;
+  line-height: 1.45;
+  resize: none;
+}
+
+.thread-detail-shell--chat .thread-composer-input.thread-composer-input--singleline:focus,
+.thread-detail-shell--chat .thread-composer-input.thread-composer-input--textarea:focus {
   box-shadow: none;
 }
 
@@ -3945,8 +4546,76 @@ pre {
     width: 100%;
   }
 
+  .chat-home-shell--assistant {
+    min-height: auto;
+    padding-top: 2px;
+  }
+
   .chat-home-minimal-stage {
     min-height: auto;
+  }
+
+  .chat-home-assistant-stage {
+    min-height: auto;
+    align-items: start;
+    padding-top: 76px;
+  }
+
+  .chat-home-assistant-actions {
+    right: auto;
+    left: 0;
+    justify-content: flex-start;
+  }
+
+  .chat-home-assistant-center {
+    width: 100%;
+  }
+
+  .chat-home-copy--assistant {
+    text-align: left;
+    justify-items: start;
+  }
+
+  .chat-home-copy--assistant h2 {
+    font-size: clamp(2rem, 11vw, 3rem);
+  }
+
+  .chat-home-assistant-composer {
+    border-radius: 24px;
+  }
+
+  .chat-home-assistant-toolbar,
+  .chat-home-assistant-controls {
+    align-items: stretch;
+  }
+
+  .chat-home-assistant-controls,
+  .chat-home-mode-selector,
+  .chat-home-control-pill {
+    width: 100%;
+  }
+
+  .chat-home-control-pill {
+    justify-content: space-between;
+  }
+
+  .chat-home-control-pill .thread-agent-select {
+    max-width: min(100%, 240px);
+  }
+
+  .chat-home-mode-selector {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .chat-home-assistant-submit {
+    width: 100%;
+    justify-content: space-between;
+    margin-left: 0;
+  }
+
+  .chat-home-suggestion-grid {
+    grid-template-columns: 1fr;
   }
 
   .chat-home-grid {
@@ -3955,12 +4624,12 @@ pre {
 
   .chat-home-hero,
   .chat-home-section,
-  .thread-chat-stage,
-  .thread-chat-rename {
+  .thread-chat-stage {
     padding: 22px;
   }
 
   .chat-home-minimal-center,
+  .chat-home-assistant-center,
   .chat-home-history {
     width: 100%;
   }
@@ -3977,6 +4646,15 @@ pre {
   .chat-home-history-head {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .thread-chat-header--modern {
+    align-items: stretch;
+  }
+
+  .thread-title-edit-form {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    width: 100%;
   }
 
   .chat-home-starters--minimal {
@@ -3996,6 +4674,23 @@ pre {
 
   .thread-mode-selector {
     width: 100%;
+  }
+
+  .runtime-artifact-overlay {
+    align-items: flex-end;
+  }
+
+  .runtime-artifact-drawer {
+    width: 100%;
+    height: min(88vh, 760px);
+    border-left: 0;
+    border-top: 1px solid var(--panel-border);
+    border-radius: 24px 24px 0 0;
+  }
+
+  .runtime-artifact-header,
+  .runtime-artifact-body {
+    padding-inline: 18px;
   }
 }
 
@@ -4129,6 +4824,44 @@ pre {
   line-height: 1.6;
 }
 
+.diagnostics-sql-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.diagnostics-sql-list h5 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.diagnostics-sql-item {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background: var(--panel-bg);
+}
+
+.diagnostics-sql-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.diagnostics-sql-meta strong {
+  color: var(--text-primary);
+  font-size: 0.88rem;
+}
+
+.diagnostics-sql-meta span {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
 .diagnostics-inline-note {
   margin: 12px 0 0;
   color: var(--text-secondary);
@@ -4137,6 +4870,8 @@ pre {
 
 .diagnostics-inline-actions {
   display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
   justify-content: flex-start;
   margin-top: 12px;
 }
@@ -5118,16 +5853,20 @@ pre {
 .chart-panel {
   --chart-primary: var(--accent);
   --chart-secondary: var(--accent-strong);
+  --chart-tertiary: var(--warm);
   display: grid;
   gap: 18px;
-  padding: 20px;
-  border: 1px solid color-mix(in srgb, var(--chart-primary) 14%, var(--panel-border));
+  padding: 22px;
+  border: 1px solid color-mix(in srgb, var(--chart-primary) 18%, var(--panel-border));
   border-radius: 24px;
   background:
-    radial-gradient(circle at top right, color-mix(in srgb, var(--chart-primary) 14%, transparent), transparent 36%),
-    radial-gradient(circle at bottom left, color-mix(in srgb, var(--chart-secondary) 10%, transparent), transparent 34%),
-    linear-gradient(180deg, color-mix(in srgb, var(--panel-bg) 94%, white 6%), var(--panel-alt));
-  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
+    radial-gradient(circle at top right, color-mix(in srgb, var(--chart-primary) 16%, transparent), transparent 34%),
+    radial-gradient(circle at bottom left, color-mix(in srgb, var(--chart-secondary) 11%, transparent), transparent 32%),
+    radial-gradient(circle at 18% 22%, color-mix(in srgb, var(--chart-tertiary) 8%, transparent), transparent 30%),
+    linear-gradient(180deg, color-mix(in srgb, var(--panel-bg) 95%, white 5%), var(--panel-alt));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 12%, transparent),
+    0 16px 38px rgba(15, 23, 42, 0.08);
 }
 
 .chart-panel-header {
@@ -5139,7 +5878,8 @@ pre {
 
 .chart-panel-header h3 {
   margin: 0 0 4px;
-  font-size: 0.98rem;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
 }
 
 .chart-panel-header p {
@@ -5152,8 +5892,10 @@ pre {
 .chart-kind {
   padding: 7px 11px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--chart-primary) 18%, var(--panel-border));
-  background: color-mix(in srgb, var(--chart-primary) 8%, var(--chip-bg));
+  border: 1px solid color-mix(in srgb, var(--chart-primary) 20%, var(--panel-border));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--chart-primary) 10%, transparent), transparent),
+    color-mix(in srgb, var(--chart-primary) 8%, var(--chip-bg));
   color: var(--text-primary);
   font-size: 0.76rem;
   font-weight: 700;
@@ -5177,20 +5919,31 @@ pre {
   overflow: visible;
 }
 
-.chart-grid-line {
-  stroke: color-mix(in srgb, var(--chart-primary) 10%, var(--separator-border));
+.chart-plot-backdrop {
+  fill: color-mix(in srgb, var(--chart-primary) 4%, var(--panel-bg));
+}
+
+.chart-plot-frame {
+  fill: none;
+  stroke: color-mix(in srgb, var(--chart-primary) 11%, var(--separator-border));
   stroke-width: 1;
-  stroke-dasharray: 4 8;
+}
+
+.chart-grid-line {
+  stroke: color-mix(in srgb, var(--chart-primary) 11%, var(--separator-border));
+  stroke-width: 1;
+  stroke-dasharray: 3 9;
 }
 
 .chart-axis-line {
-  stroke: color-mix(in srgb, var(--chart-primary) 18%, var(--border-strong));
+  stroke: color-mix(in srgb, var(--chart-primary) 22%, var(--border-strong));
   stroke-width: 1.25;
 }
 
 .chart-axis-tick {
   fill: var(--text-muted);
   font-size: 11px;
+  font-weight: 600;
 }
 
 .chart-axis-tick--x {
@@ -5218,7 +5971,9 @@ pre {
   padding: 0 12px;
   border: 1px solid var(--panel-border);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--panel-bg) 94%, white 6%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, white 6%, transparent), transparent),
+    color-mix(in srgb, var(--panel-bg) 94%, white 6%);
   cursor: pointer;
   font: inherit;
   transition: transform 140ms ease, border-color 140ms ease, background 140ms ease, opacity 140ms ease;
@@ -5267,7 +6022,9 @@ pre {
   padding: 12px 14px;
   border: 1px solid color-mix(in srgb, var(--chart-tooltip-accent) 36%, rgba(255, 255, 255, 0.1));
   border-radius: 16px;
-  background: rgba(15, 23, 42, 0.92);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--chart-tooltip-accent) 8%, rgba(255, 255, 255, 0.02)), rgba(15, 23, 42, 0.94)),
+    rgba(15, 23, 42, 0.92);
   color: white;
   box-shadow: 0 16px 36px rgba(15, 23, 42, 0.24);
   transform: translate(-50%, calc(-100% - 14px));
@@ -5322,7 +6079,11 @@ pre {
 
 .chart-bar-mark,
 .chart-line-path,
+.chart-line-underlay,
+.chart-area-path,
+.chart-point-halo,
 .chart-point-mark,
+.chart-scatter-halo,
 .chart-scatter-mark,
 .chart-pie-slice {
   cursor: pointer;
@@ -5332,15 +6093,33 @@ pre {
 .chart-bar-mark:hover,
 .chart-point-mark:hover,
 .chart-scatter-mark:hover {
-  filter: brightness(1.04);
+  filter: brightness(1.04) drop-shadow(0 8px 18px color-mix(in srgb, var(--chart-primary) 16%, transparent));
 }
 
 .chart-line-path:hover {
   filter: drop-shadow(0 4px 10px color-mix(in srgb, var(--chart-primary) 22%, transparent));
 }
 
+.chart-line-underlay {
+  filter: blur(0.6px);
+}
+
+.chart-area-path {
+  transition: opacity 140ms ease, filter 140ms ease;
+}
+
+.chart-area-path--line {
+  filter: saturate(1.1);
+}
+
+.chart-point-halo,
+.chart-scatter-halo {
+  pointer-events: none;
+}
+
 .chart-pie-slice {
   transform-origin: 140px 140px;
+  filter: drop-shadow(0 10px 20px color-mix(in srgb, var(--chart-primary) 8%, transparent));
 }
 
 .chart-pie-slice:hover {
@@ -5360,10 +6139,31 @@ pre {
   align-items: center;
 }
 
+.chart-pie-shell {
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--chart-primary) 12%, var(--panel-border));
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 50% 32%, color-mix(in srgb, var(--chart-primary) 10%, transparent), transparent 54%),
+    linear-gradient(180deg, color-mix(in srgb, var(--panel-bg) 96%, white 4%), var(--panel-alt));
+}
+
 .chart-pie {
   width: 100%;
   max-width: 280px;
   justify-self: center;
+}
+
+.chart-pie-glow {
+  pointer-events: none;
+}
+
+.chart-pie-ring-shell {
+  fill: color-mix(in srgb, var(--chart-primary) 4%, var(--panel-bg));
+  stroke: color-mix(in srgb, var(--chart-primary) 10%, var(--panel-border));
+  stroke-width: 1;
 }
 
 .chart-donut-total-label {
@@ -5378,6 +6178,12 @@ pre {
   fill: var(--text-primary);
   font-size: 24px;
   font-weight: 700;
+}
+
+.chart-pie-inner-ring {
+  fill: color-mix(in srgb, var(--panel-bg) 96%, white 4%);
+  stroke: color-mix(in srgb, var(--chart-primary) 12%, var(--panel-border));
+  stroke-width: 1;
 }
 
 .chart-pie-legend {
@@ -5402,7 +6208,9 @@ pre {
   padding: 10px 12px;
   border: 1px solid var(--panel-border);
   border-radius: 16px;
-  background: color-mix(in srgb, var(--panel-bg) 96%, white 4%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, white 5%, transparent), transparent),
+    color-mix(in srgb, var(--panel-bg) 96%, white 4%);
   cursor: pointer;
   font: inherit;
   text-align: left;
@@ -5436,6 +6244,7 @@ pre {
   width: 12px;
   height: 12px;
   border-radius: 999px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--chart-primary) 8%, transparent);
 }
 
 .chart-stat-card {
@@ -5446,7 +6255,9 @@ pre {
   border-radius: 20px;
   background:
     radial-gradient(circle at top right, color-mix(in srgb, var(--chart-primary) 12%, transparent), transparent 40%),
+    radial-gradient(circle at bottom left, color-mix(in srgb, var(--chart-tertiary) 8%, transparent), transparent 34%),
     linear-gradient(180deg, color-mix(in srgb, var(--panel-bg) 95%, white 5%), var(--panel-alt));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
 }
 
 .chart-stat-label {

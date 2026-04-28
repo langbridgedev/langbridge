@@ -1,16 +1,16 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { resolveChartDataKey } from "../lib/chartFieldMapping";
 import { formatValue } from "../lib/format";
 import { normalizeChartType } from "../lib/runtimeUi";
 
 const DEFAULT_PALETTE = [
-  "#10a37f",
-  "#0f8f6c",
-  "#3b82f6",
+  "#d97706",
+  "#dc2626",
+  "#7c3aed",
+  "#0891b2",
+  "#16a34a",
   "#f59e0b",
-  "#ef4444",
-  "#8b5cf6",
 ];
 
 function toColumnName(column, index) {
@@ -74,6 +74,64 @@ function truncateLabel(value, limit = 18) {
   return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
+function normalizeLabelPhrase(value) {
+  return String(value || "")
+    .replaceAll("__", " ")
+    .replaceAll("_", " ")
+    .replaceAll("-", " ")
+    .replaceAll(".", " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function toDisplayLabel(value, { stripMeasurePrefix = false } = {}) {
+  let label = normalizeLabelPhrase(value);
+  if (stripMeasurePrefix) {
+    label = label.replace(/^(monthly|total|sum|avg|average)\s+/, "");
+  }
+  return label.replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function columnMatchPhrases(key) {
+  const raw = String(key || "").trim();
+  const tail = raw.split("__").pop().split(".").pop();
+  const normalized = normalizeLabelPhrase(raw);
+  const normalizedTail = normalizeLabelPhrase(tail);
+  const strippedTail = normalizedTail.replace(/^(monthly|total|sum|avg|average)\s+/, "");
+  return [normalized, normalizedTail, strippedTail].filter(Boolean);
+}
+
+function supportsMultipleMeasureChart(chartType) {
+  return ["bar", "stacked-bar", "line", "area"].includes(String(chartType || "").trim());
+}
+
+function expandRequestedMeasureKeys({
+  records,
+  measureKeys,
+  chartType,
+  contextText,
+  excludeKeys = [],
+}) {
+  if (!supportsMultipleMeasureChart(chartType) || !contextText || measureKeys.length === 0) {
+    return measureKeys;
+  }
+  const normalizedContext = ` ${normalizeLabelPhrase(contextText)} `;
+  const rowKeys = records[0] ? Object.keys(records[0]) : [];
+  const requestedKeys = rowKeys.filter((key) => {
+    if (excludeKeys.includes(key) || !records.some((record) => toNumber(record?.[key]) !== null)) {
+      return false;
+    }
+    return columnMatchPhrases(key).some((phrase) => normalizedContext.includes(` ${phrase} `));
+  });
+  if (requestedKeys.length <= 1) {
+    return measureKeys;
+  }
+  return [...requestedKeys, ...measureKeys].filter(
+    (key, index, collection) => collection.indexOf(key) === index,
+  );
+}
+
 function inferDimensionKey({ records, metadata, preferredDimension, excludeKeys = [] }) {
   const rowKeys = records[0] ? Object.keys(records[0]) : [];
   const fallbackKey =
@@ -105,7 +163,8 @@ function inferMeasureKeys({ records, metadata, preferredMeasures = [], excludeKe
     )
     .filter(Boolean)
     .filter((key, index, collection) => collection.indexOf(key) === index)
-    .filter((key) => !excludeKeys.includes(key));
+    .filter((key) => !excludeKeys.includes(key))
+    .filter((key) => records.some((record) => toNumber(record?.[key]) !== null));
 
   if (resolved.length > 0) {
     return resolved;
@@ -137,6 +196,18 @@ function inferNumericKey({ records, metadata, preferredKey, excludeKeys = [] }) 
 
 function buildSeriesPalette(themeColors = []) {
   return themeColors.length > 0 ? themeColors : DEFAULT_PALETTE;
+}
+
+function toSvgIdFragment(value) {
+  return String(value || "chart").replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+function buildChartShellStyle(palette) {
+  return {
+    "--chart-primary": palette[0],
+    "--chart-secondary": palette[1] || palette[0],
+    "--chart-tertiary": palette[2] || palette[0],
+  };
 }
 
 function readChartLimit(chartType) {
@@ -222,7 +293,7 @@ function aggregateCategorySeries({
 
   const series = seriesOrder.map((key, index) => ({
     key,
-    label: key,
+    label: toDisplayLabel(key, { stripMeasurePrefix: true }),
     color: index,
     values: categories.map((category) => Number(matrix.get(category)?.[key] || 0)),
   }));
@@ -401,7 +472,7 @@ function ChartLegend({
 function AxisLabels({ xLabel, yLabel }) {
   return (
     <div className="chart-axis-labels">
-      <span>X: {truncateLabel(xLabel, 40)}</span>
+      <span>X: {truncateLabel(toDisplayLabel(xLabel), 40)}</span>
       <span>Y: {truncateLabel(yLabel, 40)}</span>
     </div>
   );
@@ -410,6 +481,7 @@ function AxisLabels({ xLabel, yLabel }) {
 function BarLikeChart({
   model,
   palette,
+  chartId,
   chartType,
   xLabel,
   yLabel,
@@ -444,6 +516,37 @@ function BarLikeChart({
   return (
     <div className="chart-canvas-shell">
       <svg className="chart-canvas" viewBox={`0 0 ${width} ${height}`} role="img">
+        <defs>
+          {model.series.map((series, seriesIndex) => (
+            <linearGradient
+              key={`${series.key}-bar-gradient`}
+              id={`${chartId}-bar-gradient-${seriesIndex}`}
+              x1="0%"
+              y1="0%"
+              x2="0%"
+              y2="100%"
+            >
+              <stop offset="0%" stopColor={palette[seriesIndex % palette.length]} stopOpacity="1" />
+              <stop offset="100%" stopColor={palette[seriesIndex % palette.length]} stopOpacity="0.62" />
+            </linearGradient>
+          ))}
+        </defs>
+        <rect
+          x={padding.left}
+          y={padding.top}
+          width={chartWidth}
+          height={chartHeight}
+          rx="24"
+          className="chart-plot-backdrop"
+        />
+        <rect
+          x={padding.left}
+          y={padding.top}
+          width={chartWidth}
+          height={chartHeight}
+          rx="24"
+          className="chart-plot-frame"
+        />
         {tickValues.map((tick) => {
           const y = padding.top + chartHeight - chartHeight * tick;
           return (
@@ -490,7 +593,10 @@ function BarLikeChart({
                       width={groupWidth}
                       height={Math.max(barHeight, 2)}
                       rx="10"
-                      fill={palette[seriesIndex % palette.length]}
+                      fill={`url(#${chartId}-bar-gradient-${seriesIndex})`}
+                      stroke={palette[seriesIndex % palette.length]}
+                      strokeOpacity="0.24"
+                      strokeWidth="1"
                       className="chart-bar-mark"
                       opacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? 0.96 : 0.2}
                       tabIndex={0}
@@ -504,7 +610,10 @@ function BarLikeChart({
                             eyebrow: series.label,
                             title: category,
                             value: formatValue(value),
-                            details: [`${xLabel}: ${category}`, `${yLabel}: ${formatValue(value)}`],
+                            details: [
+                              `${toDisplayLabel(xLabel)}: ${category}`,
+                              `${series.label}: ${formatValue(value)}`,
+                            ],
                             color: palette[seriesIndex % palette.length],
                           }),
                         )
@@ -520,7 +629,10 @@ function BarLikeChart({
                             eyebrow: series.label,
                             title: category,
                             value: formatValue(value),
-                            details: [`${xLabel}: ${category}`, `${yLabel}: ${formatValue(value)}`],
+                            details: [
+                              `${toDisplayLabel(xLabel)}: ${category}`,
+                              `${series.label}: ${formatValue(value)}`,
+                            ],
                             color: palette[seriesIndex % palette.length],
                           }),
                         )
@@ -557,7 +669,10 @@ function BarLikeChart({
                     width={Math.max(barWidth - 6, 10)}
                     height={Math.max(barHeight, 2)}
                     rx="10"
-                    fill={palette[seriesIndex % palette.length]}
+                    fill={`url(#${chartId}-bar-gradient-${seriesIndex})`}
+                    stroke={palette[seriesIndex % palette.length]}
+                    strokeOpacity="0.24"
+                    strokeWidth="1"
                     className="chart-bar-mark"
                     opacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? 0.96 : 0.2}
                     tabIndex={0}
@@ -571,7 +686,10 @@ function BarLikeChart({
                           eyebrow: series.label,
                           title: category,
                           value: formatValue(value),
-                          details: [`${xLabel}: ${category}`, `${yLabel}: ${formatValue(value)}`],
+                          details: [
+                            `${toDisplayLabel(xLabel)}: ${category}`,
+                            `${series.label}: ${formatValue(value)}`,
+                          ],
                           color: palette[seriesIndex % palette.length],
                         }),
                       )
@@ -587,7 +705,10 @@ function BarLikeChart({
                           eyebrow: series.label,
                           title: category,
                           value: formatValue(value),
-                          details: [`${xLabel}: ${category}`, `${yLabel}: ${formatValue(value)}`],
+                          details: [
+                            `${toDisplayLabel(xLabel)}: ${category}`,
+                            `${series.label}: ${formatValue(value)}`,
+                          ],
                           color: palette[seriesIndex % palette.length],
                         }),
                       )
@@ -642,6 +763,7 @@ function buildLinePath(points, { baseline = null } = {}) {
 function LineLikeChart({
   model,
   palette,
+  chartId,
   chartType,
   xLabel,
   yLabel,
@@ -679,6 +801,37 @@ function LineLikeChart({
   return (
     <div className="chart-canvas-shell">
       <svg className="chart-canvas" viewBox={`0 0 ${width} ${height}`} role="img">
+        <defs>
+          {seriesWithPoints.map((series, seriesIndex) => (
+            <linearGradient
+              key={`${series.key}-area-gradient`}
+              id={`${chartId}-area-gradient-${seriesIndex}`}
+              x1="0%"
+              y1="0%"
+              x2="0%"
+              y2="100%"
+            >
+              <stop offset="0%" stopColor={palette[seriesIndex % palette.length]} stopOpacity="0.3" />
+              <stop offset="100%" stopColor={palette[seriesIndex % palette.length]} stopOpacity="0.03" />
+            </linearGradient>
+          ))}
+        </defs>
+        <rect
+          x={padding.left}
+          y={padding.top}
+          width={chartWidth}
+          height={chartHeight}
+          rx="24"
+          className="chart-plot-backdrop"
+        />
+        <rect
+          x={padding.left}
+          y={padding.top}
+          width={chartWidth}
+          height={chartHeight}
+          rx="24"
+          className="chart-plot-frame"
+        />
         {tickValues.map((tick) => {
           const y = padding.top + chartHeight - chartHeight * tick;
           return (
@@ -719,10 +872,30 @@ function LineLikeChart({
             {chartType === "area" ? (
               <path
                 d={buildLinePath(series.points, { baseline: padding.top + chartHeight })}
-                fill={palette[seriesIndex % palette.length]}
-                fillOpacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? "0.18" : "0.04"}
+                fill={`url(#${chartId}-area-gradient-${seriesIndex})`}
                 stroke="none"
                 className="chart-area-path"
+                opacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? 1 : 0.32}
+              />
+            ) : null}
+            <path
+              d={buildLinePath(series.points)}
+              fill="none"
+              stroke={palette[seriesIndex % palette.length]}
+              strokeWidth="8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="chart-line-underlay"
+              opacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? 0.22 : 0.06}
+              pointerEvents="none"
+            />
+            {chartType !== "area" ? (
+              <path
+                d={buildLinePath(series.points, { baseline: padding.top + chartHeight })}
+                fill={`url(#${chartId}-area-gradient-${seriesIndex})`}
+                stroke="none"
+                className="chart-area-path chart-area-path--line"
+                opacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? 0.45 : 0.12}
               />
             ) : null}
             <path
@@ -742,8 +915,18 @@ function LineLikeChart({
                 <circle
                   cx={point.x}
                   cy={point.y}
+                  r={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? "8" : "6.5"}
+                  fill={palette[seriesIndex % palette.length]}
+                  fillOpacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? "0.16" : "0.06"}
+                  className="chart-point-halo"
+                />
+                <circle
+                  cx={point.x}
+                  cy={point.y}
                   r={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? "4.5" : "3.5"}
                   fill={palette[seriesIndex % palette.length]}
+                  stroke="rgba(255, 255, 255, 0.95)"
+                  strokeWidth="2"
                   opacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? 1 : 0.28}
                   className="chart-point-mark"
                 />
@@ -810,6 +993,7 @@ function ScatterChart({
   yLabel,
   groupKey,
   palette,
+  chartId,
   activeGroupKey = "",
   onDatumHover,
   onDatumLeave,
@@ -832,6 +1016,36 @@ function ScatterChart({
   return (
     <div className="chart-canvas-shell">
       <svg className="chart-canvas" viewBox={`0 0 ${width} ${height}`} role="img">
+        <defs>
+          {groups.map((group, groupIndex) => (
+            <radialGradient
+              key={`${group}-scatter-gradient`}
+              id={`${chartId}-scatter-gradient-${groupIndex}`}
+              cx="35%"
+              cy="35%"
+              r="80%"
+            >
+              <stop offset="0%" stopColor={palette[groupIndex % palette.length]} stopOpacity="1" />
+              <stop offset="100%" stopColor={palette[groupIndex % palette.length]} stopOpacity="0.64" />
+            </radialGradient>
+          ))}
+        </defs>
+        <rect
+          x={padding.left}
+          y={padding.top}
+          width={chartWidth}
+          height={chartHeight}
+          rx="24"
+          className="chart-plot-backdrop"
+        />
+        <rect
+          x={padding.left}
+          y={padding.top}
+          width={chartWidth}
+          height={chartHeight}
+          rx="24"
+          className="chart-plot-frame"
+        />
         {ticks.map((tick) => {
           const y = padding.top + chartHeight - chartHeight * tick;
           const x = padding.left + chartWidth * tick;
@@ -871,9 +1085,19 @@ function ScatterChart({
               <circle
                 cx={x}
                 cy={y}
-                r={!resolvedEmphasisKey || resolvedEmphasisKey === point.group ? "6.5" : "5"}
+                r={!resolvedEmphasisKey || resolvedEmphasisKey === point.group ? "10" : "8"}
                 fill={palette[groupIndex % palette.length]}
-                fillOpacity={!resolvedEmphasisKey || resolvedEmphasisKey === point.group ? "0.82" : "0.18"}
+                fillOpacity={!resolvedEmphasisKey || resolvedEmphasisKey === point.group ? "0.14" : "0.05"}
+                className="chart-scatter-halo"
+              />
+              <circle
+                cx={x}
+                cy={y}
+                r={!resolvedEmphasisKey || resolvedEmphasisKey === point.group ? "6.5" : "5"}
+                fill={`url(#${chartId}-scatter-gradient-${groupIndex})`}
+                stroke="rgba(255, 255, 255, 0.9)"
+                strokeWidth="1.5"
+                fillOpacity={!resolvedEmphasisKey || resolvedEmphasisKey === point.group ? "0.9" : "0.22"}
                 className="chart-scatter-mark"
               />
               <circle
@@ -968,6 +1192,7 @@ function describeDonutArc(cx, cy, outerRadius, innerRadius, startAngle, endAngle
 function PieChart({
   slices,
   palette,
+  chartId,
   chartType,
   measureKey,
   title,
@@ -989,7 +1214,19 @@ function PieChart({
 
   return (
     <div className="chart-pie-layout">
-      <svg className="chart-pie" viewBox="0 0 280 280" role="img">
+      <div className="chart-pie-shell">
+        <svg className="chart-pie" viewBox="0 0 280 280" role="img">
+          <defs>
+            <radialGradient id={`${chartId}-pie-glow`} cx="50%" cy="44%" r="62%">
+              <stop offset="0%" stopColor={palette[0]} stopOpacity="0.18" />
+              <stop offset="72%" stopColor={palette[1 % palette.length]} stopOpacity="0.06" />
+              <stop offset="100%" stopColor={palette[1 % palette.length]} stopOpacity="0" />
+            </radialGradient>
+          </defs>
+          <circle cx={cx} cy={cy} r="116" fill={`url(#${chartId}-pie-glow)`} className="chart-pie-glow" />
+          {chartType === "donut" ? (
+            <circle cx={cx} cy={cy} r={innerRadius + 18} className="chart-pie-ring-shell" />
+          ) : null}
         {slices.map((slice, index) => {
           const angle = (slice.value / total) * 360;
           const startAngle = currentAngle;
@@ -1001,6 +1238,10 @@ function PieChart({
           currentAngle = endAngle;
           const middleAngle = startAngle + angle / 2;
           const outerPoint = polarToCartesian(cx, cy, outerRadius - 12, middleAngle);
+          const emphasisOffset = resolvedEmphasisKey === slice.label ? 6 : 0;
+          const angleInRadians = ((middleAngle - 90) * Math.PI) / 180;
+          const offsetX = Math.cos(angleInRadians) * emphasisOffset;
+          const offsetY = Math.sin(angleInRadians) * emphasisOffset;
           return (
             <path
               key={slice.label}
@@ -1008,6 +1249,7 @@ function PieChart({
               fill={palette[index % palette.length]}
               opacity={!resolvedEmphasisKey || resolvedEmphasisKey === slice.label ? 0.96 : 0.22}
               className="chart-pie-slice"
+              transform={emphasisOffset ? `translate(${offsetX} ${offsetY})` : undefined}
               stroke="rgba(255,255,255,0.92)"
               strokeWidth={!resolvedEmphasisKey || resolvedEmphasisKey === slice.label ? 2 : 1}
               tabIndex={0}
@@ -1063,6 +1305,7 @@ function PieChart({
         })}
         {chartType === "donut" ? (
           <g>
+            <circle cx={cx} cy={cy} r={innerRadius - 8} className="chart-pie-inner-ring" />
             <text x={cx} y={cy - 8} textAnchor="middle" className="chart-donut-total-label">
               Total
             </text>
@@ -1071,7 +1314,8 @@ function PieChart({
             </text>
           </g>
         ) : null}
-      </svg>
+        </svg>
+      </div>
       <div className="chart-pie-legend">
         <strong>{title || "Breakdown"}</strong>
         <span>{truncateLabel(measureKey, 28)}</span>
@@ -1119,11 +1363,13 @@ export function ChartPreview({
   preferredMeasure,
   themeColors = [],
 }) {
+  const chartId = toSvgIdFragment(useId());
   const [focusedKey, setFocusedKey] = useState("");
   const [hoveredKey, setHoveredKey] = useState("");
   const [tooltip, setTooltip] = useState(null);
   const records = toRecords(result);
   const palette = buildSeriesPalette(themeColors);
+  const chartShellStyle = buildChartShellStyle(palette);
   const normalizedVisualization = visualization?.chartType
     ? visualization
     : {
@@ -1224,7 +1470,7 @@ export function ChartPreview({
         chartType={chartType}
         tooltip={tooltip}
         onPointerLeave={clearVisualInteraction}
-        style={{ "--chart-primary": palette[0], "--chart-secondary": palette[1] }}
+        style={chartShellStyle}
       >
         <ScatterChart
           points={scatterPoints}
@@ -1232,6 +1478,7 @@ export function ChartPreview({
           yLabel={yKey}
           groupKey={groupKey}
           palette={palette}
+          chartId={chartId}
           activeGroupKey={emphasisKey}
           onDatumHover={setTooltip}
           onDatumLeave={() => setTooltip(null)}
@@ -1247,10 +1494,25 @@ export function ChartPreview({
     Array.isArray(normalizedVisualization?.y) && normalizedVisualization.y.length > 0
       ? normalizedVisualization.y
       : [normalizedVisualization?.y || preferredMeasure].filter(Boolean);
-  const measureKeys = inferMeasureKeys({
+  let measureKeys = inferMeasureKeys({
     records,
     metadata: resolvedMetadata,
     preferredMeasures,
+    excludeKeys: [],
+  });
+  measureKeys = expandRequestedMeasureKeys({
+    records,
+    measureKeys,
+    chartType,
+    contextText: [
+      normalizedVisualization?.title,
+      normalizedVisualization?.subtitle,
+      normalizedVisualization?.rationale,
+      normalizedVisualization?.options?.rationale,
+      normalizedVisualization?.options?.reason,
+    ]
+      .filter(Boolean)
+      .join(" "),
     excludeKeys: [],
   });
 
@@ -1299,7 +1561,7 @@ export function ChartPreview({
         title={title || "Metric"}
         subtitle={normalizedVisualization?.subtitle}
         chartType={chartType}
-        style={{ "--chart-primary": palette[0], "--chart-secondary": palette[1] }}
+        style={chartShellStyle}
       >
         <StatCard stat={stat} title={title} />
       </ChartPanelShell>
@@ -1339,11 +1601,12 @@ export function ChartPreview({
         chartType={chartType}
         tooltip={tooltip}
         onPointerLeave={clearVisualInteraction}
-        style={{ "--chart-primary": palette[0], "--chart-secondary": palette[1] }}
+        style={chartShellStyle}
       >
         <PieChart
           slices={slices}
           palette={palette}
+          chartId={chartId}
           chartType={chartType}
           measureKey={measureKeys[0]}
           title={title}
@@ -1383,15 +1646,16 @@ export function ChartPreview({
       chartType={chartType}
       tooltip={tooltip}
       onPointerLeave={clearVisualInteraction}
-      style={{ "--chart-primary": palette[0], "--chart-secondary": palette[1] }}
+      style={chartShellStyle}
     >
       {chartType === "line" || chartType === "area" ? (
         <LineLikeChart
           model={model}
           palette={palette}
+          chartId={chartId}
           chartType={chartType}
           xLabel={dimensionKey}
-          yLabel={measureKeys.join(", ")}
+          yLabel={measureKeys.map((key) => toDisplayLabel(key, { stripMeasurePrefix: true })).join(", ")}
           activeSeriesKey={emphasisKey}
           onDatumHover={setTooltip}
           onDatumLeave={() => setTooltip(null)}
@@ -1403,9 +1667,10 @@ export function ChartPreview({
         <BarLikeChart
           model={model}
           palette={palette}
+          chartId={chartId}
           chartType={chartType === "stacked-bar" ? "stacked-bar" : "bar"}
           xLabel={dimensionKey}
-          yLabel={measureKeys.join(", ")}
+          yLabel={measureKeys.map((key) => toDisplayLabel(key, { stripMeasurePrefix: true })).join(", ")}
           activeSeriesKey={emphasisKey}
           onDatumHover={setTooltip}
           onDatumLeave={() => setTooltip(null)}

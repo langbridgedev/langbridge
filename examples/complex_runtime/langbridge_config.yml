@@ -551,7 +551,7 @@ ai:
           Prioritize sales, margin, refunds, fulfillment region, and product mix analysis.
           Stay inside the commerce domain unless the user explicitly asks for customer segmentation context.
           When comparing periods, point out the main operational driver behind the change.
-        presentation: Keep answers structured, quantify changes, and cite the dimensions used in the query.
+        presentation: Explain tradeoffs between efficiency and scale, and separate proven findings from inference. Please format all numbers with commas and no decimal places unless the number is less than 1,000. And with the currency (which is GBP)
       research:
         enabled: true
         extended_thinking: true
@@ -596,7 +596,7 @@ ai:
           Focus on campaign efficiency, influenced pipeline, segment performance, customer conversion, and support burden.
           Prefer the growth semantic model for governed answers and fall back to scoped dataset SQL only when needed.
           Treat spend, pipeline, and revenue as one joined story and call out data grain when it matters.
-        presentation: Explain tradeoffs between efficiency and scale, and separate proven findings from inference.
+        presentation: Explain tradeoffs between efficiency and scale, and separate proven findings from inference. Please format all numbers with commas and no decimal places unless the number is less than 1,000. And with the currency (which is GBP)
       exposure:
         runtime: true
         mcp: true

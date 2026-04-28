@@ -8,6 +8,7 @@ class LLMProviderName(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     AZURE = "azure"
+    OLLAMA = "ollama"
 
 
 class ProviderConfigurationError(ValueError):

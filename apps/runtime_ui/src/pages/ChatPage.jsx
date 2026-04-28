@@ -1,21 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
-import {
-  AlertTriangle,
-  ArrowRight,
-  CheckCircle2,
-  CircleDot,
-  DatabaseZap,
-  Edit3,
-  History,
-  Plus,
-  SearchCode,
-  ShieldAlert,
-  Sparkles,
-  WandSparkles,
-} from "lucide-react";
+import { Sparkles } from "lucide-react";
 
-import { RuntimeResultPanel } from "../components/RuntimeResultPanel";
+import { ChatComposer } from "../components/chat/ChatComposer";
+import { ChatTopBar } from "../components/chat/ChatTopBar";
+import { ConversationTimeline } from "../components/chat/ConversationTimeline";
 import { useAsyncData } from "../hooks/useAsyncData";
 import {
   fetchAgents,
@@ -28,48 +17,12 @@ import {
 import { getErrorMessage } from "../lib/format";
 import {
   CHAT_STARTERS,
-  DEFAULT_CHAT_MESSAGE,
   buildConversationTurns,
   createLocalId,
   formatRuntimeAgentModeLabel,
   formatRelativeTime,
   normalizeRuntimeAgentMode,
-  RUNTIME_AGENT_MODE_OPTIONS,
 } from "../lib/runtimeUi";
-
-function formatStageLabel(stage) {
-  return String(stage || "working")
-    .replaceAll("_", " ")
-    .trim();
-}
-
-function formatStageTitle(stage) {
-  const label = formatStageLabel(stage);
-  return label ? label.charAt(0).toUpperCase() + label.slice(1) : "Working";
-}
-
-function getProgressIcon(stage, status) {
-  if (status === "failed") {
-    return AlertTriangle;
-  }
-  switch (stage) {
-    case "planning":
-      return WandSparkles;
-    case "selecting_asset":
-      return CircleDot;
-    case "generating_sql":
-      return SearchCode;
-    case "running_query":
-      return DatabaseZap;
-    case "access_denied":
-      return ShieldAlert;
-    case "completed":
-    case "empty_result":
-      return CheckCircle2;
-    default:
-      return Sparkles;
-  }
-}
 
 function buildRunStorageKey(threadId) {
   return `runtime-thread-run:${threadId}`;
@@ -254,7 +207,7 @@ export function ChatPage() {
   const agents = Array.isArray(agentsState.data?.items) ? agentsState.data.items : [];
 
   const [selectedAgentName, setSelectedAgentName] = useState("");
-  const [message, setMessage] = useState(DEFAULT_CHAT_MESSAGE);
+  const [message, setMessage] = useState("");
   const [thread, setThread] = useState(null);
   const [messages, setMessages] = useState([]);
   const [threadLoading, setThreadLoading] = useState(false);
@@ -431,7 +384,7 @@ export function ChatPage() {
     }
     setPendingDraftMessage("");
     void submitPrompt(pendingDraftMessage);
-  }, [pendingDraftMessage, selectedAgentName, submitting, threadId, threadLoading]);
+  }, [pendingDraftMessage, selectedAgentMode, selectedAgentName, submitting, threadId, threadLoading]);
 
   useEffect(() => {
     if (threadLoading || displayTurns.length === 0) {
@@ -750,11 +703,6 @@ export function ChatPage() {
     }
   }
 
-  async function handleSubmit(event) {
-    event.preventDefault();
-    await submitPrompt(message);
-  }
-
   async function handleRenameThread() {
     if (!threadId) {
       return;
@@ -775,13 +723,10 @@ export function ChatPage() {
     }
   }
 
-  function handleComposerKeyDown(event) {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      if (!submitting && selectedAgentName && message.trim()) {
-        void submitPrompt(message);
-      }
-    }
+  function handleCancelRenameThread() {
+    setRenamingOpen(false);
+    setThreadMutationError("");
+    setRenameValue(thread?.title || "");
   }
 
   if (!threadId) {
@@ -791,69 +736,27 @@ export function ChatPage() {
 
   return (
     <div className="thread-detail-shell thread-detail-shell--chat">
-      <header className="thread-chat-header">
-        <div className="thread-chat-title">
-          <div className="thread-detail-meta">
-            <span className="tag">Conversation</span>
-            <span className={`thread-status-pill ${isPending ? "pending" : "ready"}`}>
-              {isPending ? "Generating response" : "Standing by"}
-            </span>
-          </div>
-          <h1>{threadTitle}</h1>
-          <p>
-            Ask follow-up questions, keep the investigation moving, and expand execution details only when
-            needed.
-          </p>
-        </div>
-        <div className="thread-chat-actions">
-          <button className="ghost-button" type="button" onClick={() => navigate("/chat")}>
-            <History className="button-icon" aria-hidden="true" />
-            Ask home
-          </button>
-          <button
-            className="ghost-button"
-            type="button"
-            onClick={() => setRenamingOpen((current) => !current)}
-          >
-            <Edit3 className="button-icon" aria-hidden="true" />
-            {renamingOpen ? "Close rename" : "Rename"}
-          </button>
-        </div>
-      </header>
-
-      {renamingOpen ? (
-        <section className="thread-chat-rename">
-          <div className="thread-section-head">
-            <div>
-              <h3>Rename thread</h3>
-              <p>Update the working title shown across the ask and execution surfaces.</p>
-            </div>
-          </div>
-          <div className="form-grid compact">
-            <label className="field">
-              <span>Thread title</span>
-              <input
-                className="text-input"
-                type="text"
-                value={renameValue}
-                onChange={(event) => setRenameValue(event.target.value)}
-                disabled={renaming}
-              />
-            </label>
-            <div className="page-actions">
-              <button
-                className="primary-button"
-                type="button"
-                onClick={() => void handleRenameThread()}
-                disabled={renaming}
-              >
-                {renaming ? "Saving..." : "Save title"}
-              </button>
-            </div>
-          </div>
-          {threadMutationError ? <div className="error-banner">{threadMutationError}</div> : null}
-        </section>
-      ) : null}
+      <ChatTopBar
+        threadTitle={threadTitle}
+        isPending={isPending}
+        selectedAgentName={selectedAgent?.name || selectedAgentName}
+        selectedAgentModeLabel={formatRuntimeAgentModeLabel(selectedAgentMode)}
+        onBack={() => navigate("/chat")}
+        renamingOpen={renamingOpen}
+        onToggleRename={() => {
+          setThreadMutationError("");
+          if (renamingOpen) {
+            setRenameValue(thread?.title || "");
+          }
+          setRenamingOpen(!renamingOpen);
+        }}
+        renameValue={renameValue}
+        onRenameValueChange={setRenameValue}
+        onRenameSubmit={handleRenameThread}
+        onCancelRename={handleCancelRenameThread}
+        renaming={renaming}
+        renameError={threadMutationError}
+      />
 
       <section className="thread-chat-stage">
         {threadError ? <div className="error-banner">{threadError}</div> : null}
@@ -874,124 +777,11 @@ export function ChatPage() {
           <div className="empty-box">Loading thread messages...</div>
         ) : null}
         {!threadLoading && displayTurns.length > 0 ? (
-          <div className="thread-transcript-scroll thread-transcript-scroll--chat">
-            <div className="conversation-stack thread-conversation-stack">
-              {displayTurns.map((turn, index) => {
-                const progressEvents = Array.isArray(turn.progressEvents) ? turn.progressEvents : [];
-                const latestProgressEvent = progressEvents[progressEvents.length - 1] || null;
-                const latestStage = latestProgressEvent?.stage || turn.liveStage || "planning";
-                const latestStatus = latestProgressEvent?.status || "in_progress";
-                const LatestStageIcon = getProgressIcon(latestStage, latestStatus);
-                const thinkingEvents = progressEvents.slice().reverse();
-                const isPending = turn.status === "pending";
-                const isReady = turn.status === "ready";
-                const isError = turn.status === "error";
-                return (
-                  <article
-                    key={turn.id}
-                    className="conversation-turn-shell"
-                    ref={index === displayTurns.length - 1 ? latestTurnRef : null}
-                  >
-                    <div className="thread-user-row">
-                      <div className="thread-user-bubble">
-                        <p>{turn.prompt}</p>
-                        <div className="thread-user-meta">
-                          <span className={`thread-user-mode-pill ${turn.agentMode !== "auto" ? "active" : ""}`}>
-                            {formatRuntimeAgentModeLabel(turn.agentMode)}
-                          </span>
-                          <span>{formatRelativeTime(turn.createdAt)}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="thread-assistant-row">
-                      <div className="thread-assistant-shell">
-                        <header className="thread-assistant-meta">
-                          <div>
-                            <strong>{turn.agentLabel || "Langbridge Runtime"}</strong>
-                          </div>
-                          <span className={`message-status-badge ${turn.status}`}>
-                            {isReady ? "responded" : turn.status}
-                          </span>
-                        </header>
-
-                        <div className="thread-assistant-body">
-                          {isPending ? (
-                            <div className="thread-progress-inline">
-                              <div className="thread-progress-current">
-                                <div className="thread-progress-current-top">
-                                  <span className={`thread-progress-status ${latestStatus}`}>
-                                    <span className="thread-progress-live-dot" aria-hidden="true" />
-                                    <LatestStageIcon className="thread-progress-stage-icon" aria-hidden="true" />
-                                    {formatStageTitle(latestStage)}
-                                  </span>
-                                  <span className="thread-progress-current-time">
-                                    {formatRelativeTime(latestProgressEvent?.timestamp || turn.createdAt)}
-                                  </span>
-                                </div>
-                                <p>{turn.assistantSummary || "Runtime is still working on this run."}</p>
-                              </div>
-                              {thinkingEvents.length > 1 ? (
-                                <details className="thread-thinking-disclosure">
-                                  <summary>
-                                    <span>Show thinking</span>
-                                    <span>{thinkingEvents.length} updates</span>
-                                  </summary>
-                                  <div className="thread-thinking-list">
-                                    {thinkingEvents.slice(0, 8).map((event) => {
-                                      const ProgressIcon = getProgressIcon(event.stage, event.status);
-                                      return (
-                                        <div
-                                          key={`${turn.id}-${event.sequence}`}
-                                          className={`thread-thinking-item ${event.status || "in_progress"}`}
-                                        >
-                                          <div className="thread-thinking-item-top">
-                                            <div className="thread-thinking-item-stage">
-                                              <ProgressIcon className="thread-progress-stage-icon" aria-hidden="true" />
-                                              <strong>{formatStageTitle(event.stage)}</strong>
-                                            </div>
-                                            <span>{formatRelativeTime(event.timestamp)}</span>
-                                          </div>
-                                          <p>{event.message}</p>
-                                          {event.source || event.rawEventType ? (
-                                            <div className="thread-thinking-item-meta">
-                                              {event.source ? <span>{event.source}</span> : null}
-                                              {event.rawEventType ? <span>{event.rawEventType}</span> : null}
-                                            </div>
-                                          ) : null}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                </details>
-                              ) : null}
-                            </div>
-                          ) : null}
-                          {!isPending ? (
-                            <RuntimeResultPanel
-                              summary={turn.assistantSummary}
-                              result={turn.assistantTable}
-                              visualization={turn.assistantVisualization}
-                              diagnostics={turn.diagnostics}
-                              status={turn.status}
-                              errorMessage={turn.errorMessage}
-                              errorStatus={turn.errorStatus}
-                              maxPreviewRows={10}
-                              variant="chat"
-                            />
-                          ) : null}
-                          {isError && !turn.assistantTable && !turn.assistantSummary ? (
-                            <div className="error-banner">{turn.errorMessage || "Run failed."}</div>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })}
-              <div ref={timelineEndRef} />
-            </div>
-          </div>
+          <ConversationTimeline
+            turns={displayTurns}
+            latestTurnRef={latestTurnRef}
+            timelineEndRef={timelineEndRef}
+          />
         ) : null}
         {!threadLoading && displayTurns.length === 0 ? (
           <div className="thread-empty-state thread-empty-state--chat">
@@ -1016,83 +806,17 @@ export function ChatPage() {
           </div>
         ) : null}
 
-        <form className="thread-composer-form thread-composer-form--chat" onSubmit={handleSubmit}>
-          <div className="thread-composer-meta thread-composer-meta--chat">
-            <label className="thread-chat-agent-field thread-chat-agent-field--inline">
-              <span>Agent</span>
-              <select
-                className="select-input thread-agent-select"
-                value={selectedAgentName}
-                onChange={(event) => setSelectedAgentName(event.target.value)}
-                disabled={submitting || agents.length === 0}
-              >
-                {agents.map((item) => (
-                  <option key={item.id || item.name} value={item.name}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="thread-mode-selector" role="group" aria-label="Agent mode">
-              {RUNTIME_AGENT_MODE_OPTIONS.map((mode) => (
-                <button
-                  key={mode.value}
-                  className={`thread-mode-option ${selectedAgentMode === mode.value ? "active" : ""}`}
-                  type="button"
-                  onClick={() => setSelectedAgentMode(mode.value)}
-                  disabled={submitting}
-                  title={mode.hint}
-                  aria-pressed={selectedAgentMode === mode.value}
-                >
-                  {mode.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="thread-composer-input-shell">
-            <button
-              className={`thread-composer-utility ${selectedAgentMode === "research" ? "active" : ""}`}
-              type="button"
-              onClick={() =>
-                setSelectedAgentMode((current) => (current === "research" ? "auto" : "research"))
-              }
-              disabled={submitting}
-              aria-label={
-                selectedAgentMode === "research"
-                  ? "Switch back to auto mode"
-                  : "Quick switch to research mode"
-              }
-              aria-pressed={selectedAgentMode === "research"}
-              title={
-                selectedAgentMode === "research"
-                  ? "Research mode selected"
-                  : "Quick switch to research mode"
-              }
-            >
-              <Plus className="button-icon" aria-hidden="true" />
-            </button>
-            <input
-              className="text-input thread-composer-input thread-composer-input--singleline"
-              type="text"
-              value={message}
-              onChange={(event) => setMessage(event.target.value)}
-              onKeyDown={handleComposerKeyDown}
-              disabled={submitting}
-              aria-label="Message"
-              placeholder="Ask a question about your data, runtime state, or the next analytical step..."
-            />
-            <button
-              className="thread-composer-send"
-              type="submit"
-              disabled={submitting || !selectedAgentName || !message.trim()}
-              aria-label={submitting ? "Sending message" : "Send message"}
-              title={submitting ? "Sending..." : "Send"}
-            >
-              <ArrowRight className="button-icon" aria-hidden="true" />
-            </button>
-          </div>
-        </form>
+        <ChatComposer
+          agents={agents}
+          selectedAgentName={selectedAgentName}
+          onSelectedAgentNameChange={setSelectedAgentName}
+          selectedAgentMode={selectedAgentMode}
+          onSelectedAgentModeChange={(value) => setSelectedAgentMode(normalizeRuntimeAgentMode(value))}
+          message={message}
+          onMessageChange={setMessage}
+          submitting={submitting}
+          onSubmit={() => submitPrompt(message)}
+        />
         {submitError ? <div className="error-banner">{submitError}</div> : null}
       </section>
     </div>

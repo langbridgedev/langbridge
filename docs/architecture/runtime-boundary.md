@@ -19,7 +19,7 @@ That includes:
 - `langbridge.plugins`
 - `langbridge.semantic`
 - `langbridge.federation`
-- `langbridge.orchestrator`
+- `langbridge.ai`
 - `langbridge.mcp`
 - `langbridge.ui`
 - `apps/runtime_ui`
@@ -41,8 +41,8 @@ langbridge/
   client/
   connectors/
   federation/
+  ai/
   mcp/
-  orchestrator/
   plugins/
   runtime/
   semantic/

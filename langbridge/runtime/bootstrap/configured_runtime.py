@@ -112,11 +112,10 @@ from langbridge.runtime.providers import (
     SecretRegistryCredentialProvider,
 )
 from langbridge.runtime.security import SecretProviderRegistry
-from langbridge.runtime.services.agent_execution_service import AgentExecutionService
-from langbridge.runtime.services.agent_execution_service_v2 import AgentExecutionServiceV2
+from langbridge.runtime.services.agents import AgentExecutionService
 from langbridge.runtime.services.dataset_execution import describe_file_source_schema
-from langbridge.runtime.services.dataset_query_service import DatasetQueryService
-from langbridge.runtime.services.dataset_sync_service import ConnectorSyncRuntime
+from langbridge.runtime.services.dataset_query import DatasetQueryService
+from langbridge.runtime.services.dataset_sync import ConnectorSyncRuntime
 from langbridge.runtime.services.runtime_host import (
     RuntimeHost,
     RuntimeProviders,
@@ -136,10 +135,10 @@ from langbridge.runtime.services.semantic_query_execution_service import (
     SemanticQueryExecutionService,
 )
 from langbridge.runtime.services.semantic_sql_query_service import SemanticSqlQueryService
-from langbridge.runtime.services.semantic_vector_search_service import (
+from langbridge.runtime.services.semantic_vector_search import (
     SemanticVectorSearchService,
 )
-from langbridge.runtime.services.sql_query_service import SqlQueryService
+from langbridge.runtime.services.sql_query import SqlQueryService
 from langbridge.runtime.settings import runtime_settings as settings
 from langbridge.semantic.loader import (
     SemanticModelError,
@@ -1015,6 +1014,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         thread_id: uuid.UUID | None = None,
         title: str | None = None,
         agent_mode: str | None = None,
+        metadata_json: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return await self._applications.agents.ask_agent(
             prompt=prompt,
@@ -1022,6 +1022,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             thread_id=thread_id,
             title=title,
             agent_mode=agent_mode,
+            metadata_json=metadata_json,
         )
 
     def ask_agent_stream(
@@ -1032,6 +1033,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         thread_id: uuid.UUID | None = None,
         title: str | None = None,
         agent_mode: str | None = None,
+        metadata_json: dict[str, Any] | None = None,
     ):
         return self._applications.agents.ask_agent_stream(
             prompt=prompt,
@@ -1039,6 +1041,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             thread_id=thread_id,
             title=title,
             agent_mode=agent_mode,
+            metadata_json=metadata_json,
         )
 
     async def stream_run(
@@ -3312,7 +3315,7 @@ class ConfiguredLocalRuntimeHostFactory:
             if semantic_models
             else None
         )
-        dataset_query_service = DatasetQueryService(
+        dataset_query_runtime = DatasetQueryService(
             dataset_repository=dataset_repository,
             dataset_column_repository=dataset_column_repository,
             dataset_policy_repository=dataset_policy_repository,
@@ -3323,7 +3326,7 @@ class ConfiguredLocalRuntimeHostFactory:
             connector_provider=connector_provider,
         )
         semantic_sql_query_service = SemanticSqlQueryService()
-        sql_query_service = SqlQueryService(
+        sql_query_runtime = SqlQueryService(
             sql_job_result_artifact_store=None,
             dataset_repository=dataset_repository,
             connector_provider=connector_provider,
@@ -3332,7 +3335,7 @@ class ConfiguredLocalRuntimeHostFactory:
             secret_provider_registry=secret_provider_registry,
             federated_query_tool=federated_query_tool,
         )
-        dataset_sync_service = ConnectorSyncRuntime(
+        dataset_sync_runtime = ConnectorSyncRuntime(
             connector_sync_state_repository=connector_sync_state_repository,
             dataset_repository=dataset_repository,
             dataset_column_repository=dataset_column_repository,
@@ -3341,24 +3344,8 @@ class ConfiguredLocalRuntimeHostFactory:
             lineage_edge_repository=lineage_edge_repository,
             secret_provider_registry=secret_provider_registry,
         )
-        agent_execution_service_v1 = (
+        agent_execution_service = (
             AgentExecutionService(
-                agent_definition_repository=agent_repository,
-                llm_repository=llm_repository,
-                semantic_model_store=semantic_model_store,
-                dataset_repository=dataset_repository,
-                dataset_column_repository=dataset_column_repository,
-                thread_repository=thread_repository,
-                thread_message_repository=thread_message_repository,
-                memory_repository=memory_repository,
-                federated_query_tool=federated_query_tool,
-                semantic_vector_search_service=semantic_vector_search_service,
-            )
-            if agents
-            else None
-        )
-        agent_execution_service_v2 = (
-            AgentExecutionServiceV2(
                 agent_definition_repository=agent_repository,
                 llm_repository=llm_repository,
                 thread_repository=thread_repository,
@@ -3390,12 +3377,10 @@ class ConfiguredLocalRuntimeHostFactory:
                 federated_query_tool=federated_query_tool,
                 semantic_query=semantic_query_service,
                 semantic_vector_search=semantic_vector_search_service,
-                sql_query=sql_query_service,
-                dataset_query=dataset_query_service,
-                dataset_sync=dataset_sync_service,
-                agent_execution=agent_execution_service_v2,
-                agent_execution_v1=agent_execution_service_v1,
-                agent_execution_v2=agent_execution_service_v2,
+                sql_query=sql_query_runtime,
+                dataset_query=dataset_query_runtime,
+                dataset_sync=dataset_sync_runtime,
+                agent_execution=agent_execution_service,
                 semantic_sql_query=semantic_sql_query_service,
             ),
         ), thread_repository, thread_message_repository

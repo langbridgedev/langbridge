@@ -58,3 +58,19 @@ exclude = ["venv*", "__pycache__*", "tests*"]
   "alembic/script.py.mako",
   "alembic/versions/*.py",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+markers = [
+  "unit: fast, isolated tests that do not boot the runtime host or external services",
+  "integration: tests that exercise multiple runtime components, HTTP app wiring, persistence, or filesystem-backed configs",
+  "contract: public API, schema, job, and response-shape compatibility tests",
+  "slow: tests that are expected to be slower than normal unit coverage",
+  "ai: Langbridge AI orchestration, analyst, presentation, and LLM-provider tests",
+  "runtime: runtime host, bootstrap, services, persistence, SDK, and runtime API tests",
+  "semantic: semantic model, query, SQL planning, and vector semantic tests",
+  "federation: federation planning, execution, pushdown, and diagnostics tests",
+  "connectors: connector package, connector runtime, and remote-source tests",
+]
+addopts = "--strict-markers"

@@ -11,6 +11,7 @@ def build_final_review_prompt(
     result: dict[str, Any] | None = None,
     research: dict[str, Any] | None = None,
     step_results: list[dict[str, Any]] | None = None,
+    answer_contract: dict[str, Any] | None = None,
     reason_codes: list[str] | None = None,
 ) -> str:
     allowed_reason_codes = reason_codes or [
@@ -24,7 +25,8 @@ def build_final_review_prompt(
     return (
         "Review the final Langbridge answer package.\n"
         "You are the semantic final reviewer. Evaluate whether the answer is grounded in the available evidence, "
-        "answers the user question directly, includes necessary caveats, and avoids unsupported claims.\n"
+        "answers the user question directly, includes necessary caveats, avoids unsupported claims, and uses final "
+        "markdown/artifact references correctly when present.\n"
         "Return STRICT JSON only:\n"
         "{"
         "\"action\":\"approve|revise_answer|replan|ask_clarification|abort\","
@@ -41,6 +43,9 @@ def build_final_review_prompt(
         "- Choose ask_clarification when the question is materially ambiguous and cannot be resolved from the current context.\n"
         "- Choose abort only when safe finalization is not possible.\n"
         f"- reason_code must be one of: {', '.join(allowed_reason_codes)}.\n"
+        "- When answer_markdown is present, verify that it positions the material artifacts needed to support the answer.\n"
+        "- When artifacts are present, verify that referenced tables, charts, SQL, and diagnostics are compatible with the answer claims.\n"
+        "- Treat answer_contract issues as blocking presentation-quality issues unless the answer no longer depends on the affected artifact.\n"
         "- Keep rationale short and concrete.\n"
         "- Put reviewer observations into issues.\n"
         "- Use updated_context only for structured follow-up hints.\n\n"
@@ -49,6 +54,7 @@ def build_final_review_prompt(
         f"Evidence package:\n{json.dumps(evidence or {}, default=str, indent=2)}\n\n"
         f"Structured result:\n{json.dumps(result or {}, default=str, indent=2)}\n\n"
         f"Research package:\n{json.dumps(research or {}, default=str, indent=2)}\n\n"
+        f"Answer contract review:\n{json.dumps(answer_contract or {}, default=str, indent=2)}\n\n"
         f"Prior step results:\n{json.dumps(step_results or [], default=str, indent=2)}\n"
     )
 

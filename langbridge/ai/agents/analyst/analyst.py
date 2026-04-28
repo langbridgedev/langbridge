@@ -20,15 +20,30 @@ from langbridge.ai.events import AIEventEmitter, AIEventSource
 from langbridge.ai.agents.analyst.prompts import (
     ANALYST_CONTEXT_ANALYSIS_PROMPT,
     ANALYST_DEEP_RESEARCH_PROMPT,
+    ANALYST_EVIDENCE_PLAN_PROMPT,
     ANALYST_MODE_SELECTION_PROMPT,
+    ANALYST_RESEARCH_STEP_PROMPT,
     ANALYST_SQL_EVIDENCE_REVIEW_PROMPT,
     ANALYST_SQL_RESPONSE_PROMPT,
     ANALYST_SQL_SYNTHESIS_PROMPT,
     ANALYST_SQL_TOOL_SELECTION_PROMPT,
 )
+from langbridge.ai.agents.analyst.contracts import AnalystEvidencePlan, AnalystEvidencePlanStep
+from langbridge.ai.agents.analyst.research_workflow import (
+    EvidenceBundle,
+    ResearchDecisionAction,
+    ResearchStepDecision,
+    ResearchWorkflowState,
+)
 from langbridge.ai.llm.base import LLMProvider
-from langbridge.ai.modes import AnalystAgentMode, normalize_analyst_mode
+from langbridge.ai.modes import (
+    AnalystAgentMode,
+    analyst_output_contract_for_task_input,
+    normalize_analyst_mode,
+    normalize_analyst_mode_decision,
+)
 from langbridge.ai.profiles import AnalystAgentConfig
+from langbridge.ai.question_intent import AnalystQuestionIntent
 from langbridge.ai.tools.semantic_search import SemanticSearchTool
 from langbridge.ai.tools.sql import SqlAnalysisTool
 from langbridge.ai.tools.sql.interfaces import (
@@ -50,6 +65,14 @@ _SEMANTIC_FALLBACK_MARKERS = (
     "semantic model not found",
     "semantic coverage gap",
     "unsupported semantic sql shape",
+    "semantic sql filters only support literal values",
+    "raw sql expressions are not supported in semantic filters",
+    "semantic sql group by",
+    "semantic sql order by",
+    "semantic sql where",
+    "semantic sql time bucketing",
+    "must query the selected semantic model",
+    "must match the selected semantic dimensions and time buckets",
 )
 
 
@@ -143,26 +166,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 planner_threshold=4,
             ),
             input_contract=AgentIOContract(optional_keys=["agent_mode", "force_web_search"]),
-            output_contract=AgentIOContract(
-                required_keys=["analysis", "result"],
-                optional_keys=[
-                    "analysis_path",
-                    "sql_canonical",
-                    "sql_executable",
-                    "selected_datasets",
-                    "selected_semantic_models",
-                    "query_scope",
-                    "outcome",
-                    "error_taxonomy",
-                    "evidence",
-                    "synthesis",
-                    "findings",
-                    "sources",
-                    "follow_ups",
-                    "evidence",
-                    "review_hints",
-                ],
-            ),
+            output_contract=analyst_output_contract_for_task_input({}),
             tools=self._tool_specifications(),
             metadata={
                 "scope": {
@@ -210,6 +214,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 source=self.specification.name,
             )
             decision = await self._select_execution_mode(task)
+            decision = self._defer_premature_mode_clarification(task=task, decision=decision)
             selected_mode = str(decision.get("agent_mode") or "").strip().lower()
             if selected_mode == "clarify":
                 return self.build_result(
@@ -365,6 +370,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
                         task=task,
                         status=AgentResultStatus.needs_clarification,
                         output=output,
+                        artifacts=output.get("artifacts") if isinstance(output.get("artifacts"), dict) else {},
                         diagnostics=diagnostics,
                         error=clarification_question,
                     )
@@ -454,6 +460,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
             task=task,
             status=status,
             output=output,
+            artifacts=output.get("artifacts") if isinstance(output.get("artifacts"), dict) else {},
             diagnostics=diagnostics,
             error=response.error if status != AgentResultStatus.succeeded else None,
         )
@@ -476,50 +483,195 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 error="Research mode is not enabled for this analyst profile.",
                 diagnostics={"agent_mode": AnalystAgentMode.research.value, "mode_decision": mode_decision},
             )
-        governed_seed: AgentResult | None = None
-        governed_output: dict[str, Any] = {}
-        governed_diagnostics: dict[str, Any] = {}
-        if self._should_attempt_governed_research_seed(task):
-            governed_seed = await self._execute_sql(
-                task,
-                mode_decision={
-                    "agent_mode": AnalystAgentMode.sql.value,
-                    "reason": "Research mode gathers governed evidence first.",
-                },
-                allow_web_augmentation=False,
+        sources = self._dedupe_sources(self._collect_sources(task.context), limit=self._config.max_sources)
+        evidence_plan = await self._create_research_evidence_plan(task=task, sources=sources)
+        workflow_state = ResearchWorkflowState(original_question=task.question, evidence_plan=evidence_plan)
+        if sources:
+            workflow_state.add_sources(query=None, sources=sources)
+
+        latest_governed_result: AgentResult | None = None
+        latest_governed_output: dict[str, Any] = {}
+        latest_governed_diagnostics: dict[str, Any] = {}
+        best_governed_output: dict[str, Any] = {}
+        best_governed_diagnostics: dict[str, Any] = {}
+        web_result: WebSearchResult | None = None
+        research_steps: list[dict[str, Any]] = []
+        total_step_limit = max(1, self._governed_round_limit() + self._max_external_augmentations() + 1)
+
+        for _ in range(total_step_limit):
+            decision = await self._decide_research_step(
+                task=task,
+                workflow_state=workflow_state,
+                sources=sources,
             )
-            governed_output = governed_seed.output if isinstance(governed_seed.output, dict) else {}
-            governed_diagnostics = governed_seed.diagnostics if isinstance(governed_seed.diagnostics, dict) else {}
-            if governed_seed.status == AgentResultStatus.needs_clarification:
-                return self._retag_result_for_research(
-                    result=governed_seed,
-                    mode_decision=mode_decision,
-                    research_phase="governed_seed_clarification",
+            research_steps.append(decision.model_dump(mode="json", exclude_none=True))
+
+            if decision.action == ResearchDecisionAction.clarify:
+                clarification_question = (
+                    decision.clarification_question
+                    or decision.rationale
+                    or "Which metric, entity, or time period should I use for this analysis?"
+                )
+                return self.build_result(
+                    task=task,
+                    status=AgentResultStatus.needs_clarification,
+                    error=clarification_question,
+                    diagnostics={
+                        "agent_mode": AnalystAgentMode.research.value,
+                        "mode_decision": mode_decision,
+                        "research_phase": "clarify",
+                        "research_steps": research_steps,
+                    },
                 )
 
-        sources = self._collect_sources(task.context)
-        web_result = await self._run_web_search_if_needed(task=task, existing_sources=sources)
-        if web_result is not None:
-            sources.extend([item.to_dict() for item in web_result.results])
-        sources = sources[: self._config.max_sources]
+            if decision.action == ResearchDecisionAction.query_governed:
+                if self._remaining_governed_rounds(workflow_state=workflow_state) <= 0:
+                    workflow_state.add_note("No governed rounds remain in the research budget.")
+                    continue
+                if not self._initial_sql_tools():
+                    workflow_state.add_note("No governed SQL tools are configured for this research request.")
+                    continue
+
+                governed_question = self._optional_string(decision.governed_question) or task.question
+                governed_task = task.model_copy(
+                    update={
+                        "question": governed_question,
+                        "input": {
+                            **dict(task.input),
+                            "agent_mode": AnalystAgentMode.sql.value,
+                        },
+                    }
+                )
+                latest_governed_result = await self._execute_sql(
+                    governed_task,
+                    mode_decision={
+                        "agent_mode": AnalystAgentMode.sql.value,
+                        "reason": decision.rationale or "Research workflow requested a governed evidence round.",
+                    },
+                    allow_web_augmentation=False,
+                )
+                latest_governed_output = (
+                    latest_governed_result.output if isinstance(latest_governed_result.output, dict) else {}
+                )
+                latest_governed_diagnostics = (
+                    latest_governed_result.diagnostics
+                    if isinstance(latest_governed_result.diagnostics, dict)
+                    else {}
+                )
+                if latest_governed_result.status == AgentResultStatus.needs_clarification:
+                    return self._retag_result_for_research(
+                        result=latest_governed_result,
+                        mode_decision=mode_decision,
+                        research_phase="governed_round_clarification",
+                    )
+                if latest_governed_result.status == AgentResultStatus.succeeded and latest_governed_output:
+                    best_governed_output = latest_governed_output
+                    best_governed_diagnostics = latest_governed_diagnostics
+                self._record_research_governed_round(
+                    workflow_state=workflow_state,
+                    question=governed_question,
+                    result=latest_governed_result,
+                )
+                continue
+
+            if decision.action == ResearchDecisionAction.augment_with_web:
+                if self._remaining_web_augmentations(workflow_state=workflow_state) <= 0:
+                    workflow_state.add_note("No web augmentation rounds remain in the research budget.")
+                    continue
+                if not self._web_augmentation_available(task=task):
+                    workflow_state.add_note("Web augmentation is not available for this research request.")
+                    continue
+
+                search_query = self._optional_string(decision.search_query) or task.question
+                web_result = await self._run_web_search_if_needed(
+                    task=task,
+                    existing_sources=sources,
+                    query=search_query,
+                    allow_existing_sources=True,
+                )
+                if web_result is None:
+                    workflow_state.add_note("Web augmentation did not return additional evidence.")
+                    continue
+                sources = self._dedupe_sources(
+                    [*sources, *[item.to_dict() for item in web_result.results]],
+                    limit=self._config.max_sources,
+                )
+                workflow_state.add_sources(query=search_query, sources=sources)
+                continue
+
+            if decision.action == ResearchDecisionAction.synthesize:
+                if not self._research_ready_to_synthesize(workflow_state=workflow_state, sources=sources):
+                    workflow_state.add_note("Synthesis was deferred because no usable evidence has been collected yet.")
+                    continue
+                break
+
+        evidence_bundle = workflow_state.evidence_bundle or EvidenceBundle(
+            original_question=task.question,
+            evidence_plan=evidence_plan,
+        )
+        governed_output = evidence_bundle.best_governed_output() or best_governed_output or latest_governed_output
+        governed_diagnostics = (
+            evidence_bundle.best_governed_diagnostics() or best_governed_diagnostics or latest_governed_diagnostics
+        )
         if self._config.require_sources and not sources and not governed_output:
             return self.build_result(
                 task=task,
                 status=AgentResultStatus.blocked,
-                output={"analysis": "", "result": governed_output.get("result") or {}, "synthesis": "", "findings": [], "sources": []},
+                output={
+                    "analysis": "",
+                    "result": governed_output.get("result") or {},
+                    "synthesis": "",
+                    "findings": [],
+                    "sources": [],
+                    "evidence_plan": evidence_plan.model_dump(mode="json", exclude_none=True)
+                    if evidence_plan is not None
+                    else None,
+                    "evidence_bundle": evidence_bundle.to_dict(),
+                },
                 error="Research mode requires sources, but no evidence was available.",
                 diagnostics={
                     "agent_mode": AnalystAgentMode.research.value,
                     "mode_decision": mode_decision,
                     "governed_seeded": bool(governed_output),
+                    "research_steps": research_steps,
                 },
             )
-        if governed_seed is not None and governed_seed.status == AgentResultStatus.failed and not sources:
+        if latest_governed_result is not None and latest_governed_result.status == AgentResultStatus.failed and not sources:
             return self._retag_result_for_research(
-                result=governed_seed,
+                result=latest_governed_result,
                 mode_decision=mode_decision,
-                research_phase="governed_seed_failed",
+                research_phase="governed_round_failed",
             )
+        if not evidence_bundle.has_evidence and not sources and not governed_output:
+            return self.build_result(
+                task=task,
+                status=AgentResultStatus.blocked,
+                output={
+                    "analysis": "",
+                    "result": {},
+                    "synthesis": "",
+                    "findings": [],
+                    "sources": [],
+                    "evidence_plan": evidence_plan.model_dump(mode="json", exclude_none=True)
+                    if evidence_plan is not None
+                    else None,
+                    "evidence_bundle": evidence_bundle.to_dict(),
+                },
+                error="Research mode could not gather governed or external evidence for this request.",
+                diagnostics={
+                    "agent_mode": AnalystAgentMode.research.value,
+                    "mode_decision": mode_decision,
+                    "research_phase": "evidence_unavailable",
+                    "research_steps": research_steps,
+                    "research_state": workflow_state.compact_payload(),
+                },
+            )
+        visualization_decision = research_steps[-1] if research_steps else {}
+        plan_visualization = (
+            evidence_plan.visualization_recommendation.model_dump(mode="json", exclude_none=True)
+            if evidence_plan is not None and evidence_plan.visualization_recommendation is not None
+            else {}
+        )
         research = await self._synthesize_research(
             question=task.question,
             sources=sources,
@@ -527,6 +679,19 @@ class AnalystAgent(AIEventSource, BaseAgent):
             governed_analysis=str(governed_output.get("analysis") or ""),
             governed_result=governed_output.get("result") if isinstance(governed_output.get("result"), dict) else {},
             governed_outcome=governed_output.get("outcome") if isinstance(governed_output.get("outcome"), dict) else {},
+            governed_rounds=workflow_state.compact_payload().get("governed_rounds", []),
+            evidence_bundle=evidence_bundle.to_prompt_dict(),
+        )
+        visualization_payload = self._build_visualization_recommendation_payload(
+            recommendation=visualization_decision.get("visualization_recommendation")
+            or plan_visualization.get("recommendation"),
+            recommended_chart_type=visualization_decision.get("recommended_chart_type") or plan_visualization.get("chart_type"),
+            rationale=visualization_decision.get("rationale") or plan_visualization.get("rationale"),
+        )
+        research_artifacts = (
+            governed_output.get("artifacts")
+            if isinstance(governed_output.get("artifacts"), dict)
+            else {}
         )
         await self._emit_ai_event(
             event_type="DeepResearchCompleted",
@@ -547,21 +712,38 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 "findings": research.get("findings", []),
                 "sources": sources,
                 "follow_ups": research.get("follow_ups", []),
+                "artifacts": research_artifacts,
                 "selected_datasets": governed_output.get("selected_datasets") or self._config.dataset_ids,
                 "selected_semantic_models": governed_output.get("selected_semantic_models") or self._config.semantic_model_ids,
                 "query_scope": governed_output.get("query_scope") or self._config.query_policy,
                 "outcome": governed_output.get("outcome"),
+                "verdict": research.get("verdict"),
+                "key_comparisons": research.get("key_comparisons", []),
+                "limitations": research.get("limitations", []),
+                "visualization_recommendation": visualization_payload,
+                "recommended_chart_type": visualization_decision.get("recommended_chart_type")
+                or plan_visualization.get("chart_type"),
+                "evidence_plan": evidence_plan.model_dump(mode="json", exclude_none=True)
+                if evidence_plan is not None
+                else None,
+                "evidence_bundle": evidence_bundle.to_dict(),
                 "evidence": self._build_research_evidence(
                     sources=sources,
                     governed_output=governed_output,
                     governed_diagnostics=governed_diagnostics,
+                    workflow_state=workflow_state,
                 ),
                 "review_hints": self._build_research_review_hints(
                     sources=sources,
                     governed_output=governed_output,
                     governed_diagnostics=governed_diagnostics,
+                    workflow_state=workflow_state,
+                    visualization_recommendation=visualization_payload,
+                    recommended_chart_type=visualization_decision.get("recommended_chart_type")
+                    or plan_visualization.get("chart_type"),
                 ),
             },
+            artifacts=research_artifacts,
             diagnostics={
                 "agent_mode": AnalystAgentMode.research.value,
                 "mode_decision": mode_decision,
@@ -570,6 +752,12 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 "governed_seeded": bool(governed_output),
                 "governed_attempt_count": governed_diagnostics.get("governed_attempt_count", 0),
                 "governed_tools_tried": governed_diagnostics.get("governed_tools_tried", []),
+                "research_steps": research_steps,
+                "evidence_plan": evidence_plan.model_dump(mode="json", exclude_none=True)
+                if evidence_plan is not None
+                else None,
+                "evidence_bundle_assessment": evidence_bundle.assessment(),
+                "research_state": workflow_state.compact_payload(),
             },
         )
 
@@ -610,15 +798,18 @@ class AnalystAgent(AIEventSource, BaseAgent):
         result = parsed.get("result")
         if not isinstance(result, dict):
             raise ValueError("Analyst LLM response missing object field: result.")
+        artifacts = self._build_context_result_artifacts(result=result)
         return self.build_result(
             task=task,
             status=AgentResultStatus.succeeded,
             output={
                 "analysis": str(parsed.get("analysis") or ""),
                 "result": result,
+                "artifacts": artifacts,
                 "evidence": self._build_context_analysis_evidence(result=result),
                 "review_hints": self._build_context_analysis_review_hints(result=result),
             },
+            artifacts=artifacts,
             diagnostics={"agent_mode": AnalystAgentMode.context_analysis.value, "mode_decision": mode_decision},
         )
 
@@ -823,6 +1014,8 @@ class AnalystAgent(AIEventSource, BaseAgent):
         governed_analysis: str = "",
         governed_result: dict[str, Any] | None = None,
         governed_outcome: dict[str, Any] | None = None,
+        governed_rounds: list[dict[str, Any]] | None = None,
+        evidence_bundle: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         prompt = self._prompt(
             ANALYST_DEEP_RESEARCH_PROMPT.format(
@@ -832,6 +1025,8 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 governed_analysis=governed_analysis,
                 governed_result=json.dumps(governed_result or {}, default=str),
                 governed_outcome=json.dumps(governed_outcome or {}, default=str),
+                governed_rounds=json.dumps(governed_rounds or [], default=str),
+                evidence_bundle=json.dumps(evidence_bundle or {}, default=str),
                 sources=json.dumps(sources, default=str),
             )
         )
@@ -850,6 +1045,12 @@ class AnalystAgent(AIEventSource, BaseAgent):
         follow_ups = parsed.get("follow_ups")
         if follow_ups is not None and not isinstance(follow_ups, list):
             raise ValueError("Research LLM response follow_ups must be a list.")
+        key_comparisons = parsed.get("key_comparisons")
+        if key_comparisons is not None and not isinstance(key_comparisons, list):
+            raise ValueError("Research LLM response key_comparisons must be a list.")
+        limitations = parsed.get("limitations")
+        if limitations is not None and not isinstance(limitations, list):
+            raise ValueError("Research LLM response limitations must be a list.")
         return parsed
 
     async def _synthesize_sql_with_sources(
@@ -889,13 +1090,198 @@ class AnalystAgent(AIEventSource, BaseAgent):
             raise ValueError("Analyst SQL synthesis response follow_ups must be a list.")
         return parsed
 
+    async def _create_research_evidence_plan(
+        self,
+        *,
+        task: AgentTask,
+        sources: list[dict[str, Any]],
+    ) -> AnalystEvidencePlan:
+        prompt = self._prompt(
+            ANALYST_EVIDENCE_PLAN_PROMPT.format(
+                question=task.question,
+                memory_context=self._combined_conversation_context(task.context),
+                sql_tools=json.dumps([tool.describe() for tool in self._initial_sql_tools()], default=str, indent=2),
+                web_search_available=self._web_augmentation_available(task=task),
+                governed_round_limit=self._governed_round_limit(),
+                web_augmentation_limit=self._max_external_augmentations(),
+                sources=json.dumps(sources, default=str, indent=2),
+            )
+        )
+        try:
+            parsed = self._parse_json_object(await self._llm.acomplete(prompt, temperature=0.0, max_tokens=1000))
+            return AnalystEvidencePlan.model_validate(parsed)
+        except Exception:
+            return self._fallback_research_evidence_plan(task=task)
+
+    def _fallback_research_evidence_plan(self, *, task: AgentTask) -> AnalystEvidencePlan:
+        steps: list[AnalystEvidencePlanStep] = []
+        if self._initial_sql_tools():
+            steps.append(
+                AnalystEvidencePlanStep(
+                    step_id="e1",
+                    action="query_governed",
+                    question=task.question,
+                    evidence_goal="Gather governed evidence that can answer or constrain the analytical question.",
+                    expected_signal="A governed result with rows, metric definitions, or a clear execution limitation.",
+                    success_criteria="The governed result contains usable rows or a concrete limitation for synthesis.",
+                )
+            )
+        elif self._web_augmentation_available(task=task):
+            steps.append(
+                AnalystEvidencePlanStep(
+                    step_id="e1",
+                    action="augment_with_web",
+                    search_query=task.question,
+                    evidence_goal="Gather source evidence because no governed SQL tool is available.",
+                    expected_signal="Relevant source-backed facts that help answer the question.",
+                    success_criteria="At least one relevant source is returned.",
+                )
+            )
+        steps.append(
+            AnalystEvidencePlanStep(
+                step_id=f"e{len(steps) + 1}",
+                action="synthesize",
+                evidence_goal="Produce the final answer from the evidence collected in the bounded workflow.",
+                success_criteria="The answer gives a direct verdict with evidence-backed caveats.",
+                depends_on=[step.step_id for step in steps],
+            )
+        )
+        return AnalystEvidencePlan(
+            objective=task.question,
+            question_type="research",
+            steps=steps,
+            synthesis_requirements=[
+                "Answer the user's question directly.",
+                "Ground claims in governed or source evidence.",
+                "State material limitations.",
+            ],
+        )
+
+    @staticmethod
+    def _research_ready_to_synthesize(
+        *,
+        workflow_state: ResearchWorkflowState,
+        sources: list[dict[str, Any]],
+    ) -> bool:
+        evidence_bundle = workflow_state.evidence_bundle
+        return bool(sources or (evidence_bundle is not None and evidence_bundle.has_usable_evidence))
+
+    async def _decide_research_step(
+        self,
+        *,
+        task: AgentTask,
+        workflow_state: ResearchWorkflowState,
+        sources: list[dict[str, Any]],
+    ) -> ResearchStepDecision:
+        prompt = self._prompt(
+            ANALYST_RESEARCH_STEP_PROMPT.format(
+                question=task.question,
+                memory_context=self._combined_conversation_context(task.context),
+                sql_tools=json.dumps([tool.describe() for tool in self._initial_sql_tools()], default=str, indent=2),
+                web_search_available=self._web_augmentation_available(task=task),
+                remaining_governed_rounds=self._remaining_governed_rounds(workflow_state=workflow_state),
+                remaining_web_augmentations=self._remaining_web_augmentations(workflow_state=workflow_state),
+                research_state=json.dumps(workflow_state.compact_payload(), default=str, indent=2),
+            )
+        )
+        try:
+            parsed = self._parse_json_object(await self._llm.acomplete(prompt, temperature=0.0, max_tokens=700))
+            decision = ResearchStepDecision.model_validate(parsed)
+            return self._defer_premature_research_clarification(
+                task=task,
+                workflow_state=workflow_state,
+                decision=decision,
+            )
+        except Exception:
+            return self._fallback_research_step_decision(
+                task=task,
+                workflow_state=workflow_state,
+                sources=sources,
+            )
+
+    def _defer_premature_research_clarification(
+        self,
+        *,
+        task: AgentTask,
+        workflow_state: ResearchWorkflowState,
+        decision: ResearchStepDecision,
+    ) -> ResearchStepDecision:
+        if decision.action != ResearchDecisionAction.clarify:
+            return decision
+        if workflow_state.governed_round_count > 0:
+            return decision
+        if self._remaining_governed_rounds(workflow_state=workflow_state) <= 0:
+            return decision
+        plan_step = self._first_governed_evidence_plan_step(workflow_state=workflow_state)
+        if plan_step is None:
+            return decision
+        return ResearchStepDecision(
+            action=ResearchDecisionAction.query_governed,
+            rationale=(
+                "Deferring clarification until governed evidence is inspected; "
+                f"original clarification rationale: {decision.rationale}"
+            ),
+            governed_question=plan_step.question or task.question,
+            plan_step_id=plan_step.step_id,
+            evidence_goal=plan_step.evidence_goal,
+            expected_signal=plan_step.expected_signal,
+            success_criteria=plan_step.success_criteria,
+            gaps_addressed=decision.gaps_addressed,
+        )
+
+    @staticmethod
+    def _first_governed_evidence_plan_step(
+        *,
+        workflow_state: ResearchWorkflowState,
+    ) -> AnalystEvidencePlanStep | None:
+        plan = workflow_state.evidence_plan
+        if plan is None:
+            return None
+        for step in plan.steps:
+            if step.action == "query_governed":
+                return step
+        return None
+
+    def _fallback_research_step_decision(
+        self,
+        *,
+        task: AgentTask,
+        workflow_state: ResearchWorkflowState,
+        sources: list[dict[str, Any]],
+    ) -> ResearchStepDecision:
+        remaining_governed_rounds = self._remaining_governed_rounds(workflow_state=workflow_state)
+        remaining_web_augmentations = self._remaining_web_augmentations(workflow_state=workflow_state)
+        if remaining_governed_rounds > 0 and self._initial_sql_tools() and not workflow_state.answered_by_governed:
+            return ResearchStepDecision(
+                action=ResearchDecisionAction.query_governed,
+                rationale="Research should gather governed evidence before synthesis.",
+                governed_question=task.question,
+            )
+        if (
+            remaining_web_augmentations > 0
+            and self._web_augmentation_available(task=task)
+            and (workflow_state.answered_by_governed or not self._initial_sql_tools())
+            and not sources
+        ):
+            return ResearchStepDecision(
+                action=ResearchDecisionAction.augment_with_web,
+                rationale="Governed evidence exists, but external context may still help complete the answer.",
+                search_query=task.question,
+            )
+        return ResearchStepDecision(
+            action=ResearchDecisionAction.synthesize,
+            rationale="The bounded workflow should synthesize from the evidence collected so far.",
+        )
+
     async def _run_web_search_if_needed(
         self,
         *,
         task: AgentTask,
         existing_sources: list[dict[str, Any]],
+        query: str | None = None,
+        allow_existing_sources: bool = False,
     ) -> WebSearchResult | None:
-        if existing_sources and not task.input.get("force_web_search"):
+        if existing_sources and not allow_existing_sources and not task.input.get("force_web_search"):
             return None
         if not self._config.web_search_enabled:
             return None
@@ -903,9 +1289,10 @@ class AnalystAgent(AIEventSource, BaseAgent):
             if task.input.get("force_web_search"):
                 raise RuntimeError("Web search was forced, but no WebSearchTool is configured.")
             return None
-        if not self._question_requests_web(task.question) and not task.input.get("force_web_search"):
+        search_query = self._optional_string(query) or task.question
+        if not allow_existing_sources and not self._question_requests_web(search_query) and not task.input.get("force_web_search"):
             return None
-        return await self._web_search_tool.search(task.question)
+        return await self._web_search_tool.search(search_query)
 
     def _collect_sources(self, context: dict[str, Any]) -> list[dict[str, Any]]:
         explicit = context.get("sources")
@@ -945,16 +1332,48 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 memory_context=self._memory_context(task.context),
             )
         )
-        parsed = self._parse_json_object(await self._llm.acomplete(prompt, temperature=0.0, max_tokens=500))
-        raw_mode = str(parsed.get("agent_mode") or parsed.get("mode") or "").strip()
-        if raw_mode == "clarify":
-            parsed["agent_mode"] = "clarify"
-            return parsed
-        mode = normalize_analyst_mode(raw_mode)
+        parsed = normalize_analyst_mode_decision(
+            self._parse_json_object(await self._llm.acomplete(prompt, temperature=0.0, max_tokens=500)),
+            default_mode=AnalystAgentMode.sql,
+        )
+        if parsed is None:
+            raise ValueError("Analyst mode selection returned no decision.")
+        if parsed.agent_mode == "clarify":
+            return parsed.model_dump(mode="json", exclude_none=True)
+        mode = normalize_analyst_mode(parsed.agent_mode)
         if mode is None or mode.value not in {item.value for item in self._supported_modes()}:
             raise ValueError(f"Analyst mode selection returned invalid mode: {mode}")
-        parsed["agent_mode"] = mode.value
-        return parsed
+        return parsed.model_dump(mode="json", exclude_none=True)
+
+    def _defer_premature_mode_clarification(
+        self,
+        *,
+        task: AgentTask,
+        decision: dict[str, Any],
+    ) -> dict[str, Any]:
+        selected_mode = str(decision.get("agent_mode") or "").strip().lower()
+        if selected_mode != "clarify":
+            return decision
+        if not self._initial_sql_tools():
+            return decision
+        clarification = str(
+            decision.get("clarification_question") or decision.get("reason") or ""
+        ).strip()
+        if not AnalystQuestionIntent.should_inspect_evidence_before_clarifying(
+            question=task.question,
+            clarification=clarification,
+        ):
+            return decision
+
+        mode = AnalystAgentMode.research if self._config.supports_research else AnalystAgentMode.sql
+        return {
+            "agent_mode": mode.value,
+            "reason": (
+                "Deferring clarification until governed evidence is inspected; "
+                f"original clarification: {clarification or 'Clarification needed.'}"
+            ),
+            "deferred_clarification_question": clarification or None,
+        }
 
     def _supported_modes(self) -> list[AnalystAgentMode]:
         modes = [AnalystAgentMode.sql]
@@ -1152,9 +1571,15 @@ class AnalystAgent(AIEventSource, BaseAgent):
         source_items = list(sources or [])
         finding_items = list(findings or [])
         follow_up_items = list(follow_ups or [])
+        artifacts = self._build_sql_artifacts(
+            response=response,
+            taxonomy=taxonomy,
+            governed_attempts=governed_attempts or [],
+        )
         return {
             "analysis": summary,
             "result": response.result.model_dump(mode="json") if response.result else {},
+            "artifacts": artifacts,
             "analysis_path": response.analysis_path,
             "sql_canonical": response.sql_canonical,
             "sql_executable": response.sql_executable,
@@ -1180,6 +1605,107 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 review=review,
                 governed_attempts=governed_attempts or [],
             ),
+        }
+
+    def _build_sql_artifacts(
+        self,
+        *,
+        response: AnalystQueryResponse,
+        taxonomy: SqlFailureTaxonomy,
+        governed_attempts: Sequence[SqlGovernedAttempt],
+    ) -> dict[str, Any]:
+        artifacts: dict[str, Any] = {}
+        result_payload = response.result.model_dump(mode="json") if response.result else {}
+        result_artifact = self._build_result_table_artifact(
+            artifact_id="primary_result",
+            title="Verified analyst result",
+            result=result_payload,
+            provenance={
+                "source": "analyst",
+                "analysis_path": response.analysis_path,
+                "query_scope": response.query_scope.value if response.query_scope else None,
+                "selected_datasets": [dataset.dataset_id for dataset in response.selected_datasets],
+                "selected_semantic_models": (
+                    [response.selected_semantic_model_id] if response.selected_semantic_model_id else []
+                ),
+            },
+        )
+        if result_artifact is not None:
+            artifacts[result_artifact["id"]] = result_artifact
+
+        sql_payload = {
+            "sql_canonical": response.sql_canonical,
+            "sql_executable": response.sql_executable,
+        }
+        if response.sql_canonical or response.sql_executable:
+            artifacts["primary_sql"] = {
+                "id": "primary_sql",
+                "type": "sql",
+                "role": "diagnostic",
+                "title": "Generated SQL",
+                "payload": sql_payload,
+                "provenance": {
+                    "source": "analyst",
+                    "analysis_path": response.analysis_path,
+                    "query_scope": response.query_scope.value if response.query_scope else None,
+                    "status": response.outcome.status.value if response.outcome is not None else None,
+                    "error_taxonomy": taxonomy.to_dict(),
+                },
+                "visible_by_default": False,
+            }
+
+        if governed_attempts:
+            artifacts["governed_attempts"] = {
+                "id": "governed_attempts",
+                "type": "diagnostics",
+                "role": "diagnostic",
+                "title": "Governed query attempts",
+                "payload": [attempt.to_dict() for attempt in governed_attempts],
+                "provenance": {
+                    "source": "analyst",
+                    "attempt_count": len(governed_attempts),
+                },
+                "visible_by_default": False,
+            }
+        return artifacts
+
+    @staticmethod
+    def _build_context_result_artifacts(result: dict[str, Any]) -> dict[str, Any]:
+        artifact = AnalystAgent._build_result_table_artifact(
+            artifact_id="primary_result",
+            title="Verified context result",
+            result=result,
+            provenance={"source": "context_analysis"},
+        )
+        return {artifact["id"]: artifact} if artifact is not None else {}
+
+    @staticmethod
+    def _build_result_table_artifact(
+        *,
+        artifact_id: str,
+        title: str,
+        result: dict[str, Any],
+        provenance: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if not isinstance(result, dict) or not isinstance(result.get("rows"), list):
+            return None
+        row_count = result.get("rowcount")
+        if row_count is None:
+            row_count = result.get("rowCount")
+        if row_count is None:
+            row_count = len(result.get("rows") or [])
+        return {
+            "id": artifact_id,
+            "type": "table",
+            "role": "primary_result",
+            "title": title,
+            "payload": result,
+            "data_ref": "result",
+            "provenance": {
+                **provenance,
+                "row_count": row_count,
+                "columns": list(result.get("columns") or []),
+            },
         }
 
     def _build_sql_evidence(
@@ -1218,6 +1744,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
         sources: list[dict[str, Any]],
         governed_output: dict[str, Any],
         governed_diagnostics: dict[str, Any],
+        workflow_state: ResearchWorkflowState | None = None,
     ) -> dict[str, Any]:
         governed_evidence = governed_output.get("evidence") if isinstance(governed_output.get("evidence"), dict) else {}
         governed_section = governed_evidence.get("governed") if isinstance(governed_evidence.get("governed"), dict) else {}
@@ -1233,10 +1760,26 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 "attempt_count": governed_diagnostics.get("governed_attempt_count", 0),
                 "tools_tried": governed_diagnostics.get("governed_tools_tried", []),
             }
+        if workflow_state is not None and workflow_state.governed_rounds:
+            governed_section = {
+                **governed_section,
+                "attempted": True,
+                "answered_question": governed_section.get("answered_question") or workflow_state.answered_by_governed,
+                "attempt_count": max(
+                    int(governed_section.get("attempt_count") or 0),
+                    workflow_state.governed_round_count,
+                ),
+                "questions": [round_.question for round_ in workflow_state.governed_rounds],
+                "rounds": [round_.to_prompt_dict() for round_ in workflow_state.governed_rounds],
+            }
+            for note in workflow_state.notes:
+                if note not in limitations:
+                    limitations.append(note)
         if sources:
             limitations.append("External sources were used to supplement governed or contextual evidence.")
         if not governed_output and not sources:
             limitations.append("No governed or external evidence was available.")
+        evidence_bundle = workflow_state.evidence_bundle if workflow_state is not None else None
         return {
             "governed": governed_section
             or {
@@ -1250,6 +1793,13 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 "used": bool(sources),
                 "source_count": len(sources),
             },
+            "plan": (
+                workflow_state.evidence_plan.model_dump(mode="json", exclude_none=True)
+                if workflow_state is not None and workflow_state.evidence_plan is not None
+                else None
+            ),
+            "bundle": evidence_bundle.to_dict() if evidence_bundle is not None else None,
+            "assessment": evidence_bundle.assessment() if evidence_bundle is not None else None,
             "limitations": limitations or ["Evidence is source-backed only; governed result data was not produced."],
         }
 
@@ -1294,20 +1844,56 @@ class AnalystAgent(AIEventSource, BaseAgent):
         sources: list[dict[str, Any]],
         governed_output: dict[str, Any],
         governed_diagnostics: dict[str, Any],
+        workflow_state: ResearchWorkflowState | None = None,
+        visualization_recommendation: dict[str, Any] | None = None,
+        recommended_chart_type: str | None = None,
     ) -> dict[str, Any]:
         governed_hints = (
             governed_output.get("review_hints")
             if isinstance(governed_output.get("review_hints"), dict)
             else {}
         )
+        evidence_bundle = workflow_state.evidence_bundle if workflow_state is not None else None
         return {
             "requires_source_review": bool(sources),
             "governed_empty_result": bool(governed_hints.get("governed_empty_result")),
             "governed_error": bool(governed_hints.get("governed_error")),
             "external_augmentation_used": bool(sources),
-            "governed_attempt_count": governed_diagnostics.get("governed_attempt_count", 0),
+            "governed_attempt_count": max(
+                int(governed_diagnostics.get("governed_attempt_count", 0)),
+                workflow_state.governed_round_count if workflow_state is not None else 0,
+            ),
             "evidence_review_decision": governed_hints.get("evidence_review_decision"),
+            "visualization_recommendation": visualization_recommendation,
+            "recommended_chart_type": recommended_chart_type,
+            "evidence_plan_step_count": (
+                len(workflow_state.evidence_plan.steps)
+                if workflow_state is not None and workflow_state.evidence_plan is not None
+                else 0
+            ),
+            "evidence_bundle_assessment": evidence_bundle.assessment() if evidence_bundle is not None else None,
         }
+
+    @staticmethod
+    def _build_visualization_recommendation_payload(
+        *,
+        recommendation: Any,
+        recommended_chart_type: Any,
+        rationale: Any,
+    ) -> dict[str, Any] | None:
+        recommendation_text = str(recommendation or "").strip().lower()
+        chart_type = str(recommended_chart_type or "").strip().lower() or None
+        rationale_text = str(rationale or "").strip() or None
+        if recommendation_text not in {"none", "helpful", "required"} and not chart_type and not rationale_text:
+            return None
+        payload: dict[str, Any] = {
+            "recommendation": recommendation_text if recommendation_text in {"none", "helpful", "required"} else "none",
+        }
+        if chart_type:
+            payload["chart_type"] = chart_type
+        if rationale_text:
+            payload["rationale"] = rationale_text
+        return payload
 
     @staticmethod
     def _build_context_analysis_review_hints(*, result: dict[str, Any]) -> dict[str, Any]:
@@ -1426,14 +2012,6 @@ class AnalystAgent(AIEventSource, BaseAgent):
             sufficiency="sufficient",
         )
 
-    def _should_attempt_governed_research_seed(self, task: AgentTask) -> bool:
-        if not self._initial_sql_tools():
-            return False
-        if task.input.get("force_web_search"):
-            return False
-        context_result = task.context.get("result")
-        return not isinstance(context_result, dict)
-
     def _retag_result_for_research(
         self,
         *,
@@ -1479,6 +2057,43 @@ class AnalystAgent(AIEventSource, BaseAgent):
             return False
         return self._max_external_augmentations() > 0
 
+    def _remaining_governed_rounds(self, *, workflow_state: ResearchWorkflowState) -> int:
+        if not self._initial_sql_tools():
+            return 0
+        return max(0, self._governed_round_limit() - workflow_state.governed_round_count)
+
+    def _remaining_web_augmentations(self, *, workflow_state: ResearchWorkflowState) -> int:
+        return max(0, self._max_external_augmentations() - len(workflow_state.web_search_queries))
+
+    def _record_research_governed_round(
+        self,
+        *,
+        workflow_state: ResearchWorkflowState,
+        question: str,
+        result: AgentResult,
+    ) -> None:
+        output = result.output if isinstance(result.output, dict) else {}
+        diagnostics = result.diagnostics if isinstance(result.diagnostics, dict) else {}
+        result_payload = output.get("result") if isinstance(output.get("result"), dict) else {}
+        rows = result_payload.get("rows")
+        rowcount = len(rows) if isinstance(rows, list) else None
+        evidence = output.get("evidence") if isinstance(output.get("evidence"), dict) else {}
+        governed = evidence.get("governed") if isinstance(evidence.get("governed"), dict) else {}
+        limitations = evidence.get("limitations") if isinstance(evidence.get("limitations"), list) else []
+        workflow_state.add_governed_round(
+            question=question,
+            status=result.status.value,
+            query_scope=str(output.get("query_scope") or governed.get("query_scope") or ""),
+            rowcount=rowcount,
+            answered_question=bool(governed.get("answered_question")) or (isinstance(rows, list) and bool(rows)),
+            weak_evidence=bool(diagnostics.get("weak_evidence")),
+            analysis=str(output.get("analysis") or result.error or "").strip(),
+            limitations=[str(item).strip() for item in limitations if isinstance(item, str) and str(item).strip()],
+            follow_ups=[str(item).strip() for item in (output.get("follow_ups") or []) if isinstance(item, str)],
+            output=output,
+            diagnostics=diagnostics,
+        )
+
     def _governed_round_limit(self) -> int:
         return max(1, min(self._max_evidence_rounds(), self._max_governed_attempts()))
 
@@ -1513,8 +2128,22 @@ class AnalystAgent(AIEventSource, BaseAgent):
             "evidence",
             "compare",
             "comparison",
+            "versus",
+            " vs ",
+            "relationship",
+            "relationships",
+            "associate",
+            "associated",
+            "association",
+            "correlate",
+            "correlation",
             "driver",
             "drivers",
+            "trend",
+            "rank",
+            "ranking",
+            "underperform",
+            "outperform",
             "walk me through",
             "show your work",
             "step by step",
@@ -1526,6 +2155,25 @@ class AnalystAgent(AIEventSource, BaseAgent):
 
     def _detail_token_limit(self, question: str, *, standard: int, detailed: int) -> int:
         return detailed if self._detail_expectation(question) == "detailed" else standard
+
+    @staticmethod
+    def _dedupe_sources(sources: Sequence[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for item in sources:
+            if not isinstance(item, dict):
+                continue
+            key = (
+                str(item.get("url") or "").strip(),
+                str(item.get("title") or item.get("source") or "").strip(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+            if len(deduped) >= limit:
+                break
+        return deduped
 
     @staticmethod
     def _optional_string(value: Any) -> str | None:

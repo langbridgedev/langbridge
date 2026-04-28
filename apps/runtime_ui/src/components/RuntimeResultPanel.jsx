@@ -1,4 +1,4 @@
-import { AlignRight, Maximize2, X } from "lucide-react";
+import { Maximize2, X } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -9,14 +9,17 @@ import {
   buildDiagnosticsHighlights,
   buildDiagnosticsNotes,
   deriveRuntimeResultState,
+  extractArtifactPlaceholderIds,
   hasRenderableVisualization,
   normalizeAnalystOutcome,
+  normalizeRuntimeArtifactType,
   normalizeTabularResult,
   normalizeVisualizationSpec,
   renderJson,
 } from "../lib/runtimeUi";
 import { ChartPreview } from "./ChartPreview";
 import { ResultTable } from "./ResultTable";
+import { ArtifactMarkdown } from "./chat/ArtifactMarkdown";
 
 function formatLabel(value) {
   return String(value || "")
@@ -74,6 +77,50 @@ function buildStatePills({ result, visualization, diagnostics }) {
   return pills;
 }
 
+function buildSqlDiagnosticsItems(diagnostics) {
+  const execution =
+    diagnostics?.execution && typeof diagnostics.execution === "object"
+      ? diagnostics.execution
+      : null;
+  const sqlItems = Array.isArray(execution?.sql)
+    ? execution.sql
+    : Array.isArray(diagnostics?.sql)
+      ? diagnostics.sql
+      : [];
+  return sqlItems
+    .filter((item) => item && typeof item === "object")
+    .map((item, index) => {
+      const queryScope = String(item.query_scope || "").trim();
+      const status = String(item.status || "").trim();
+      const rowcount =
+        item.rowcount !== null && item.rowcount !== undefined ? Number(item.rowcount) : null;
+      const labelParts = [
+        item.round_index ? `Round ${item.round_index}` : `Query ${index + 1}`,
+        queryScope || null,
+        status || null,
+        Number.isFinite(rowcount) ? `${rowcount.toLocaleString()} rows` : null,
+      ].filter(Boolean);
+      return {
+        ...item,
+        label: labelParts.join(" | "),
+        sql: item.sql_executable || item.sql_canonical || "",
+      };
+    })
+    .filter((item) => item.sql);
+}
+
+function artifactPlaceholderMatchesType(id, artifacts, expectedType) {
+  const artifact =
+    (Array.isArray(artifacts) ? artifacts : []).find(
+      (item) => String(item?.id || "").trim() === String(id || "").trim(),
+    ) || null;
+  const artifactType = normalizeRuntimeArtifactType(
+    artifact?.type || artifact?.kind || artifact?.source,
+    id,
+  );
+  return artifactType === expectedType;
+}
+
 const SUMMARY_MARKDOWN_COMPONENTS = {
   a({ href, children, ...props }) {
     return (
@@ -110,6 +157,8 @@ const SUMMARY_MARKDOWN_COMPONENTS = {
 
 export function RuntimeResultPanel({
   summary,
+  answerMarkdown = "",
+  artifacts = [],
   result,
   visualization,
   diagnostics,
@@ -130,13 +179,19 @@ export function RuntimeResultPanel({
     errorMessage,
     errorStatus,
   });
+  const answerMarkdownText = String(answerMarkdown || "").trim();
   const summaryText = String(summary || "").trim() || buildSummaryFallback(state);
+  const primaryResponseMarkdown = answerMarkdownText || summaryText;
+  const normalizedArtifacts = Array.isArray(artifacts) ? artifacts : [];
+  const placeholderArtifactIds = extractArtifactPlaceholderIds(primaryResponseMarkdown);
   const suppressSummarySection =
+    !answerMarkdownText &&
     state.kind === "needs_clarification" &&
     Boolean(summaryText) &&
     summaryText === String(state.description || "").trim();
   const diagnosticsHighlights = buildDiagnosticsHighlights(diagnostics);
   const diagnosticsNotes = buildDiagnosticsNotes(diagnostics, normalizedVisualization);
+  const sqlDiagnostics = buildSqlDiagnosticsItems(diagnostics);
   const statePills = buildStatePills({
     result: normalizedResult,
     visualization: normalizedVisualization,
@@ -152,9 +207,27 @@ export function RuntimeResultPanel({
   const showTable =
     Boolean(normalizedResult) &&
     (state.showTable || normalizedVisualization?.chartType === "table");
+  const isChatVariant = variant === "chat";
   const compactChatSuccess =
-    variant === "chat" &&
+    isChatVariant &&
     (state.kind === "success_rows" || state.kind === "success_chart");
+  const inlineChartArtifactIds = showChart
+    ? placeholderArtifactIds.filter((id) =>
+        artifactPlaceholderMatchesType(id, normalizedArtifacts, "chart"),
+      )
+    : [];
+  const inlineTableArtifactIds = showTable
+    ? placeholderArtifactIds.filter((id) =>
+        artifactPlaceholderMatchesType(id, normalizedArtifacts, "table"),
+      )
+    : [];
+  const showStandaloneChart = showChart && inlineChartArtifactIds.length === 0;
+  const showStandaloneTable =
+    showTable &&
+    (!isChatVariant || !showChart) &&
+    inlineTableArtifactIds.length === 0;
+  const showChatSupportingMetadata =
+    isChatVariant && diagnostics && typeof diagnostics === "object";
 
   useEffect(() => {
     if (!diagnosticsFullscreen) {
@@ -202,6 +275,20 @@ export function RuntimeResultPanel({
         <div className="diagnostics-note-list">
           {diagnosticsNotes.map((note) => (
             <p key={note}>{note}</p>
+          ))}
+        </div>
+      ) : null}
+      {sqlDiagnostics.length > 0 ? (
+        <div className="diagnostics-sql-list">
+          <h5>Generated SQL</h5>
+          {sqlDiagnostics.map((item, index) => (
+            <div key={`${item.task_id || "sql"}-${item.round_index || index}`} className="diagnostics-sql-item">
+              <div className="diagnostics-sql-meta">
+                <strong>{item.label}</strong>
+                {item.round_question ? <span>{item.round_question}</span> : null}
+              </div>
+              <pre className="code-block compact">{item.sql}</pre>
+            </div>
           ))}
         </div>
       ) : null}
@@ -253,9 +340,9 @@ export function RuntimeResultPanel({
         </div>
       ) : null}
 
-      {!suppressSummarySection && summaryText ? (
-        <section className={`runtime-result-section ${variant === "chat" ? "runtime-result-section--chat-answer" : ""}`}>
-          {variant !== "chat" ? (
+      {!suppressSummarySection && primaryResponseMarkdown ? (
+        <section className={`runtime-result-section ${isChatVariant ? "runtime-result-section--chat-answer" : ""}`}>
+          {!isChatVariant ? (
             <div className="runtime-result-section-head">
               <div>
                 <h4>Answer</h4>
@@ -264,17 +351,28 @@ export function RuntimeResultPanel({
             </div>
           ) : null}
           <div className="assistant-summary-card assistant-summary-markdown">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={SUMMARY_MARKDOWN_COMPONENTS}
-            >
-              {summaryText}
-            </ReactMarkdown>
+            {isChatVariant ? (
+              <ArtifactMarkdown
+                markdown={primaryResponseMarkdown}
+                artifacts={normalizedArtifacts}
+                result={normalizedResult}
+                visualization={normalizedVisualization}
+                diagnostics={diagnostics}
+                maxPreviewRows={maxPreviewRows}
+              />
+            ) : (
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={SUMMARY_MARKDOWN_COMPONENTS}
+              >
+                {primaryResponseMarkdown}
+              </ReactMarkdown>
+            )}
           </div>
         </section>
       ) : null}
 
-      {showChart ? (
+      {showStandaloneChart ? (
         <section className="runtime-result-section">
           <div className="runtime-result-section-head">
             <div>
@@ -296,7 +394,7 @@ export function RuntimeResultPanel({
         </section>
       ) : null}
 
-      {showTable ? (
+      {showStandaloneTable ? (
         <section className="runtime-result-section">
           <div className="runtime-result-section-head">
             <div>
@@ -313,67 +411,80 @@ export function RuntimeResultPanel({
         </section>
       ) : null}
 
-      {diagnostics && typeof diagnostics === "object" ? (
-        <>
-          <details className="diagnostics-disclosure">
-            <summary>
-              <span className="diagnostics-summary-label">{diagnosticsLabel}</span>
-              <span className="diagnostics-summary-actions">
-                <button
-                  type="button"
-                  className="diagnostics-fullscreen-button"
-                  aria-label="Open execution diagnostics fullscreen"
-                  title="Open execution diagnostics fullscreen"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openDiagnosticsFullscreen();
-                  }}
-                >
-                  <Maximize2 className="button-icon" aria-hidden="true" />
-                </button>
-              </span>
-            </summary>
-            {diagnosticsSummaryContent}
-          </details>
-          {diagnosticsFullscreen && typeof document !== "undefined"
-            ? createPortal(
-                <div
-                  className="diagnostics-fullscreen-overlay"
-                  role="presentation"
-                  onClick={() => setDiagnosticsFullscreen(false)}
-                >
-                  <div
-                    className="diagnostics-fullscreen-dialog"
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby={diagnosticsDialogTitleId}
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    <div className="diagnostics-fullscreen-header">
-                      <div className="diagnostics-fullscreen-copy">
-                        <p className="eyebrow">Execution</p>
-                        <h3 id={diagnosticsDialogTitleId}>{diagnosticsLabel}</h3>
-                        <p>Expanded runtime diagnostics for debugging this execution path.</p>
-                      </div>
-                      <button
-                        type="button"
-                        className="diagnostics-fullscreen-button diagnostics-fullscreen-close"
-                        aria-label="Close execution diagnostics fullscreen"
-                        title="Close execution diagnostics fullscreen"
-                        onClick={() => setDiagnosticsFullscreen(false)}
-                      >
-                        <X className="button-icon" aria-hidden="true" />
-                      </button>
-                    </div>
-                    <div className="diagnostics-fullscreen-body">{diagnosticsFullscreenContent}</div>
-                  </div>
-                </div>,
-                document.body,
-              )
-            : null}
-        </>
+      {showChatSupportingMetadata ? (
+        <details className="diagnostics-disclosure diagnostics-disclosure--supporting">
+          <summary>
+            <span className="diagnostics-summary-label">Supporting metadata</span>
+            <span className="diagnostics-summary-meta">
+              {sqlDiagnostics.length > 0
+                ? `${sqlDiagnostics.length} SQL quer${sqlDiagnostics.length === 1 ? "y" : "ies"}`
+                : "Diagnostics"}
+            </span>
+          </summary>
+          {diagnosticsSummaryContent}
+        </details>
       ) : null}
+
+      {diagnostics && typeof diagnostics === "object" && !isChatVariant ? (
+        <details className="diagnostics-disclosure">
+          <summary>
+            <span className="diagnostics-summary-label">{diagnosticsLabel}</span>
+            <span className="diagnostics-summary-actions">
+              <button
+                type="button"
+                className="diagnostics-fullscreen-button"
+                aria-label="Open execution diagnostics fullscreen"
+                title="Open execution diagnostics fullscreen"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openDiagnosticsFullscreen();
+                }}
+              >
+                <Maximize2 className="button-icon" aria-hidden="true" />
+              </button>
+            </span>
+          </summary>
+          {diagnosticsSummaryContent}
+        </details>
+      ) : null}
+
+      {diagnostics && typeof diagnostics === "object" && diagnosticsFullscreen && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="diagnostics-fullscreen-overlay"
+              role="presentation"
+              onClick={() => setDiagnosticsFullscreen(false)}
+            >
+              <div
+                className="diagnostics-fullscreen-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={diagnosticsDialogTitleId}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="diagnostics-fullscreen-header">
+                  <div className="diagnostics-fullscreen-copy">
+                    <p className="eyebrow">Execution</p>
+                    <h3 id={diagnosticsDialogTitleId}>{diagnosticsLabel}</h3>
+                    <p>Expanded runtime diagnostics for debugging this execution path.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="diagnostics-fullscreen-button diagnostics-fullscreen-close"
+                    aria-label="Close execution diagnostics fullscreen"
+                    title="Close execution diagnostics fullscreen"
+                    onClick={() => setDiagnosticsFullscreen(false)}
+                  >
+                    <X className="button-icon" aria-hidden="true" />
+                  </button>
+                </div>
+                <div className="diagnostics-fullscreen-body">{diagnosticsFullscreenContent}</div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

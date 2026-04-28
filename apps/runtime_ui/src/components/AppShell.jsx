@@ -15,6 +15,14 @@ export function AppShell({ session, authStatus, onLogout, children }) {
   const identityName = session?.username || (authEnabled ? "Runtime user" : "Direct access");
   const identitySubcopy = session?.email || (authEnabled ? "Signed into this runtime" : "Authentication disabled");
   const authBadge = authEnabled ? `${authStatus?.auth_mode || "configured"} auth` : "Open runtime";
+  const isChatRoute = location.pathname === "/chat" || location.pathname.startsWith("/chat/");
+  const shellClassName = [
+    "app-shell",
+    collapsed ? "nav-collapsed" : "",
+    isChatRoute ? "chat-route" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const identityInitials = identityName
     .split(/\s+/)
     .filter(Boolean)
@@ -102,7 +110,7 @@ export function AppShell({ session, authStatus, onLogout, children }) {
   );
 
   return (
-    <div className={`app-shell ${collapsed ? "nav-collapsed" : ""}`.trim()}>
+    <div className={shellClassName}>
       <aside className={`side-nav ${collapsed ? "collapsed" : ""}`.trim()}>
         <div className="side-nav-top">
           <div className="brand-row">

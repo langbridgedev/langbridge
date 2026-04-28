@@ -66,12 +66,12 @@ class ConnectorCapabilities(RuntimeModel):
     supports_federated_execution: bool = False
 
 
-def _normalize_enum_value[T, Enum](
-    enum_cls: type[T],
+def _normalize_enum_value(
+    enum_cls: Enum,
     value: Any,
     *,
     case: str | None = None,
-) -> T | None:
+) -> Enum | None:
     if value is None:
         return None
     if isinstance(value, enum_cls):

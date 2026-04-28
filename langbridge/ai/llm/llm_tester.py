@@ -1,4 +1,5 @@
 from typing import Dict, Any, Optional
+import httpx
 from openai import OpenAI, OpenAIError, AzureOpenAI
 from langbridge.runtime.models import LLMProvider
 
@@ -27,6 +28,8 @@ class LLMConnectionTester:
                 return self._test_azure(api_key, model, configuration)
             if provider == LLMProvider.ANTHROPIC:
                 return self._test_anthropic(api_key, model)
+            if provider == LLMProvider.OLLAMA:
+                return self._test_ollama(model, configuration)
             return {
                 "success": False,
                 "message": f"Unsupported provider: {provider}"
@@ -131,4 +134,32 @@ class LLMConnectionTester:
             return {
                 "success": False,
                 "message": f"Anthropic API error: {str(e)}"
+            }
+
+    def _test_ollama(
+        self,
+        model: str,
+        configuration: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Test Ollama with a local non-streaming chat request."""
+        base_url = str((configuration or {}).get("base_url") or "http://localhost:11434").rstrip("/")
+        try:
+            response = httpx.post(
+                f"{base_url}/api/chat",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "stream": False,
+                },
+                timeout=(configuration or {}).get("timeout", 30.0),
+            )
+            response.raise_for_status()
+            return {
+                "success": True,
+                "message": "Successfully connected to Ollama API"
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Ollama API error: {str(e)}"
             }

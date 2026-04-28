@@ -224,6 +224,8 @@ class LocalRuntimeLLMConnectionConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_credentials(self) -> "LocalRuntimeLLMConnectionConfig":
+        if str(self.provider or "").strip().lower() == "ollama":
+            return self
         if not str(self.api_key or "").strip() and self.api_key_secret is None:
             raise ValueError("LLM connection must define api_key or api_key_secret.")
         return self

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from enum import Enum
+from collections.abc import Mapping
 from typing import Any
+
+from pydantic import BaseModel
 
 from langbridge.ai.base import AgentIOContract
 
@@ -40,6 +43,16 @@ _ANALYST_OUTPUT_OPTIONAL_KEYS = [
     "sources",
     "follow_ups",
     "review_hints",
+    "verdict",
+    "key_comparisons",
+    "limitations",
+    "visualization_recommendation",
+    "recommended_chart_type",
+    "artifacts",
+    "evidence_plan",
+    "evidence_bundle",
+    "evidence_gaps",
+    "next_question",
 ]
 
 
@@ -106,9 +119,67 @@ def analyst_output_contract_for_task_input(
     )
 
 
+def normalize_analyst_mode_decision(
+    value: Any,
+    *,
+    default_mode: AnalystAgentMode | None = None,
+) -> AnalystModeDecision | None:
+    from langbridge.ai.agents.analyst.contracts import AnalystModeDecision
+
+    if isinstance(value, AnalystModeDecision):
+        return value
+    if value is None or value == "":
+        return None
+
+    payload: dict[str, Any]
+    if isinstance(value, BaseModel):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {"agent_mode": value}
+
+    if "mode" in payload and "agent_mode" not in payload:
+        payload["agent_mode"] = payload.pop("mode")
+
+    raw_mode = payload.get("agent_mode")
+    raw_mode_text = str(getattr(raw_mode, "value", raw_mode) or "").strip().lower()
+    if raw_mode_text:
+        payload["agent_mode"] = {
+            "answer": "context_analysis",
+            "analysis": "context_analysis",
+            "context": "context_analysis",
+            "deep_research": "research",
+            "deep-research": "research",
+            "web_research": "research",
+            "web-research": "research",
+        }.get(raw_mode_text, raw_mode_text)
+
+    if default_mode is not None and default_mode != AnalystAgentMode.auto and not payload.get("agent_mode"):
+        payload["agent_mode"] = default_mode.value
+
+    return AnalystModeDecision.model_validate(payload)
+
+
+def normalize_visualization_recommendation(value: Any) -> VisualizationRecommendation | None:
+    from langbridge.ai.agents.analyst.contracts import VisualizationRecommendation
+
+    if isinstance(value, VisualizationRecommendation):
+        return value
+    if value is None or value == "":
+        return None
+    if isinstance(value, BaseModel):
+        return VisualizationRecommendation.model_validate(value.model_dump(mode="json"))
+    if isinstance(value, Mapping):
+        return VisualizationRecommendation.model_validate(dict(value))
+    return VisualizationRecommendation.model_validate(value)
+
+
 __all__ = [
     "AnalystAgentMode",
     "analyst_output_contract_for_task_input",
     "normalize_analyst_mode",
+    "normalize_analyst_mode_decision",
     "normalize_analyst_task_input",
+    "normalize_visualization_recommendation",
 ]

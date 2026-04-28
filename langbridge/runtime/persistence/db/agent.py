@@ -10,6 +10,7 @@ class LLMProvider(enum.Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     AZURE = "azure"
+    OLLAMA = "ollama"
     openai = "openai"  # for backward compatibility
 
 class LLMConnection(Base):
