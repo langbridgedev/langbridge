@@ -13,7 +13,7 @@ from langbridge.runtime import build_configured_local_runtime
 
 def test_complex_runtime_example_boots_and_executes_queries(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
-    source_example_dir = repo_root / "examples" / "complex_runtime"
+    source_example_dir = repo_root / "examples" / "legacy" / "complex_runtime"
     example_dir = tmp_path / "complex_runtime"
     shutil.copytree(source_example_dir, example_dir)
 

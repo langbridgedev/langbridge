@@ -90,14 +90,14 @@ connector scope. `commerce_analyst` is intentionally blocked from the
 From the repository root:
 
 ```bash
-python examples/complex_runtime/setup.py
+python examples/legacy/complex_runtime/setup.py
 ```
 
 That creates:
 
-- `examples/complex_runtime/data/commerce.db`
-- `examples/complex_runtime/data/growth_ops.db`
-- `examples/complex_runtime/data/channel_spend_targets.csv`
+- `examples/legacy/complex_runtime/data/commerce.db`
+- `examples/legacy/complex_runtime/data/growth_ops.db`
+- `examples/legacy/complex_runtime/data/channel_spend_targets.csv`
 
 If you pull updates to this example after generating the local data once,
 re-run the setup step so the SQLite schema changes are applied to the example
@@ -114,19 +114,19 @@ export OPENAI_API_KEY=...
 Apply runtime metadata migrations:
 
 ```bash
-langbridge migrate --config examples/complex_runtime/langbridge_config.yml
+langbridge migrate --config examples/legacy/complex_runtime/langbridge_config.yml
 ```
 
 Start the runtime host:
 
 ```bash
-langbridge serve --config examples/complex_runtime/langbridge_config.yml --host 127.0.0.1 --port 8000
+langbridge serve --config examples/legacy/complex_runtime/langbridge_config.yml --host 127.0.0.1 --port 8000
 ```
 
 Start the host with the bundled UI:
 
 ```bash
-langbridge serve --config examples/complex_runtime/langbridge_config.yml --host 127.0.0.1 --port 8000 --features ui
+langbridge serve --config examples/legacy/complex_runtime/langbridge_config.yml --host 127.0.0.1 --port 8000 --features ui
 ```
 
 ## Validate Locally Through The SDK
@@ -134,7 +134,7 @@ langbridge serve --config examples/complex_runtime/langbridge_config.yml --host 
 Run the example validator:
 
 ```bash
-python examples/complex_runtime/validate.py
+python examples/legacy/complex_runtime/validate.py
 ```
 
 That script will:
@@ -228,5 +228,5 @@ For `growth_analyst`:
 - connector and dataset boundaries stay runtime-scoped
 - the example is designed for manual demos, local validation, and self-hosted
   runtime testing
-- remove generated state by deleting `examples/complex_runtime/.langbridge/` and
-  `examples/complex_runtime/data/`
+- remove generated state by deleting `examples/legacy/complex_runtime/.langbridge/` and
+  `examples/legacy/complex_runtime/data/`

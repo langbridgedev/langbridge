@@ -30,9 +30,54 @@ export function getRuntimeTimestamp(value) {
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 }
 
-export function formatValue(value) {
+function toFiniteNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(
+      value
+        .trim()
+        .replaceAll(",", "")
+        .replaceAll("$", "")
+        .replaceAll("£", "")
+        .replaceAll("€", ""),
+    );
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function formatCurrencyValue(value, formatting) {
+  const numberValue = toFiniteNumber(value);
+  if (numberValue === null) {
+    return String(value);
+  }
+  const absoluteValue = Math.abs(numberValue);
+  const smallThreshold =
+    typeof formatting?.small_number_threshold === "number"
+      ? formatting.small_number_threshold
+      : 1;
+  const maximumFractionDigits =
+    absoluteValue > 0 && absoluteValue < smallThreshold
+      ? Number(formatting?.small_number_maximum_fraction_digits ?? 3)
+      : Number(formatting?.maximum_fraction_digits ?? 2);
+  const rendered = absoluteValue.toLocaleString(undefined, {
+    useGrouping: formatting?.use_grouping !== false,
+    maximumFractionDigits: Number.isFinite(maximumFractionDigits)
+      ? maximumFractionDigits
+      : 2,
+  });
+  const prefix = formatting?.symbol || formatting?.currency || "";
+  return `${numberValue < 0 ? "-" : ""}${prefix}${rendered}`;
+}
+
+export function formatValue(value, formatting = null) {
   if (value === null || value === undefined || value === "") {
     return "n/a";
+  }
+  if (formatting?.kind === "currency") {
+    return formatCurrencyValue(value, formatting);
   }
   if (typeof value === "number") {
     if (Number.isInteger(value)) {

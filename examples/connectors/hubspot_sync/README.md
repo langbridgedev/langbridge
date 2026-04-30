@@ -7,7 +7,7 @@ each dataset declares its own `materialization_mode` and `sync.source.resource`.
 
 ## What This Example Covers
 
-- a configured HubSpot connector under `examples/hubspot_sync/langbridge_config.yml`
+- a configured HubSpot connector under `examples/connectors/hubspot_sync/langbridge_config.yml`
 - predeclared synced datasets that choose the HubSpot resource at the dataset layer
 - runtime-managed sync state persisted under `.langbridge/metadata.db`
 - synced datasets materialized into the local DuckDB execution store
@@ -40,7 +40,7 @@ export HUBSPOT_ACCESS_TOKEN=pat-...
 From the repository root:
 
 ```bash
-langbridge serve --config examples/hubspot_sync/langbridge_config.yml --host 127.0.0.1 --port 8000
+langbridge serve --config examples/connectors/hubspot_sync/langbridge_config.yml --host 127.0.0.1 --port 8000
 ```
 
 The host will listen on `http://localhost:8000`.
@@ -153,4 +153,4 @@ langbridge sync states --url http://localhost:8000 --connector hubspot_demo
 - synced datasets are declared by the dataset config, and dataset sync populates them
 - `custom_objects` demonstrates dataset-driven dynamic resource resolution for HubSpot
 - live materialization is also dataset-owned in the runtime, but this example stays focused on API sync datasets
-- remove local persisted runtime state by deleting `examples/hubspot_sync/.langbridge`
+- remove local persisted runtime state by deleting `examples/connectors/hubspot_sync/.langbridge`

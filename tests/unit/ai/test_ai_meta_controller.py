@@ -337,6 +337,87 @@ def _controller() -> MetaControllerAgent:
     return MetaControllerAgent(registry=registry, llm_provider=llm, presentation_agent=_presentation(llm))
 
 
+class _GuidedAnalystAgent(BaseAgent):
+    @property
+    def specification(self) -> AgentSpecification:
+        return AgentSpecification(
+            name="analyst",
+            description="Analyst with profile presentation guidance.",
+            task_kinds=[AgentTaskKind.analyst],
+            routing=AgentRoutingSpec(keywords=["revenue"], direct_threshold=1),
+            output_contract=AgentIOContract(required_keys=["answer"]),
+        )
+
+    @property
+    def presentation_guidance(self) -> dict[str, object]:
+        return {
+            "profile_name": "growth_analyst",
+            "agent_name": "analyst",
+            "instructions": "Please add the currency symbol (which is £) to all revenue and spend figures.",
+            "formatting": {
+                "currency": {"code": "GBP", "symbol": "£"},
+                "number": {"use_grouping": True, "maximum_fraction_digits": 2},
+            },
+        }
+
+    async def execute(self, task: AgentTask):
+        return self.build_result(
+            task=task,
+            status=AgentResultStatus.succeeded,
+            output={"answer": "Revenue by region is available."},
+        )
+
+
+class _RecordingPresentationAgent(BaseAgent):
+    def __init__(self) -> None:
+        self.contexts: list[dict[str, object]] = []
+
+    @property
+    def specification(self) -> AgentSpecification:
+        return AgentSpecification(
+            name="presentation",
+            description="Records presentation contexts.",
+            task_kinds=[AgentTaskKind.presentation],
+            output_contract=AgentIOContract(required_keys=["response"]),
+        )
+
+    async def execute(self, task: AgentTask):
+        self.contexts.append(dict(task.context))
+        return self.build_result(
+            task=task,
+            status=AgentResultStatus.succeeded,
+            output={
+                "response": {
+                    "summary": "Presented answer.",
+                    "result": {},
+                    "visualization": None,
+                    "research": {},
+                    "answer": "Presented answer.",
+                    "answer_markdown": "Presented answer.",
+                    "artifacts": [],
+                    "diagnostics": {"mode": "test"},
+                }
+            },
+        )
+
+
+def test_meta_controller_passes_agent_presentation_guidance_to_presentation() -> None:
+    presentation = _RecordingPresentationAgent()
+    controller = MetaControllerAgent(
+        registry=AgentRegistry([_GuidedAnalystAgent()]),
+        llm_provider=_FakeLLMProvider(),
+        presentation_agent=presentation,
+    )
+
+    run = _run(controller.handle(question="Show revenue by region"))
+
+    assert run.status == "completed"
+    assert presentation.contexts
+    guidance = presentation.contexts[-1]["presentation_guidance"]
+    assert guidance["agent_name"] == "analyst"
+    assert guidance["formatting"]["currency"]["symbol"] == "£"
+
+
 def test_meta_controller_routes_simple_analyst_question_directly() -> None:
     run = _run(
         _controller().handle(

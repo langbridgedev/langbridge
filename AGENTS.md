@@ -6,8 +6,8 @@ Langbridge is a runtime-first repository. Runtime-owned Python code lives under 
 ## Build, Test, and Development Commands
 - `python -m venv .venv && ./.venv/Scripts/activate && pip install -r requirements/dev.txt && pip install -e .` installs backend dependencies on Windows PowerShell.
 - `source .venv/bin/activate && pip install -r requirements/dev.txt && pip install -e .` is the equivalent on macOS/Linux.
-- `langbridge serve --config examples/runtime_host/langbridge_config.yml` starts the runtime host.
-- `langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui,mcp` starts the host with the runtime UI and MCP endpoint enabled.
+- `langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml` starts the runtime host.
+- `langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features ui,mcp` starts the host with the runtime UI and MCP endpoint enabled.
 - `cd apps/runtime_ui && npm install && npm run dev` starts the React UI dev server.
 - `cd apps/runtime_ui && npm run build` builds the UI bundle into `langbridge/ui/static`.
 - `docker compose --profile host up --build runtime-host` starts the containerized runtime host.

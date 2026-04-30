@@ -7,7 +7,7 @@ each dataset declares its own `materialization_mode` and `sync.source.resource`.
 
 ## What This Example Covers
 
-- a configured Shopify connector under `examples/shopify_sync/langbridge_config.yml`
+- a configured Shopify connector under `examples/connectors/shopify_sync/langbridge_config.yml`
 - predeclared synced datasets that choose the Shopify resource at the dataset layer
 - runtime-managed sync state persisted under `.langbridge/metadata.db`
 - synced datasets materialized into the local DuckDB execution store
@@ -42,21 +42,21 @@ export SHOPIFY_ACCESS_TOKEN=shpat_...
 If you are using a Shopify app created in the Dev Dashboard, you can fetch the
 Admin API access token directly with the helper script in this example. The
 script uses Shopify's current client-credentials token endpoint and can update
-`examples/shopify_sync/.env` for you:
+`examples/connectors/shopify_sync/.env` for you:
 
 ```bash
 export SHOPIFY_SHOP_DOMAIN=acme.myshopify.com
 export SHOPIFY_CLIENT_ID=your_shopify_client_id
 export SHOPIFY_CLIENT_SECRET=your_shopify_client_secret
 
-python examples/shopify_sync/get_shopify_access_token.py --write-env
+python examples/connectors/shopify_sync/get_shopify_access_token.py --write-env
 ```
 
 The script will print shell exports and write `SHOPIFY_ACCESS_TOKEN` into the
 example `.env` file. If you only want the token value, use:
 
 ```bash
-python examples/shopify_sync/get_shopify_access_token.py --raw
+python examples/connectors/shopify_sync/get_shopify_access_token.py --raw
 ```
 
 Notes:
@@ -72,7 +72,7 @@ Notes:
 From the repository root:
 
 ```bash
-langbridge serve --config examples/shopify_sync/langbridge_config.yml --host 127.0.0.1 --port 8000
+langbridge serve --config examples/connectors/shopify_sync/langbridge_config.yml --host 127.0.0.1 --port 8000
 ```
 
 The host will listen on `http://localhost:8000`.
@@ -200,4 +200,4 @@ langbridge sync states --url http://localhost:8000 --connector shopify_demo
 - `shopify_product_options` demonstrates dataset-owned child resource paths
 - `shopify_customers` demonstrates explicit 1:1 flattening with `sync.source.flatten`
 - live materialization is also dataset-owned in the runtime, but this example stays focused on API sync datasets
-- remove local persisted runtime state by deleting `examples/shopify_sync/.langbridge`
+- remove local persisted runtime state by deleting `examples/connectors/shopify_sync/.langbridge`

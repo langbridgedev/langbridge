@@ -1873,38 +1873,38 @@ semantic_models:
 
 
 @pytest.mark.parametrize(
-    ("example_name", "connector_name", "env_vars", "expected_resources", "expected_fields"),
+    ("example_path", "connector_name", "env_vars", "expected_resources", "expected_fields"),
     [
-            (
-                "shopify_sync",
-                "shopify_demo",
-                {
-                    "SHOPIFY_SHOP_DOMAIN": "acme.myshopify.com",
-                    "SHOPIFY_ACCESS_TOKEN": "shpat_test_token",
-                },
-                ["orders", "customers", "products"],
-                {
-                    "shop_domain": "acme.myshopify.com",
-                    "access_token": "shpat_test_token",
-                },
-            ),
         (
-            "hubspot_sync",
-                "hubspot_demo",
-                {
-                    "HUBSPOT_ACCESS_TOKEN": "pat_test_token",
-                },
-                ["contacts", "companies", "deals", "tickets"],
-                {
-                    "access_token": "pat_test_token",
-                },
-            ),
+            ("connectors", "shopify_sync"),
+            "shopify_demo",
+            {
+                "SHOPIFY_SHOP_DOMAIN": "acme.myshopify.com",
+                "SHOPIFY_ACCESS_TOKEN": "shpat_test_token",
+            },
+            ["orders", "customers", "products"],
+            {
+                "shop_domain": "acme.myshopify.com",
+                "access_token": "shpat_test_token",
+            },
+        ),
+        (
+            ("connectors", "hubspot_sync"),
+            "hubspot_demo",
+            {
+                "HUBSPOT_ACCESS_TOKEN": "pat_test_token",
+            },
+            ["contacts", "companies", "deals", "tickets"],
+            {
+                "access_token": "pat_test_token",
+            },
+        ),
     ],
 )
 def test_saas_connector_example_configs_build_runtime_connectors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    example_name: str,
+    example_path: tuple[str, ...],
     connector_name: str,
     env_vars: dict[str, str],
     expected_resources: list[str],
@@ -1914,8 +1914,8 @@ def test_saas_connector_example_configs_build_runtime_connectors(
         monkeypatch.setenv(key, value)
 
     repo_root = Path(__file__).resolve().parents[3]
-    source_config_path = repo_root / "examples" / example_name / "langbridge_config.yml"
-    config_dir = tmp_path / example_name
+    source_config_path = repo_root / "examples" / Path(*example_path) / "langbridge_config.yml"
+    config_dir = tmp_path / Path(*example_path)
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "langbridge_config.yml"
     config_path.write_text(source_config_path.read_text(encoding="utf-8"), encoding="utf-8")

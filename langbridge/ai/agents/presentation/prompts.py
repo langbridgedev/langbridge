@@ -5,6 +5,10 @@ from typing import Any
 from langbridge.ai.tools.charting import ChartSpec
 
 
+def _json(value: Any) -> str:
+    return json.dumps(value, default=str, ensure_ascii=False)
+
+
 def build_presentation_prompt(
     *,
     question: str,
@@ -17,6 +21,7 @@ def build_presentation_prompt(
     visualization_recommendation: dict[str, Any] | None,
     visualization: ChartSpec | None,
     available_artifacts: list[dict[str, Any]] | None = None,
+    presentation_guidance: dict[str, Any] | None = None,
 ) -> str:
     return (
         "Compose the final Langbridge response.\n"
@@ -51,20 +56,23 @@ def build_presentation_prompt(
         "- Return artifacts as the subset of Available artifacts referenced in answer_markdown or explicitly selected in artifacts.\n"
         "- Preserve provided result data when present.\n"
         "- Include visualization only when supported by provided visualization context.\n"
-        "- Keep diagnostics as a compact object.\n\n"
+        "- Keep diagnostics as a compact object.\n"
+        "- Follow Profile presentation guidance for wording, currency, rounding, and numeric display unless it conflicts with verified evidence.\n"
+        "- If Profile presentation guidance specifies currency or number formatting, apply it consistently in answer_markdown.\n\n"
         f"Mode: {mode}\n"
         f"Question: {question}\n"
         f"Context error: {context.get('error') or ''}\n"
         f"Clarification: {context.get('clarification_question') or ''}\n"
-        f"Presentation revision request: {json.dumps(context.get('presentation_revision_request') or {}, default=str)}\n"
+        f"Presentation revision request: {_json(context.get('presentation_revision_request') or {})}\n"
         f"Conversation memory: {context.get('memory_context') or ''}\n"
-        f"Data: {json.dumps(data_payload or {}, default=str)}\n"
-        f"Analysis: {json.dumps(analysis_payload or {}, default=str)}\n"
-        f"Research: {json.dumps(research_payload or {}, default=str)}\n"
-        f"Answer: {json.dumps(answer_payload or {}, default=str)}\n"
-        f"Visualization recommendation: {json.dumps(visualization_recommendation or {}, default=str)}\n"
-        f"Visualization: {json.dumps(visualization.model_dump(mode='json') if visualization else None, default=str)}\n"
-        f"Available artifacts: {json.dumps(available_artifacts or [], default=str)}\n"
+        f"Data: {_json(data_payload or {})}\n"
+        f"Analysis: {_json(analysis_payload or {})}\n"
+        f"Research: {_json(research_payload or {})}\n"
+        f"Answer: {_json(answer_payload or {})}\n"
+        f"Visualization recommendation: {_json(visualization_recommendation or {})}\n"
+        f"Visualization: {_json(visualization.model_dump(mode='json') if visualization else None)}\n"
+        f"Profile presentation guidance: {_json(presentation_guidance or {})}\n"
+        f"Available artifacts: {_json(available_artifacts or [])}\n"
     )
 
 

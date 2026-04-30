@@ -596,7 +596,7 @@ ai:
           Focus on campaign efficiency, influenced pipeline, segment performance, customer conversion, and support burden.
           Prefer the growth semantic model for governed answers and fall back to scoped dataset SQL only when needed.
           Treat spend, pipeline, and revenue as one joined story and call out data grain when it matters.
-        presentation: Explain tradeoffs between efficiency and scale, and separate proven findings from inference. Please format all numbers with commas and no decimal places unless the number is less than 1,000. And with the currency (which is GBP)
+        presentation: Explain tradeoffs between efficiency and scale, and separate proven findings from inference. Please format all numbers with commas and no decimal places unless the number is less than 1,000. Please add the curreny symbol (which is £) to all revenue and spend figures.
       exposure:
         runtime: true
         mcp: true

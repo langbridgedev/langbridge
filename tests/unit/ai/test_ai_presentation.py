@@ -1,6 +1,6 @@
 import asyncio
 
-from langbridge.ai.agents.presentation import PresentationAgent
+from langbridge.ai.agents.presentation import PresentationAgent, PresentationGuidance
 from langbridge.ai.tools.charting import ChartingTool
 
 
@@ -54,6 +54,49 @@ class _AutoVisualPresentationLLMProvider:
             '"answer":"Higher support load does not clearly map to worse CAC; the regional comparison is easier to read in the attached visual.",'
             '"diagnostics":{"mode":"final"}}'
         )
+
+
+def test_presentation_guidance_derives_gbp_formatting_from_profile_prompt() -> None:
+    guidance = PresentationGuidance.from_prompt(
+        profile_name="commerce_analyst",
+        agent_name="analyst.commerce_analyst",
+        prompt="Format all numbers with commas and no decimals; currency (which is GBP).",
+    )
+
+    assert guidance is not None
+    assert guidance.formatting["currency"] == {"code": "GBP", "symbol": "£"}
+    assert guidance.formatting["number"]["use_grouping"] is True
+    assert guidance.formatting["number"]["maximum_fraction_digits"] == 0
+
+
+def test_presentation_guidance_recognizes_common_currency_markers_safely() -> None:
+    cases = [
+        ("Use CAD for all revenue figures.", "CAD", "C$"),
+        ("Format revenue in Indian rupees.", "INR", "₹"),
+        ("Show spend using Swedish kronor.", "SEK", "kr"),
+        ("Use Brazilian real for commercial metrics.", "BRL", "R$"),
+    ]
+
+    for prompt, expected_code, expected_symbol in cases:
+        guidance = PresentationGuidance.from_prompt(
+            profile_name="analyst",
+            agent_name="analyst",
+            prompt=prompt,
+        )
+        assert guidance is not None
+        assert guidance.formatting["currency"] == {
+            "code": expected_code,
+            "symbol": expected_symbol,
+        }
+
+    guidance = PresentationGuidance.from_prompt(
+        profile_name="analyst",
+        agent_name="analyst",
+        prompt="Use regional marketing language and strong commercial framing.",
+    )
+
+    assert guidance is not None
+    assert "currency" not in guidance.formatting
 
 
 def test_presentation_falls_back_to_detailed_analysis_when_answer_missing() -> None:
@@ -430,6 +473,64 @@ def test_presentation_returns_typed_chart_table_sql_and_diagnostic_artifacts() -
     assert artifacts_by_id["execution_diagnostics"]["payload"]["agent_diagnostics"]["agent_mode"] == "sql"
     assert response["visualization"]["chart_type"] == "bar"
     assert response["result"]["rows"][0][0] == "Paid Social"
+
+
+def test_presentation_applies_profile_guidance_to_prompt_and_artifacts() -> None:
+    class _GuidanceAwareLLMProvider:
+        async def acomplete(self, prompt: str, **kwargs):
+            assert "Profile presentation guidance:" in prompt
+            assert "Please add the currency symbol" in prompt
+            assert '"symbol": "£"' in prompt
+            assert '"monthly_net_revenue"' in prompt
+            return (
+                '{"summary":"Paid Social led Q3 channel performance.",'
+                '"result":{},"visualization":null,"research":{},'
+                '"answer_markdown":"Paid Social led Q3 channel performance.\\n\\n{{artifact:result_table}}",'
+                '"artifacts":[{"id":"result_table"}],'
+                '"diagnostics":{"mode":"final"}}'
+            )
+
+    agent = PresentationAgent(llm_provider=_GuidanceAwareLLMProvider())
+
+    response = _run(
+        agent.compose(
+            question="Which order channels drove the highest net revenue and gross margin?",
+            context={
+                "presentation_guidance": {
+                    "profile_name": "growth_analyst",
+                    "agent_name": "analyst.growth_analyst",
+                    "instructions": "Please add the currency symbol (which is £) to all revenue and spend figures.",
+                    "formatting": {
+                        "currency": {"code": "GBP", "symbol": "£"},
+                        "number": {"use_grouping": True, "maximum_fraction_digits": 2},
+                    },
+                },
+                "step_results": [
+                    {
+                        "agent_name": "analyst.growth_analyst",
+                        "output": {
+                            "analysis": "Paid Social led both requested metrics.",
+                            "result": {
+                                "columns": [
+                                    "order_channel",
+                                    "monthly_net_revenue",
+                                    "monthly_gross_margin",
+                                ],
+                                "rows": [["Paid Social", 9139.54, 4912.33]],
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    table_artifact = response["artifacts"][0]
+    formatting = table_artifact["payload"]["formatting"]["columns"]
+    assert formatting["monthly_net_revenue"]["kind"] == "currency"
+    assert formatting["monthly_net_revenue"]["symbol"] == "£"
+    assert formatting["monthly_gross_margin"]["symbol"] == "£"
+    assert response["result"]["formatting"]["columns"]["monthly_net_revenue"]["currency"] == "GBP"
 
 
 def test_presentation_can_arrange_analyst_owned_artifacts() -> None:

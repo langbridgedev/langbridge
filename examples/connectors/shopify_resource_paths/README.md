@@ -33,4 +33,4 @@ export SHOPIFY_ACCESS_TOKEN=shpat_...
 ```
 
 If you need a helper to fetch an Admin API token, reuse the existing script in
-`examples/shopify_sync/get_shopify_access_token.py`.
+`examples/connectors/shopify_sync/get_shopify_access_token.py`.

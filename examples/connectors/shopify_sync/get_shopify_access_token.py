@@ -134,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Optionally write SHOPIFY_SHOP_DOMAIN and SHOPIFY_ACCESS_TOKEN to an env file. "
-            "Defaults to examples/shopify_sync/.env when provided without a path."
+            "Defaults to examples/connectors/shopify_sync/.env when provided without a path."
         ),
     )
     parser.add_argument(

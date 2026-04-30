@@ -34,6 +34,14 @@ function formatElapsed(value) {
   return `${(value / 1000).toFixed(2)} s`;
 }
 
+function columnFormatting(result, column) {
+  const columns = result?.formatting?.columns;
+  if (!columns || typeof columns !== "object") {
+    return null;
+  }
+  return columns[column] || columns[String(column || "").trim()] || null;
+}
+
 export function ResultTable({ result, maxPreviewRows = 12 }) {
   const columns = Array.isArray(result?.columns)
     ? result.columns.map((column, index) => toColumnName(column, index))
@@ -68,7 +76,9 @@ export function ResultTable({ result, maxPreviewRows = 12 }) {
               normalizedRows.map((row, rowIndex) => (
                 <tr key={rowIndex}>
                   {row.map((value, valueIndex) => (
-                    <td key={`${rowIndex}-${valueIndex}`}>{formatValue(value)}</td>
+                    <td key={`${rowIndex}-${valueIndex}`}>
+                      {formatValue(value, columnFormatting(result, visibleColumns[valueIndex]))}
+                    </td>
                   ))}
                 </tr>
               ))

@@ -1465,12 +1465,13 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
         context: dict[str, Any],
         mode: str,
     ) -> dict[str, Any]:
+        presentation_context = self._context_with_presentation_guidance(context)
         task = AgentTask(
             task_id="presentation",
             task_kind=AgentTaskKind.presentation,
             question=question,
             input={"mode": mode},
-            context=context,
+            context=presentation_context,
             expected_output=self._presentation_agent.specification.output_contract,
         )
         await self._emit_ai_event(
@@ -1488,6 +1489,53 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
         )
         response = result.output.get("response")
         return response if isinstance(response, dict) else result.output
+
+    def _context_with_presentation_guidance(self, context: dict[str, Any]) -> dict[str, Any]:
+        if isinstance(context.get("presentation_guidance"), dict):
+            return context
+        agent_name = self._presentation_guidance_agent_name(context)
+        if not agent_name:
+            return context
+        try:
+            agent = self._registry.get(agent_name)
+        except KeyError:
+            return context
+        guidance = getattr(agent, "presentation_guidance", None)
+        if callable(guidance):
+            guidance = guidance()
+        if guidance is None:
+            return context
+        if hasattr(guidance, "to_dict"):
+            payload = guidance.to_dict()
+        elif isinstance(guidance, dict):
+            payload = guidance
+        else:
+            return context
+        return {**context, "presentation_guidance": payload} if isinstance(payload, dict) and payload else context
+
+    @staticmethod
+    def _presentation_guidance_agent_name(context: dict[str, Any]) -> str | None:
+        step_results = context.get("step_results")
+        if isinstance(step_results, list):
+            for item in reversed(step_results):
+                if isinstance(item, dict):
+                    agent_name = str(item.get("agent_name") or "").strip()
+                    if agent_name:
+                        return agent_name
+        plan = context.get("plan")
+        if isinstance(plan, dict):
+            steps = plan.get("steps")
+            if isinstance(steps, list):
+                for step in reversed(steps):
+                    if isinstance(step, dict):
+                        agent_name = str(step.get("agent_name") or "").strip()
+                        if agent_name:
+                            return agent_name
+        for key in ("selected_agent", "agent_name"):
+            agent_name = str(context.get(key) or "").strip()
+            if agent_name:
+                return agent_name
+        return None
 
     @staticmethod
     def _build_run(

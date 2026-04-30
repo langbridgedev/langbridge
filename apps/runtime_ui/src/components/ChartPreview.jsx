@@ -66,6 +66,16 @@ function toNumber(value) {
   return null;
 }
 
+function formattingByColumn(result) {
+  const columns = result?.formatting?.columns;
+  return columns && typeof columns === "object" ? columns : {};
+}
+
+function createChartValueFormatter(result) {
+  const formats = formattingByColumn(result);
+  return (value, key = "") => formatValue(value, formats[key] || null);
+}
+
 function truncateLabel(value, limit = 18) {
   const text = String(value || "").trim();
   if (text.length <= limit) {
@@ -491,6 +501,7 @@ function BarLikeChart({
   onToggleSeries,
   onHoverSeries,
   onClearHoverSeries,
+  formatChartValue = formatValue,
 }) {
   const width = 720;
   const height = 320;
@@ -553,7 +564,7 @@ function BarLikeChart({
             <g key={tick}>
               <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} className="chart-grid-line" />
               <text x={padding.left - 12} y={y + 4} textAnchor="end" className="chart-axis-tick">
-                {formatValue(maxValue * tick)}
+                {formatChartValue(maxValue * tick, model.series[0]?.key)}
               </text>
             </g>
           );
@@ -609,10 +620,10 @@ function BarLikeChart({
                             height,
                             eyebrow: series.label,
                             title: category,
-                            value: formatValue(value),
+                            value: formatChartValue(value, series.key),
                             details: [
                               `${toDisplayLabel(xLabel)}: ${category}`,
-                              `${series.label}: ${formatValue(value)}`,
+                              `${series.label}: ${formatChartValue(value, series.key)}`,
                             ],
                             color: palette[seriesIndex % palette.length],
                           }),
@@ -628,10 +639,10 @@ function BarLikeChart({
                             height,
                             eyebrow: series.label,
                             title: category,
-                            value: formatValue(value),
+                            value: formatChartValue(value, series.key),
                             details: [
                               `${toDisplayLabel(xLabel)}: ${category}`,
-                              `${series.label}: ${formatValue(value)}`,
+                              `${series.label}: ${formatChartValue(value, series.key)}`,
                             ],
                             color: palette[seriesIndex % palette.length],
                           }),
@@ -685,10 +696,10 @@ function BarLikeChart({
                           height,
                           eyebrow: series.label,
                           title: category,
-                          value: formatValue(value),
+                          value: formatChartValue(value, series.key),
                           details: [
                             `${toDisplayLabel(xLabel)}: ${category}`,
-                            `${series.label}: ${formatValue(value)}`,
+                            `${series.label}: ${formatChartValue(value, series.key)}`,
                           ],
                           color: palette[seriesIndex % palette.length],
                         }),
@@ -704,10 +715,10 @@ function BarLikeChart({
                           height,
                           eyebrow: series.label,
                           title: category,
-                          value: formatValue(value),
+                          value: formatChartValue(value, series.key),
                           details: [
                             `${toDisplayLabel(xLabel)}: ${category}`,
-                            `${series.label}: ${formatValue(value)}`,
+                            `${series.label}: ${formatChartValue(value, series.key)}`,
                           ],
                           color: palette[seriesIndex % palette.length],
                         }),
@@ -773,6 +784,7 @@ function LineLikeChart({
   onToggleSeries,
   onHoverSeries,
   onClearHoverSeries,
+  formatChartValue = formatValue,
 }) {
   const width = 720;
   const height = 320;
@@ -838,7 +850,7 @@ function LineLikeChart({
             <g key={tick}>
               <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} className="chart-grid-line" />
               <text x={padding.left - 12} y={y + 4} textAnchor="end" className="chart-axis-tick">
-                {formatValue(maxValue * tick)}
+                {formatChartValue(maxValue * tick, model.series[0]?.key)}
               </text>
             </g>
           );
@@ -945,8 +957,8 @@ function LineLikeChart({
                         height,
                         eyebrow: series.label,
                         title: point.label,
-                        value: formatValue(point.value),
-                        details: [`${xLabel}: ${point.label}`, `${yLabel}: ${formatValue(point.value)}`],
+                        value: formatChartValue(point.value, series.key),
+                        details: [`${xLabel}: ${point.label}`, `${yLabel}: ${formatChartValue(point.value, series.key)}`],
                         color: palette[seriesIndex % palette.length],
                       }),
                     )
@@ -961,8 +973,8 @@ function LineLikeChart({
                         height,
                         eyebrow: series.label,
                         title: point.label,
-                        value: formatValue(point.value),
-                        details: [`${xLabel}: ${point.label}`, `${yLabel}: ${formatValue(point.value)}`],
+                        value: formatChartValue(point.value, series.key),
+                        details: [`${xLabel}: ${point.label}`, `${yLabel}: ${formatChartValue(point.value, series.key)}`],
                         color: palette[seriesIndex % palette.length],
                       }),
                     )
@@ -1000,6 +1012,7 @@ function ScatterChart({
   onToggleSeries,
   onHoverSeries,
   onClearHoverSeries,
+  formatChartValue = formatValue,
 }) {
   const width = 720;
   const height = 320;
@@ -1054,10 +1067,10 @@ function ScatterChart({
               <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} className="chart-grid-line" />
               <line x1={x} x2={x} y1={padding.top} y2={padding.top + chartHeight} className="chart-grid-line" />
               <text x={padding.left - 12} y={y + 4} textAnchor="end" className="chart-axis-tick">
-                {formatValue(maxY * tick)}
+                {formatChartValue(maxY * tick, yLabel)}
               </text>
               <text x={x} y={height - 18} textAnchor="middle" className="chart-axis-tick chart-axis-tick--x">
-                {formatValue(maxX * tick)}
+                {formatChartValue(maxX * tick, xLabel)}
               </text>
             </g>
           );
@@ -1115,8 +1128,8 @@ function ScatterChart({
                       height,
                       eyebrow: point.group,
                       title: point.label,
-                      value: `${formatValue(point.x)} / ${formatValue(point.y)}`,
-                      details: [`${xLabel}: ${formatValue(point.x)}`, `${yLabel}: ${formatValue(point.y)}`],
+                      value: `${formatChartValue(point.x, xLabel)} / ${formatChartValue(point.y, yLabel)}`,
+                      details: [`${xLabel}: ${formatChartValue(point.x, xLabel)}`, `${yLabel}: ${formatChartValue(point.y, yLabel)}`],
                       color: palette[groupIndex % palette.length],
                     }),
                   )
@@ -1131,8 +1144,8 @@ function ScatterChart({
                       height,
                       eyebrow: point.group,
                       title: point.label,
-                      value: `${formatValue(point.x)} / ${formatValue(point.y)}`,
-                      details: [`${xLabel}: ${formatValue(point.x)}`, `${yLabel}: ${formatValue(point.y)}`],
+                      value: `${formatChartValue(point.x, xLabel)} / ${formatChartValue(point.y, yLabel)}`,
+                      details: [`${xLabel}: ${formatChartValue(point.x, xLabel)}`, `${yLabel}: ${formatChartValue(point.y, yLabel)}`],
                       color: palette[groupIndex % palette.length],
                     }),
                   )
@@ -1202,6 +1215,7 @@ function PieChart({
   onToggleSlice,
   onTooltipChange,
   onTooltipClear,
+  formatChartValue = formatValue,
 }) {
   const total = slices.reduce((sum, slice) => sum + slice.value, 0) || 1;
   const cx = 140;
@@ -1263,9 +1277,9 @@ function PieChart({
                     height: 280,
                     eyebrow: title || "Breakdown",
                     title: slice.label,
-                    value: formatValue(slice.value),
+                    value: formatChartValue(slice.value, measureKey),
                     details: [
-                      `${truncateLabel(measureKey, 28)}: ${formatValue(slice.value)}`,
+                      `${truncateLabel(measureKey, 28)}: ${formatChartValue(slice.value, measureKey)}`,
                       `${Math.round((slice.value / total) * 100)}% of total`,
                     ],
                     color: palette[index % palette.length],
@@ -1286,9 +1300,9 @@ function PieChart({
                     height: 280,
                     eyebrow: title || "Breakdown",
                     title: slice.label,
-                    value: formatValue(slice.value),
+                    value: formatChartValue(slice.value, measureKey),
                     details: [
-                      `${truncateLabel(measureKey, 28)}: ${formatValue(slice.value)}`,
+                      `${truncateLabel(measureKey, 28)}: ${formatChartValue(slice.value, measureKey)}`,
                       `${Math.round((slice.value / total) * 100)}% of total`,
                     ],
                     color: palette[index % palette.length],
@@ -1310,7 +1324,7 @@ function PieChart({
               Total
             </text>
             <text x={cx} y={cy + 18} textAnchor="middle" className="chart-donut-total-value">
-              {formatValue(total)}
+              {formatChartValue(total, measureKey)}
             </text>
           </g>
         ) : null}
@@ -1334,7 +1348,7 @@ function PieChart({
             <div>
               <strong>{truncateLabel(slice.label, 20)}</strong>
               <span>
-                {formatValue(slice.value)} ({Math.round((slice.value / total) * 100)}%)
+                {formatChartValue(slice.value, measureKey)} ({Math.round((slice.value / total) * 100)}%)
               </span>
             </div>
           </button>
@@ -1344,11 +1358,11 @@ function PieChart({
   );
 }
 
-function StatCard({ stat, title }) {
+function StatCard({ stat, title, formatChartValue = formatValue }) {
   return (
     <div className="chart-stat-card">
       <span className="chart-stat-label">{title || truncateLabel(stat.measureKey, 32)}</span>
-      <strong>{formatValue(stat.value)}</strong>
+      <strong>{formatChartValue(stat.value, stat.measureKey)}</strong>
       <p>{truncateLabel(stat.context || stat.measureKey, 48)}</p>
     </div>
   );
@@ -1368,6 +1382,7 @@ export function ChartPreview({
   const [hoveredKey, setHoveredKey] = useState("");
   const [tooltip, setTooltip] = useState(null);
   const records = toRecords(result);
+  const formatChartValue = createChartValueFormatter(result);
   const palette = buildSeriesPalette(themeColors);
   const chartShellStyle = buildChartShellStyle(palette);
   const normalizedVisualization = visualization?.chartType
@@ -1485,6 +1500,7 @@ export function ChartPreview({
           onToggleSeries={handleToggleKey}
           onHoverSeries={setHoveredKey}
           onClearHoverSeries={clearHoverState}
+          formatChartValue={formatChartValue}
         />
       </ChartPanelShell>
     );
@@ -1563,7 +1579,7 @@ export function ChartPreview({
         chartType={chartType}
         style={chartShellStyle}
       >
-        <StatCard stat={stat} title={title} />
+        <StatCard stat={stat} title={title} formatChartValue={formatChartValue} />
       </ChartPanelShell>
     );
   }
@@ -1616,6 +1632,7 @@ export function ChartPreview({
           onToggleSlice={handleToggleKey}
           onTooltipChange={setTooltip}
           onTooltipClear={() => setTooltip(null)}
+          formatChartValue={formatChartValue}
         />
       </ChartPanelShell>
     );
@@ -1662,6 +1679,7 @@ export function ChartPreview({
           onToggleSeries={handleToggleKey}
           onHoverSeries={setHoveredKey}
           onClearHoverSeries={clearHoverState}
+          formatChartValue={formatChartValue}
         />
       ) : (
         <BarLikeChart
@@ -1677,6 +1695,7 @@ export function ChartPreview({
           onToggleSeries={handleToggleKey}
           onHoverSeries={setHoveredKey}
           onClearHoverSeries={clearHoverState}
+          formatChartValue={formatChartValue}
         />
       )}
     </ChartPanelShell>

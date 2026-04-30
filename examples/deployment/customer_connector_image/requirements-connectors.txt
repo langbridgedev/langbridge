@@ -1,0 +1,3 @@
+# Pin only the connector packages needed by this customer runtime image.
+# Replace this example with the connectors required by your deployment.
+langbridge-connector-hubspot==0.1.0

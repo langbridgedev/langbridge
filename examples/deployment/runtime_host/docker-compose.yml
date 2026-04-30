@@ -1,13 +1,13 @@
 services:
   runtime-host:
     build:
-      context: ../..
+      context: ../../..
       dockerfile: docker/Dockerfile
     container_name: langbridge-runtime-host
     command:
       - serve
       - --config
-      - /examples/runtime_host/langbridge_config.yml
+      - /examples/deployment/runtime_host/langbridge_config.yml
       - --host
       - 0.0.0.0
       - --port
@@ -19,8 +19,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ../:/examples
-      - runtime_host_state:/examples/runtime_host/.langbridge
+      - ../../:/examples
+      - runtime_host_state:/examples/deployment/runtime_host/.langbridge
     restart: unless-stopped
 
 volumes:

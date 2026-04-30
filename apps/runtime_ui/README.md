@@ -38,7 +38,7 @@ npm install
 Run the Vite dev server against a local runtime host:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features ui
 cd apps/runtime_ui
 npm run dev
 ```

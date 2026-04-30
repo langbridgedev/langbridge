@@ -161,6 +161,11 @@ function resolveArtifactVisualization(artifact, fallbackVisualization) {
   return candidate ? normalizeVisualizationSpec(candidate) : null;
 }
 
+function artifactFormatting(artifact) {
+  const payload = objectValue(artifact?.payload);
+  return objectValue(artifact?.formatting) || objectValue(payload?.formatting);
+}
+
 function resolveArtifactSql(artifact) {
   const payload = objectValue(artifact?.payload);
   return String(
@@ -230,7 +235,12 @@ function ArtifactBlock({
   const title = resolvedArtifact.title || resolvedArtifact.label || id;
 
   if (artifactType === "chart") {
-    const chartResult = resolveArtifactTableResult(resolvedArtifact, result);
+    const resolvedChartResult = resolveArtifactTableResult(resolvedArtifact, result);
+    const formatting = artifactFormatting(resolvedArtifact);
+    const chartResult =
+      resolvedChartResult && formatting && !resolvedChartResult.formatting
+        ? { ...resolvedChartResult, formatting }
+        : resolvedChartResult;
     const chartVisualization = resolveArtifactVisualization(resolvedArtifact, visualization);
     if (!chartResult || !chartVisualization || !hasRenderableVisualization(chartVisualization)) {
       return <MissingArtifact id={id} />;
@@ -250,7 +260,12 @@ function ArtifactBlock({
   }
 
   if (artifactType === "table") {
-    const tableResult = resolveArtifactTableResult(resolvedArtifact, result);
+    const resolvedTableResult = resolveArtifactTableResult(resolvedArtifact, result);
+    const formatting = artifactFormatting(resolvedArtifact);
+    const tableResult =
+      resolvedTableResult && formatting && !resolvedTableResult.formatting
+        ? { ...resolvedTableResult, formatting }
+        : resolvedTableResult;
     if (!tableResult) {
       return <MissingArtifact id={id} />;
     }

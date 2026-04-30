@@ -6,13 +6,13 @@ host serving a configured local runtime over HTTP.
 ## What This Example Gives You
 
 - a Dockerized runtime host
-- mounted runtime config at `/examples/runtime_host/langbridge_config.yml`
+- mounted runtime config at `/examples/deployment/runtime_host/langbridge_config.yml`
 - mounted demo SQLite warehouse from `examples/sdk/semantic_query/example.db`
-- persistent runtime state under `/examples/runtime_host/.langbridge`
+- persistent runtime state under `/examples/deployment/runtime_host/.langbridge`
 - runtime-owned HTTP endpoints for datasets, semantic query, scoped SQL, agents, and runtime info
 
 The example config keeps runtime metadata in SQLite at
-`examples/runtime_host/.langbridge/metadata.db`. For production or
+`examples/deployment/runtime_host/.langbridge/metadata.db`. For production or
 self-managed hosted deployments, switch `runtime.metadata_store` to `postgres`.
 This example leaves `runtime.migrations.auto_apply: true`, so `langbridge serve`
 upgrades the runtime metadata schema automatically before startup.
@@ -129,7 +129,7 @@ curl -X POST http://localhost:8000/api/runtime/v1/agents/ask \
   }'
 ```
 
-The agent in [`examples/runtime_host/langbridge_config.yml`](/home/callumwhi/langbridgedev/langbridge/examples/runtime_host/langbridge_config.yml)
+The agent in [`examples/deployment/runtime_host/langbridge_config.yml`](/home/callumwhi/langbridgedev/langbridge/examples/deployment/runtime_host/langbridge_config.yml)
 is configured through `agents[].definition.tools`, which is the canonical local
 runtime authoring model for SQL and semantic tool bindings.
 
@@ -150,19 +150,19 @@ See `docs/deployment/self-hosted.md` for the exact auth environment variables.
 ```bash
 pip install -e .
 python examples/sdk/semantic_query/setup.py
-langbridge serve --config examples/runtime_host/langbridge_config.yml --host 0.0.0.0 --port 8000
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --host 0.0.0.0 --port 8000
 ```
 
 Or:
 
 ```bash
-python -m langbridge serve --config examples/runtime_host/langbridge_config.yml --host 0.0.0.0 --port 8000
+python -m langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --host 0.0.0.0 --port 8000
 ```
 
 If you want the production-style migration flow instead, run:
 
 ```bash
-langbridge migrate --config examples/runtime_host/langbridge_config.yml
+langbridge migrate --config examples/deployment/runtime_host/langbridge_config.yml
 ```
 
 Then set `runtime.migrations.auto_apply: false` in the config before starting

@@ -14,7 +14,7 @@ This example shows the V1 live API dataset model for Shopify.
 From the repository root:
 
 ```bash
-langbridge serve --config examples/shopify_v1/live_resource_paths/langbridge_config.yml --host 127.0.0.1 --port 8000
+langbridge serve --config examples/connectors/shopify_resource_paths/live_resource_paths/langbridge_config.yml --host 127.0.0.1 --port 8000
 ```
 
 ## Inspect Datasets

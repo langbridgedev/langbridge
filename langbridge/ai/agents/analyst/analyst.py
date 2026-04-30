@@ -35,6 +35,7 @@ from langbridge.ai.agents.analyst.research_workflow import (
     ResearchStepDecision,
     ResearchWorkflowState,
 )
+from langbridge.ai.agents.presentation.guidance import PresentationGuidance
 from langbridge.ai.llm.base import LLMProvider
 from langbridge.ai.modes import (
     AnalystAgentMode,
@@ -183,6 +184,14 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 },
                 "supported_modes": [mode.value for mode in self._supported_modes()],
             },
+        )
+
+    @property
+    def presentation_guidance(self) -> PresentationGuidance | None:
+        return PresentationGuidance.from_prompt(
+            profile_name=self._config.name,
+            agent_name=self._config.agent_name,
+            prompt=self._config.prompts.presentation_prompt,
         )
 
     async def execute(self, task: AgentTask) -> AgentResult:

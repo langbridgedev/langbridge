@@ -21,14 +21,14 @@ python examples/sdk/semantic_query/setup.py
 Run the self-hosted runtime host:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
 ```
 
 If you want to exercise the explicit migration path instead of startup
 auto-apply:
 
 ```bash
-langbridge migrate --config examples/runtime_host/langbridge_config.yml
+langbridge migrate --config examples/deployment/runtime_host/langbridge_config.yml
 ```
 
 The runtime docs will be available at `http://127.0.0.1:8000/api/runtime/docs`.
@@ -38,7 +38,7 @@ The runtime docs will be available at `http://127.0.0.1:8000/api/runtime/docs`.
 Run the runtime host with the UI feature enabled:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features ui
 ```
 
 Then start the React app from `apps/runtime_ui`:
@@ -60,7 +60,7 @@ npm run build
 Run the runtime host with the MCP endpoint enabled:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --features mcp
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features mcp
 ```
 
 The MCP server will be mounted at `http://127.0.0.1:8000/mcp`.
@@ -75,10 +75,10 @@ docker compose --profile host up --build runtime-host
 
 ## Examples
 
-- `examples/runtime_host/`
-- `examples/runtime_host_sync/`
-- `examples/shopify_sync/`
-- `examples/hubspot_sync/`
+- `examples/deployment/runtime_host/`
+- `examples/deployment/runtime_host_sync/`
+- `examples/connectors/shopify_sync/`
+- `examples/connectors/hubspot_sync/`
 - `examples/sdk/semantic_query/`
 - `examples/sdk/federated_query/`
 

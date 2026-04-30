@@ -82,6 +82,11 @@ class PresentationAgent(AIEventSource, BaseAgent):
         analysis_payload = self._find_key_payload(step_results, "analysis")
         research_payload = self._find_key_payload(step_results, "synthesis")
         answer_payload = self._find_key_payload(step_results, "answer")
+        presentation_guidance = (
+            context.get("presentation_guidance")
+            if isinstance(context.get("presentation_guidance"), dict)
+            else None
+        )
         visualization_recommendation = self._find_visualization_recommendation(context, analysis_payload, research_payload, answer_payload)
         visualization = await self._maybe_chart(
             question=question,
@@ -93,6 +98,7 @@ class PresentationAgent(AIEventSource, BaseAgent):
             data_payload=data_payload,
             visualization=visualization,
             step_results=step_results,
+            presentation_guidance=presentation_guidance,
         )
         prompt = build_presentation_prompt(
             question=question,
@@ -105,6 +111,7 @@ class PresentationAgent(AIEventSource, BaseAgent):
             visualization_recommendation=visualization_recommendation,
             visualization=visualization,
             available_artifacts=available_artifacts,
+            presentation_guidance=presentation_guidance,
         )
         parsed = self._parse_json_object(
             await self._llm.acomplete(
@@ -116,6 +123,11 @@ class PresentationAgent(AIEventSource, BaseAgent):
         parsed_result = parsed.get("result")
         parsed_research = parsed.get("research")
         result_payload = parsed_result if isinstance(parsed_result, dict) and parsed_result else data_payload
+        if isinstance(result_payload, dict):
+            result_payload = self._with_artifact_formatting(
+                result_payload=result_payload,
+                available_artifacts=available_artifacts,
+            )
         answer = self._resolve_answer(
             parsed=parsed,
             mode=mode,
@@ -174,6 +186,23 @@ class PresentationAgent(AIEventSource, BaseAgent):
             details={"has_visualization": isinstance(response.get("visualization"), dict)},
         )
         return response
+
+    @staticmethod
+    def _with_artifact_formatting(
+        *,
+        result_payload: dict[str, Any],
+        available_artifacts: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if isinstance(result_payload.get("formatting"), dict):
+            return result_payload
+        if not {"columns", "rows"}.issubset(result_payload):
+            return result_payload
+        for artifact in available_artifacts:
+            payload = artifact.get("payload") if isinstance(artifact.get("payload"), dict) else {}
+            formatting = payload.get("formatting") if isinstance(payload.get("formatting"), dict) else artifact.get("formatting")
+            if isinstance(formatting, dict) and artifact.get("type") == "table":
+                return {**result_payload, "formatting": formatting}
+        return result_payload
 
     async def _maybe_chart(
         self,

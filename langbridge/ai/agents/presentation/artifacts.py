@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from langbridge.ai.agents.presentation.guidance import build_column_formatting
 from langbridge.ai.tools.charting import ChartSpec
 
 
@@ -16,14 +17,27 @@ def build_available_artifacts(
     data_payload: dict[str, Any] | None,
     visualization: ChartSpec | None,
     step_results: list[dict[str, Any]],
+    presentation_guidance: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build verified renderable artifacts from backend-owned outputs."""
 
     artifacts: list[dict[str, Any]] = []
-    _extend_step_artifacts(artifacts=artifacts, step_results=step_results)
+    _extend_step_artifacts(
+        artifacts=artifacts,
+        step_results=step_results,
+        presentation_guidance=presentation_guidance,
+    )
     has_table = _is_tabular_payload(data_payload)
+    columns = list(data_payload.get("columns") or []) if has_table and data_payload is not None else []
+    formatting = build_column_formatting(
+        columns=columns,
+        presentation_guidance=presentation_guidance,
+    )
 
     if visualization is not None:
+        visualization_payload = visualization.model_dump(mode="json")
+        if formatting:
+            visualization_payload["formatting"] = formatting
         _append_artifact(
             artifacts,
             _artifact(
@@ -32,18 +46,28 @@ def build_available_artifacts(
                 role="primary_result",
                 title=visualization.title,
                 source="visualization",
-                payload=visualization.model_dump(mode="json"),
+                payload=visualization_payload,
                 provenance={"source": "presentation", "source_key": "visualization"},
                 data_ref=(
                     {"kind": "artifact", "artifact_id": "result_table"}
                     if has_table
                     else {"kind": "response.visualization", "path": "visualization"}
                 ),
+                extra={"formatting": formatting} if formatting else None,
             ),
         )
 
     if has_table and data_payload is not None:
         rows = data_payload.get("rows") if isinstance(data_payload.get("rows"), list) else []
+        payload = {
+            "columns": columns,
+            "rows": rows,
+            "row_count": _row_count(data_payload),
+        }
+        extra = {"row_count": _row_count(data_payload)}
+        if formatting:
+            payload["formatting"] = formatting
+            extra["formatting"] = formatting
         _append_artifact(
             artifacts,
             _artifact(
@@ -52,14 +76,10 @@ def build_available_artifacts(
                 role="supporting_result" if visualization is not None else "primary_result",
                 title="Verified result table",
                 source="result",
-                payload={
-                    "columns": list(data_payload.get("columns") or []),
-                    "rows": rows,
-                    "row_count": _row_count(data_payload),
-                },
+                payload=payload,
                 provenance={"source": "analyst", "source_key": "result"},
                 data_ref={"kind": "response.result", "path": "result"},
-                extra={"row_count": _row_count(data_payload)},
+                extra=extra,
             ),
         )
 
@@ -188,12 +208,16 @@ def _extend_step_artifacts(
     *,
     artifacts: list[dict[str, Any]],
     step_results: list[dict[str, Any]],
+    presentation_guidance: dict[str, Any] | None,
 ) -> None:
     for step_result in step_results:
         if not isinstance(step_result, dict):
             continue
         for artifact in _iter_step_artifacts(step_result):
-            normalized = _normalize_step_artifact(artifact)
+            normalized = _normalize_step_artifact(
+                artifact,
+                presentation_guidance=presentation_guidance,
+            )
             if normalized is not None:
                 _append_artifact(artifacts, normalized)
 
@@ -214,7 +238,11 @@ def _iter_step_artifacts(step_result: dict[str, Any]) -> list[dict[str, Any]]:
     return artifacts
 
 
-def _normalize_step_artifact(artifact: dict[str, Any]) -> dict[str, Any] | None:
+def _normalize_step_artifact(
+    artifact: dict[str, Any],
+    *,
+    presentation_guidance: dict[str, Any] | None,
+) -> dict[str, Any] | None:
     artifact_id = str(
         artifact.get("id")
         or artifact.get("artifact_id")
@@ -246,7 +274,37 @@ def _normalize_step_artifact(artifact: dict[str, Any]) -> dict[str, Any] | None:
             ),
         }
     )
+    _attach_formatting(
+        artifact=normalized,
+        presentation_guidance=presentation_guidance,
+    )
     return normalized
+
+
+def _attach_formatting(
+    *,
+    artifact: dict[str, Any],
+    presentation_guidance: dict[str, Any] | None,
+) -> None:
+    if not presentation_guidance:
+        return
+    payload = artifact.get("payload")
+    if not isinstance(payload, dict) or isinstance(payload.get("formatting"), dict):
+        return
+    artifact_type = str(artifact.get("type") or "").strip()
+    if artifact_type not in {"table", "chart"}:
+        return
+    columns = payload.get("columns")
+    if not isinstance(columns, list):
+        return
+    formatting = build_column_formatting(
+        columns=columns,
+        presentation_guidance=presentation_guidance,
+    )
+    if not formatting:
+        return
+    payload["formatting"] = formatting
+    artifact["formatting"] = formatting
 
 
 def _artifact_ids_from_markdown(answer_markdown: str) -> list[str]:

@@ -21,7 +21,7 @@ connectors:
   - name: commerce_demo
     type: sqlite
     connection:
-      path: ../sdk/semantic_query/example.db
+      path: ../../sdk/semantic_query/example.db
 
 datasets:
   - name: shopify_orders

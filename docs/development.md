@@ -38,13 +38,13 @@ make build
 Run the runtime host:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
 ```
 
 Run the runtime host with the UI and MCP surfaces:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui,mcp
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features ui,mcp
 ```
 
 Build the runtime-owned UI bundle:

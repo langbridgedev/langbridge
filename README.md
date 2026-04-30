@@ -46,13 +46,13 @@ python examples/sdk/semantic_query/setup.py
 Start the runtime host:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
 ```
 
 Apply runtime metadata migrations explicitly when you need a controlled rollout:
 
 ```bash
-langbridge migrate --config examples/runtime_host/langbridge_config.yml
+langbridge migrate --config examples/deployment/runtime_host/langbridge_config.yml
 ```
 
 Open the runtime API docs at `http://127.0.0.1:8000/api/runtime/docs`.
@@ -60,31 +60,31 @@ Open the runtime API docs at `http://127.0.0.1:8000/api/runtime/docs`.
 Enable the runtime UI:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features ui
 ```
 
 Enable the MCP endpoint:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --features mcp
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features mcp
 ```
 
 Enable the BI / ODBC endpoint:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --features odbc --odbc-port 15432
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features odbc --odbc-port 15432
 ```
 
 Enable both:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui,mcp
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features ui,mcp
 ```
 
 You can also combine all runtime-facing surfaces:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui,mcp,odbc --odbc-port 15432
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features ui,mcp,odbc --odbc-port 15432
 ```
 
 SQLite metadata stores auto-apply Alembic migrations by default on startup. For
@@ -100,7 +100,7 @@ The runtime UI is source-controlled in `apps/runtime_ui` and built into `langbri
 For local UI development:
 
 ```bash
-langbridge serve --config examples/runtime_host/langbridge_config.yml --features ui
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features ui
 cd apps/runtime_ui
 npm install
 npm run dev
@@ -183,12 +183,15 @@ The runtime host supports thin auth modes:
 
 ## Examples
 
-- `examples/runtime_host/`: self-hosted runtime host over a local config
-- `examples/runtime_host_sync/`: connector sync example
-- `examples/shopify_sync/`: live Shopify declarative connector sync example
-- `examples/hubspot_sync/`: live HubSpot declarative connector sync example
+- `examples/golden/`: golden production-style runtime demo surface
+- `examples/deployment/runtime_host/`: self-hosted runtime host over a local config
+- `examples/deployment/runtime_host_sync/`: connector sync example
+- `examples/deployment/customer_connector_image/`: customer-specific Docker image with selected connector packages
+- `examples/connectors/shopify_sync/`: live Shopify declarative connector sync example
+- `examples/connectors/hubspot_sync/`: live HubSpot declarative connector sync example
 - `examples/sdk/semantic_query/`: local SDK + semantic query walkthrough
 - `examples/sdk/federated_query/`: local SDK + federated query walkthrough
+- `examples/legacy/complex_runtime/`: legacy complex local runtime example retained while `golden/` evolves
 
 # Supported Connectors
 

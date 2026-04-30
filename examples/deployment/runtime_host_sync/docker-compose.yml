@@ -1,7 +1,7 @@
 services:
   runtime-host:
     build:
-      context: ../..
+      context: ../../..
       dockerfile: docker/Dockerfile
     container_name: langbridge-runtime-host-sync
     command:
