@@ -466,10 +466,10 @@ def build_dataset_sync_default_task(
     task_name = name or f"dataset-sync:{normalized_dataset_name}"
 
     async def _handler(context: BackgroundTaskExecutionContext) -> Any:
-        sync_method = getattr(context.runtime_host, "sync_dataset", None)
-        if sync_method is None:
-            raise RuntimeError("Runtime host does not expose sync_dataset().")
-        return await sync_method(
+        create_job = getattr(context.runtime_host, "create_dataset_sync_job", None)
+        if create_job is None:
+            raise RuntimeError("Runtime host does not expose create_dataset_sync_job().")
+        return await create_job(
             dataset_ref=normalized_dataset_ref,
             sync_mode=sync_mode,
             force_full_refresh=force_full_refresh,

@@ -266,11 +266,19 @@ export function fetchDatasetSync(datasetRef) {
   return runtimeRequest(`/api/runtime/v1/datasets/${encodeURIComponent(datasetRef)}/sync`);
 }
 
-export function runDatasetSync(datasetRef, payload) {
-  return runtimeRequest(`/api/runtime/v1/datasets/${encodeURIComponent(datasetRef)}/sync`, {
+export async function runDatasetSync(datasetRef, payload, options = {}) {
+  const queued = await runtimeRequest(`/api/runtime/v1/datasets/${encodeURIComponent(datasetRef)}/sync`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
+  if (!queued?.job_id || options.waitForCompletion === false) {
+    return queued;
+  }
+  if (typeof options.onQueued === "function") {
+    options.onQueued(queued);
+  }
+  const job = await waitForRuntimeJob(queued.job_id, options);
+  return syncResultFromJob(queued, job);
 }
 
 export function fetchDatasets() {
@@ -350,6 +358,21 @@ export function querySql(payload) {
   });
 }
 
+export async function runSqlQuery(payload, options = {}) {
+  const queued = await runtimeRequest("/api/runtime/v1/sql/query/jobs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!queued?.job_id || options.waitForCompletion === false) {
+    return queued;
+  }
+  if (typeof options.onQueued === "function") {
+    options.onQueued(queued);
+  }
+  const job = await waitForRuntimeJob(queued.job_id, options);
+  return sqlResultFromJob(queued, job, payload);
+}
+
 export function fetchAgents() {
   return runtimeRequest("/api/runtime/v1/agents");
 }
@@ -358,36 +381,24 @@ export function fetchAgent(agentRef) {
   return runtimeRequest(`/api/runtime/v1/agents/${encodeURIComponent(agentRef)}`);
 }
 
-export function askAgent(payload) {
-  return runtimeRequest("/api/runtime/v1/agents/ask", {
+export function createAgentRun(payload) {
+  return runtimeRequest("/api/runtime/v1/agents/run", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export async function streamAgentRun(payload, options = {}) {
-  const { signal, onEvent } = options;
-  const response = await fetch("/api/runtime/v1/agents/ask/stream", {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      Accept: "text/event-stream",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-    signal,
-  });
-
-  return readSseResponse(response, { onEvent });
+export function fetchRuntimeJob(jobId) {
+  return runtimeRequest(`/api/runtime/v1/jobs/${encodeURIComponent(jobId)}`);
 }
 
-export async function streamRuntimeRun(runId, options = {}) {
+export async function streamRuntimeJob(jobId, options = {}) {
   const { signal, onEvent, afterSequence } = options;
   const query = Number.isFinite(Number(afterSequence)) && Number(afterSequence) > 0
     ? `?after_sequence=${encodeURIComponent(String(Number(afterSequence)))}`
     : "";
   const response = await fetch(
-    `/api/runtime/v1/runs/${encodeURIComponent(runId)}/stream${query}`,
+    `/api/runtime/v1/jobs/${encodeURIComponent(jobId)}/stream${query}`,
     {
       method: "GET",
       credentials: "include",
@@ -398,6 +409,138 @@ export async function streamRuntimeRun(runId, options = {}) {
     },
   );
   return readSseResponse(response, { onEvent });
+}
+
+export async function waitForRuntimeJob(jobId, options = {}) {
+  const {
+    signal,
+    onEvent,
+    pollIntervalMs = 750,
+    timeoutMs = 120_000,
+  } = options;
+
+  try {
+    await streamRuntimeJob(jobId, { signal, onEvent });
+  } catch (caughtError) {
+    if (signal?.aborted) {
+      throw caughtError;
+    }
+  }
+
+  const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+  let job = await fetchRuntimeJob(jobId);
+  while (!isTerminalRuntimeJob(job)) {
+    if (Date.now() >= deadline) {
+      throw buildError(`Runtime job ${jobId} did not complete before timeout.`, 408, job);
+    }
+    await sleep(Math.max(100, Number(pollIntervalMs) || 750), signal);
+    job = await fetchRuntimeJob(jobId);
+  }
+  return job;
+}
+
+function isTerminalRuntimeJob(job) {
+  return ["succeeded", "failed", "cancelled"].includes(
+    String(job?.status || "").trim().toLowerCase(),
+  );
+}
+
+function syncResultFromJob(queued, job) {
+  const status = String(job?.status || "").trim().toLowerCase();
+  if (status === "failed" || status === "cancelled") {
+    const message =
+      job?.error?.message ||
+      job?.status_message ||
+      `Dataset sync job ${status}.`;
+    throw buildError(message, status === "cancelled" ? 409 : 500, job);
+  }
+  const result = job?.result && typeof job.result === "object" ? job.result : {};
+  return {
+    ...queued,
+    ...result,
+    status: result.status || status || queued.status,
+    job_id: queued.job_id || job?.id,
+    job_type: queued.job_type || job?.job_type,
+    job,
+  };
+}
+
+function sqlResultFromJob(queued, job, requestPayload = {}) {
+  const status = String(job?.status || "").trim().toLowerCase();
+  if (status === "failed" || status === "cancelled") {
+    const message =
+      job?.error?.message ||
+      job?.status_message ||
+      `SQL query job ${status}.`;
+    throw buildError(message, status === "cancelled" ? 409 : 500, job);
+  }
+  const result = job?.result && typeof job.result === "object" ? job.result : {};
+  const resultTable = findRuntimeJobArtifact(job, "result_table");
+  const diagnostics = findRuntimeJobArtifact(job, "sql_diagnostics");
+  const tableData = resultTable?.data && typeof resultTable.data === "object" ? resultTable.data : {};
+  const diagnosticsData = diagnostics?.data && typeof diagnostics.data === "object" ? diagnostics.data : {};
+  const rows = Array.isArray(result.rows)
+    ? result.rows
+    : Array.isArray(tableData.rows)
+      ? tableData.rows
+      : [];
+  const columns = Array.isArray(result.columns)
+    ? result.columns
+    : Array.isArray(tableData.columns)
+      ? tableData.columns
+      : [];
+  return {
+    ...queued,
+    ...result,
+    status: result.status || status || queued.status,
+    job_id: queued.job_id || job?.id,
+    job_type: queued.job_type || job?.job_type,
+    query_scope: result.query_scope || queued.query_scope || requestPayload.query_scope,
+    query: result.query || requestPayload.query,
+    generated_sql: result.generated_sql || diagnosticsData.generated_sql,
+    rows,
+    columns,
+    row_count_preview:
+      result.row_count_preview ??
+      tableData.row_count_preview ??
+      rows.length,
+    total_rows_estimate: result.total_rows_estimate ?? diagnosticsData.total_rows_estimate,
+    bytes_scanned: result.bytes_scanned ?? diagnosticsData.bytes_scanned,
+    duration_ms: result.duration_ms ?? diagnosticsData.duration_ms,
+    redaction_applied: Boolean(result.redaction_applied ?? diagnosticsData.redaction_applied),
+    federation_diagnostics:
+      result.federation_diagnostics || diagnosticsData.federation_diagnostics || null,
+    artifacts: Array.isArray(job?.artifacts) ? job.artifacts : [],
+    job,
+  };
+}
+
+function findRuntimeJobArtifact(job, artifactKey) {
+  if (!Array.isArray(job?.artifacts)) {
+    return null;
+  }
+  return job.artifacts.find((artifact) => artifact?.artifact_key === artifactKey) || null;
+}
+
+function sleep(ms, signal) {
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason || new Error("Operation aborted."));
+  }
+  return new Promise((resolve, reject) => {
+    let timeout;
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(signal.reason || new Error("Operation aborted."));
+    };
+    timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (!signal) {
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export function createThread(payload = {}) {

@@ -10,7 +10,11 @@ from langbridge.runtime import build_configured_local_runtime
 from langbridge.runtime.config import load_runtime_config, resolve_metadata_store_config
 from langbridge.runtime.config.models import LocalRuntimeConfig
 from langbridge.runtime.hosting import create_runtime_api_app
-from langbridge.runtime.persistence.db import create_engine_for_url, initialize_database
+from langbridge.runtime.persistence.db import (
+    create_engine_for_url,
+    get_runtime_metadata,
+    initialize_database,
+)
 from langbridge.runtime.persistence.migrations import (
     RuntimeMetadataMigrationRequiredError,
     build_runtime_metadata_alembic_config,
@@ -88,6 +92,16 @@ def test_cli_migrate_runs_runtime_metadata_migrations(tmp_path: Path, capsys) ->
     metadata_db = _sqlite_metadata_path(config_path)
     assert "alembic_version" in _sqlite_table_names(metadata_db)
     assert _sqlite_alembic_revision(metadata_db) == payload["head_revision"]
+
+
+def test_runtime_metadata_baseline_creates_only_current_runtime_tables(tmp_path: Path) -> None:
+    config_path = _write_runtime_config(tmp_path)
+
+    exit_code = main(["migrate", "--config", str(config_path)])
+
+    assert exit_code == 0
+    metadata_tables = _sqlite_table_names(_sqlite_metadata_path(config_path))
+    assert metadata_tables - {"alembic_version"} == set(get_runtime_metadata().tables)
 
 
 def test_configured_runtime_migrates_sqlite_metadata_store_on_bootstrap(tmp_path: Path) -> None:

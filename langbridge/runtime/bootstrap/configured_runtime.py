@@ -14,6 +14,11 @@ import yaml
 from langbridge.plugins.connectors import ConnectorPlugin
 from langbridge.runtime.application import build_runtime_applications
 from langbridge.runtime.application.connectors import _extract_connection_metadata
+from langbridge.runtime.application.job_handlers import (
+    AgentRunJobHandler,
+    DatasetSyncJobHandler,
+    SqlQueryJobHandler,
+)
 from langbridge.runtime.config import load_runtime_config, resolve_metadata_store_config
 from langbridge.runtime.config.models import (
     LocalRuntimeConfig,
@@ -68,6 +73,7 @@ from langbridge.runtime.persistence.in_memory import (
     _InMemoryDatasetPolicyRepository,
     _InMemoryDatasetRepository,
     _InMemoryDatasetRevisionRepository,
+    _InMemoryJobRepository,
     _InMemoryLLMConnectionRepository,
     _InMemoryLineageEdgeRepository,
     _InMemorySemanticModelStore,
@@ -116,12 +122,16 @@ from langbridge.runtime.services.agents import AgentExecutionService
 from langbridge.runtime.services.dataset_execution import describe_file_source_schema
 from langbridge.runtime.services.dataset_query import DatasetQueryService
 from langbridge.runtime.services.dataset_sync import ConnectorSyncRuntime
+from langbridge.runtime.services.jobs import (
+    RuntimeJobHandlerRegistry,
+    RuntimeJobProcessor,
+    RuntimeJobService,
+)
 from langbridge.runtime.services.runtime_host import (
     RuntimeHost,
     RuntimeProviders,
     RuntimeServices,
 )
-from langbridge.runtime.services.run_streams import RuntimeRunStreamRegistry
 from langbridge.connectors.base import (
     ApiConnectorFactory,
     ConnectorSyncStrategy,
@@ -207,6 +217,7 @@ class _ConfiguredLocalRuntimeResources:
     dataset_revision_repository: Any
     lineage_edge_repository: Any
     connector_sync_state_repository: Any
+    job_repository: Any
     secret_provider_registry: SecretProviderRegistry
     thread_repository: Any
     thread_message_repository: Any
@@ -535,10 +546,11 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         dataset_policy_repository: DatasetPolicyStore,
         lineage_edge_repository: Any,
         connector_sync_state_repository: ConnectorSyncStateStore,
+        job_repository: Any,
         secret_provider_registry: SecretProviderRegistry,
         thread_repository: ThreadStore,
         thread_message_repository: ThreadMessageStore,
-        run_streams: RuntimeRunStreamRegistry | None = None,
+        job_processor: RuntimeJobProcessor | None = None,
         persistence_controller: _ConfiguredRuntimePersistenceController | None = None,
         owns_runtime_resources: bool = True,
     ) -> None:
@@ -557,15 +569,21 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         self._dataset_policy_repository = dataset_policy_repository
         self._lineage_edge_repository = lineage_edge_repository
         self._connector_sync_state_repository = connector_sync_state_repository
+        self._job_repository = job_repository
         self._secret_provider_registry = secret_provider_registry
         self._api_connector_factory = ApiConnectorFactory()
         self._thread_repository = thread_repository
         self._thread_message_repository = thread_message_repository
-        self._run_streams = run_streams or RuntimeRunStreamRegistry()
+        self._job_processor = job_processor or RuntimeJobProcessor(
+            job_service=self._runtime_host.services.jobs,
+            handlers=RuntimeJobHandlerRegistry(),
+        )
         self._persistence_controller = persistence_controller
         self._owns_runtime_resources = owns_runtime_resources
         self.context = context
         self._applications = build_runtime_applications(self)
+        if self._owns_runtime_resources:
+            self._register_default_job_handlers()
 
     @property
     def providers(self):
@@ -604,19 +622,20 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             dataset_policy_repository=self._dataset_policy_repository,
             lineage_edge_repository=self._lineage_edge_repository,
             connector_sync_state_repository=self._connector_sync_state_repository,
+            job_repository=self._job_repository,
             secret_provider_registry=self._secret_provider_registry,
             thread_repository=self._thread_repository,
             thread_message_repository=self._thread_message_repository,
-            run_streams=self._run_streams,
+            job_processor=self._job_processor,
             persistence_controller=self._persistence_controller,
             owns_runtime_resources=False,
         )
 
     async def aclose(self) -> None:
+        if self._owns_runtime_resources:
+            await self.stop_job_processor()
         if self._owns_runtime_resources and self._persistence_controller is not None:
             await self._persistence_controller.aclose()
-        if self._owns_runtime_resources:
-            await self._run_streams.aclose()
         await self._runtime_host.aclose()
 
     def close(self) -> None:
@@ -728,14 +747,98 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             force_full_refresh=force_full_refresh,
         )
 
+    async def create_dataset_sync_job(
+        self,
+        *,
+        dataset_ref: str,
+        sync_mode: str = "INCREMENTAL",
+        force_full_refresh: bool = False,
+    ) -> dict[str, Any]:
+        return await self._applications.datasets.create_dataset_sync_job(
+            dataset_ref=dataset_ref,
+            sync_mode=sync_mode,
+            force_full_refresh=force_full_refresh,
+        )
+
+    async def execute_dataset_sync(
+        self,
+        *,
+        dataset_ref: str,
+        sync_mode: str = "INCREMENTAL",
+        force_full_refresh: bool = False,
+    ) -> dict[str, Any]:
+        return await self._applications.datasets.execute_dataset_sync(
+            dataset_ref=dataset_ref,
+            sync_mode=sync_mode,
+            force_full_refresh=force_full_refresh,
+        )
+
     async def query_semantic(self, *args: Any, **kwargs: Any) -> Any:
         return await self._applications.semantic.query_semantic(*args, **kwargs)
 
     async def query_sql(self, *, request) -> dict[str, Any]:
         return await self._applications.sql.query_sql(request=request)
 
+    async def create_sql_query_job(self, *, request) -> dict[str, Any]:
+        return await self._applications.sql.create_sql_query_job(request=request)
+
+    async def execute_sql_query(self, *, request) -> dict[str, Any]:
+        return await self._applications.sql.execute_sql_query(request=request)
+
     async def execute_sql(self, *, request) -> dict[str, Any]:
         return await self._applications.sql.execute_sql(request=request)
+
+    async def create_job(self, *, request) -> dict[str, Any]:
+        return await self._applications.jobs.create_job(request=request)
+
+    async def get_job(self, *, job_id: uuid.UUID) -> dict[str, Any]:
+        return await self._applications.jobs.get_job(job_id=job_id)
+
+    async def list_jobs(
+        self,
+        *,
+        job_type: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        return await self._applications.jobs.list_jobs(
+            job_type=job_type,
+            status=status,
+            limit=limit,
+        )
+
+    async def cancel_job(self, *, job_id: uuid.UUID, request) -> dict[str, Any]:
+        return await self._applications.jobs.cancel_job(job_id=job_id, request=request)
+
+    async def stream_job(
+        self,
+        *,
+        job_id: uuid.UUID,
+        after_sequence: int = 0,
+        heartbeat_interval: float = 10.0,
+    ):
+        return await self._applications.jobs.stream_job(
+            job_id=job_id,
+            after_sequence=after_sequence,
+            heartbeat_interval=heartbeat_interval,
+        )
+
+    def register_job_handler(self, handler) -> None:
+        self._job_processor.register_handler(handler)
+
+    def start_job_processor(self) -> None:
+        self._job_processor.start()
+
+    async def stop_job_processor(self) -> None:
+        await self._job_processor.stop()
+
+    def wake_job_processor(self) -> None:
+        self._job_processor.wake()
+
+    def _register_default_job_handlers(self) -> None:
+        self.register_job_handler(AgentRunJobHandler(host=self))
+        self.register_job_handler(DatasetSyncJobHandler(host=self))
+        self.register_job_handler(SqlQueryJobHandler(host=self))
 
     async def create_agent(self, *args: Any, **kwargs: Any) -> Any:
         return await self._applications.agents.create_agent(*args, **kwargs)
@@ -1025,6 +1128,40 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             metadata_json=metadata_json,
         )
 
+    async def create_agent_run_job(
+        self,
+        *,
+        prompt: str,
+        agent_name: str | None = None,
+        thread_id: uuid.UUID | None = None,
+        title: str | None = None,
+        agent_mode: str | None = None,
+        metadata_json: dict[str, Any] | None = None,
+        mcp: bool = False,
+    ) -> dict[str, Any]:
+        return await self._applications.agents.create_agent_run_job(
+            prompt=prompt,
+            agent_name=agent_name,
+            thread_id=thread_id,
+            title=title,
+            agent_mode=agent_mode,
+            metadata_json=metadata_json,
+            mcp=mcp,
+        )
+
+    async def execute_agent_run(
+        self,
+        *,
+        job_id: uuid.UUID,
+        payload: dict[str, Any],
+        event_emitter,
+    ) -> dict[str, Any]:
+        return await self._applications.agents.execute_agent_run(
+            job_id=job_id,
+            payload=payload,
+            event_emitter=event_emitter,
+        )
+
     def ask_agent_stream(
         self,
         *,
@@ -1042,19 +1179,6 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             title=title,
             agent_mode=agent_mode,
             metadata_json=metadata_json,
-        )
-
-    async def stream_run(
-        self,
-        *,
-        run_id: uuid.UUID,
-        after_sequence: int = 0,
-        heartbeat_interval: float = 10.0,
-    ):
-        return await self._applications.runs.stream_run(
-            run_id=run_id,
-            after_sequence=after_sequence,
-            heartbeat_interval=heartbeat_interval,
         )
 
     async def create_thread(
@@ -1880,6 +2004,7 @@ class ConfiguredLocalRuntimeHostFactory:
             dataset_policy_repository=resources.dataset_policy_repository,
             lineage_edge_repository=resources.lineage_edge_repository,
             connector_sync_state_repository=resources.connector_sync_state_repository,
+            job_repository=resources.job_repository,
             secret_provider_registry=resources.secret_provider_registry,
             thread_repository=resources.thread_repository,
             thread_message_repository=resources.thread_message_repository,
@@ -1969,6 +2094,7 @@ class ConfiguredLocalRuntimeHostFactory:
             dataset_revision_repository,
             lineage_edge_repository,
             connector_sync_state_repository,
+            job_repository,
             thread_repository,
             thread_message_repository,
             persistence_controller,
@@ -2023,6 +2149,7 @@ class ConfiguredLocalRuntimeHostFactory:
             dataset_revision_repository=dataset_revision_repository,
             lineage_edge_repository=lineage_edge_repository,
             connector_sync_state_repository=connector_sync_state_repository,
+            job_repository=job_repository,
             secret_provider_registry=secret_provider_registry,
             thread_repository=thread_repository,
             thread_message_repository=thread_message_repository,
@@ -2147,7 +2274,7 @@ class ConfiguredLocalRuntimeHostFactory:
         dataset_columns: dict[uuid.UUID, list[DatasetColumnMetadata]],
         dataset_policies: dict[uuid.UUID, DatasetPolicyMetadata],
         secret_provider_registry: SecretProviderRegistry,
-    ) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController | None]:
+    ) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController | None]:
         if metadata_store.type == "in_memory":
             dataset_repository = _InMemoryDatasetRepository(dataset_repository_rows)
             dataset_column_repository = _InMemoryDatasetColumnRepository(dataset_columns)
@@ -2155,7 +2282,7 @@ class ConfiguredLocalRuntimeHostFactory:
             dataset_revision_repository = _InMemoryDatasetRevisionRepository()
             lineage_edge_repository = _InMemoryLineageEdgeRepository()
             connector_sync_state_repository = _InMemoryConnectorSyncStateRepository()
-            runtime_host, thread_repository, thread_message_repository = (
+            runtime_host, thread_repository, thread_message_repository, job_repository = (
                 ConfiguredLocalRuntimeHostFactory._build_runtime_host(
                     context=context,
                     connectors=connectors,
@@ -2180,6 +2307,7 @@ class ConfiguredLocalRuntimeHostFactory:
                 dataset_revision_repository,
                 lineage_edge_repository,
                 connector_sync_state_repository,
+                job_repository,
                 thread_repository,
                 thread_message_repository,
                 None,
@@ -2213,7 +2341,7 @@ class ConfiguredLocalRuntimeHostFactory:
         dataset_columns: dict[uuid.UUID, list[DatasetColumnMetadata]],
         dataset_policies: dict[uuid.UUID, DatasetPolicyMetadata],
         secret_provider_registry: SecretProviderRegistry,
-    ) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController]:
+    ) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController]:
         return build_persisted_runtime_resources(
             metadata_store=metadata_store,
             context=context,
@@ -3218,7 +3346,7 @@ class ConfiguredLocalRuntimeHostFactory:
         lineage_edge_repository: _InMemoryLineageEdgeRepository,
         connector_sync_state_repository: _InMemoryConnectorSyncStateRepository,
         secret_provider_registry: SecretProviderRegistry,
-    ) -> tuple[RuntimeHost, _InMemoryThreadRepository, _InMemoryThreadMessageRepository]:
+    ) -> tuple[RuntimeHost, _InMemoryThreadRepository, _InMemoryThreadMessageRepository, _InMemoryJobRepository]:
         connector_provider = MemoryConnectorProvider(
             {connector.id: connector for connector in connectors.values()}
         )
@@ -3260,6 +3388,7 @@ class ConfiguredLocalRuntimeHostFactory:
         )
         thread_repository = _InMemoryThreadRepository()
         thread_message_repository = _InMemoryThreadMessageRepository()
+        job_repository = _InMemoryJobRepository()
         memory_repository = _InMemoryConversationMemoryRepository()
         agent_repository = _InMemoryAgentRepository(
             {
@@ -3344,6 +3473,7 @@ class ConfiguredLocalRuntimeHostFactory:
             lineage_edge_repository=lineage_edge_repository,
             secret_provider_registry=secret_provider_registry,
         )
+        job_service = RuntimeJobService(repository=job_repository)
         agent_execution_service = (
             AgentExecutionService(
                 agent_definition_repository=agent_repository,
@@ -3381,9 +3511,10 @@ class ConfiguredLocalRuntimeHostFactory:
                 dataset_query=dataset_query_runtime,
                 dataset_sync=dataset_sync_runtime,
                 agent_execution=agent_execution_service,
+                jobs=job_service,
                 semantic_sql_query=semantic_sql_query_service,
             ),
-        ), thread_repository, thread_message_repository
+        ), thread_repository, thread_message_repository, job_repository
 
 
 def build_configured_local_runtime(

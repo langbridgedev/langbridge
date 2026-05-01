@@ -42,6 +42,7 @@ from langbridge.runtime.persistence.repositories.dataset_repository import (
 from langbridge.runtime.persistence.repositories.lineage_repository import (
     LineageEdgeRepository,
 )
+from langbridge.runtime.persistence.repositories.job_repository import JobRepository
 from langbridge.runtime.persistence.repositories.llm_connection_repository import (
     LLMConnectionRepository,
 )
@@ -81,6 +82,7 @@ from langbridge.runtime.services.agents import (
 )
 from langbridge.runtime.services.dataset_query import DatasetQueryService
 from langbridge.runtime.services.dataset_sync import ConnectorSyncRuntime
+from langbridge.runtime.services.jobs import RuntimeJobService
 from langbridge.runtime.services.runtime_host import (
     RuntimeHost,
     RuntimeProviders,
@@ -108,6 +110,7 @@ def build_local_runtime(
     connector_sync_state_repository: ConnectorSyncStateRepository | None = None,
     dataset_revision_repository: DatasetRevisionRepository | None = None,
     lineage_edge_repository: LineageEdgeRepository | None = None,
+    job_repository: JobRepository | None = None,
     sql_job_result_artifact_repository: SqlJobResultArtifactRepository | None = None,
     agent_definition_repository: AgentRepository | None = None,
     llm_repository: LLMConnectionRepository | None = None,
@@ -297,6 +300,7 @@ def build_local_runtime(
         if connector_sync_state_store is not None
         else None
     )
+    job_service = RuntimeJobService(repository=job_repository) if job_repository is not None else None
     semantic_sql_query_service = SemanticSqlQueryService()
     agent_execution_service = (
         AgentExecutionService(
@@ -339,6 +343,7 @@ def build_local_runtime(
             sql_query=sql_query_runtime,
             dataset_sync=dataset_sync_runtime,
             agent_execution=agent_execution_service,
+            jobs=job_service,
             semantic_sql_query=semantic_sql_query_service,
         ),
     )

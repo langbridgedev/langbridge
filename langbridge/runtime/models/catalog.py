@@ -1,5 +1,4 @@
 
-import enum
 import uuid
 from datetime import datetime
 from typing import Any
@@ -76,27 +75,3 @@ class LineageEdge(RuntimeModel):
         return dict(self.metadata)
 
 
-class RuntimeJobStatus(str, enum.Enum):
-    queued = "queued"
-    running = "running"
-    succeeded = "succeeded"
-    failed = "failed"
-    cancelled = "cancelled"
-
-
-class RuntimeJob(RuntimeModel):
-    id: uuid.UUID
-    workspace_id: str
-    job_type: str
-    payload: dict[str, Any] = Field(default_factory=dict)
-    headers: dict[str, Any] = Field(default_factory=dict)
-    status: RuntimeJobStatus | str = RuntimeJobStatus.queued
-    progress: int = 0
-    status_message: str | None = None
-    result: dict[str, Any] | None = None
-    error: dict[str, Any] | None = None
-    created_at: datetime | None = None
-    queued_at: datetime | None = None
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    updated_at: datetime | None = None

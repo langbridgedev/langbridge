@@ -152,7 +152,7 @@ def build_sql_runtime_resources(
     dataset_columns: dict[uuid.UUID, list[DatasetColumnMetadata]],
     dataset_policies: dict[uuid.UUID, DatasetPolicyMetadata],
     secret_provider_registry: SecretProviderRegistry,
-) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController]:
+) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController]:
     from langbridge.runtime.bootstrap.runtime_factory import build_local_runtime
     from langbridge.runtime.persistence import (
         RepositoryConversationMemoryStore,
@@ -242,6 +242,19 @@ def build_sql_runtime_resources(
         sync_methods={"add"},
         write_methods={"delete_for_target", "delete_for_node"},
     )
+    raw_job_repository = _RuntimeSessionRepositoryProxy(
+        controller=controller,
+        repository_attr="job_repository",
+        sync_methods={"create_job", "add"},
+        write_methods={
+            "add_artifact",
+            "append_event",
+            "claim_next",
+            "save",
+            "save_job",
+            "upsert_task",
+        },
+    )
     raw_agent_repository = _RuntimeSessionRepositoryProxy(
         controller=controller,
         repository_attr="agent_repository",
@@ -279,6 +292,7 @@ def build_sql_runtime_resources(
         connector_sync_state_repository=raw_connector_sync_state_repository,
         dataset_revision_repository=raw_dataset_revision_repository,
         lineage_edge_repository=raw_lineage_edge_repository,
+        job_repository=raw_job_repository,
         agent_definition_repository=raw_agent_repository,
         llm_repository=raw_llm_repository,
         thread_repository=raw_thread_repository,
@@ -295,6 +309,7 @@ def build_sql_runtime_resources(
         raw_dataset_revision_repository,
         raw_lineage_edge_repository,
         RepositoryConnectorSyncStateStore(repository=raw_connector_sync_state_repository),
+        raw_job_repository,
         RepositoryThreadStore(repository=raw_thread_repository),
         RepositoryThreadMessageStore(repository=raw_thread_message_repository),
         controller,

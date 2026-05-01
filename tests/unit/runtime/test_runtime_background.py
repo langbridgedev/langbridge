@@ -52,9 +52,9 @@ class RecordingDatasetSyncHost:
             roles=["runtime:operator"],
         )
 
-    async def sync_dataset(self, **kwargs):
+    async def create_dataset_sync_job(self, **kwargs):
         self.calls.append(dict(kwargs))
-        return {"ok": True}
+        return {"status": "queued"}
 
 
 def _build_runtime_host(
@@ -260,7 +260,7 @@ def test_dataset_sync_cadence_rejects_invalid_values() -> None:
 
 
 @pytest.mark.anyio
-async def test_dataset_sync_default_task_uses_runtime_host_dataset_sync() -> None:
+async def test_dataset_sync_default_task_queues_runtime_host_dataset_sync_job() -> None:
     runtime_host = RecordingDatasetSyncHost()
     manager = RuntimeBackgroundTaskManager(runtime_host=runtime_host)  # type: ignore[arg-type]
     manager.register_default_task(

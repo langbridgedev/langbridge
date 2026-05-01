@@ -1,12 +1,13 @@
 
 import re
 import uuid
+from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from langbridge.runtime.models.base import RuntimeRequestModel
+from langbridge.runtime.models.base import RuntimeModel, RuntimeRequestModel
 from langbridge.runtime.models.metadata import (
     DatasetSourceKind,
     DatasetStorageKind,
@@ -30,6 +31,156 @@ class JobType(str, Enum):
     DATASET_BULK_CREATE = "dataset_bulk_create"
     DATASET_CSV_INGEST = "dataset_csv_ingest"
     CONNECTOR_SYNC = "connector_sync"
+
+
+class RuntimeJobStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class RuntimeJobPriority(str, Enum):
+    low = "low"
+    normal = "normal"
+    high = "high"
+
+
+class RuntimeJobEventVisibility(str, Enum):
+    public = "public"
+    internal = "internal"
+
+
+class RuntimeJobTask(RuntimeModel):
+    id: uuid.UUID
+    job_id: uuid.UUID
+    task_key: str
+    task_type: str
+    status: RuntimeJobStatus | str
+    attempt: int = 0
+    max_attempts: int = 1
+    resume_policy: str | None = None
+    reuse_policy: str | None = None
+    input: dict[str, Any] = Field(default_factory=dict)
+    state: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    started_sequence: int | None = None
+    last_sequence: int | None = None
+    terminal_sequence: int | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    failed_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class RuntimeJobEvent(RuntimeModel):
+    id: uuid.UUID
+    job_id: uuid.UUID
+    task_id: uuid.UUID | None = None
+    sequence: int
+    event_type: str
+    status: RuntimeJobStatus | str
+    stage: str
+    message: str
+    visibility: RuntimeJobEventVisibility | str = RuntimeJobEventVisibility.internal
+    terminal: bool = False
+    source: str | None = None
+    raw_event_type: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+
+
+class RuntimeJobArtifact(RuntimeModel):
+    id: uuid.UUID
+    job_id: uuid.UUID
+    task_id: uuid.UUID | None = None
+    artifact_key: str
+    artifact_type: str
+    title: str | None = None
+    storage_kind: str = "inline"
+    storage_uri: str | None = None
+    data: dict[str, Any] | list[Any] | str | int | float | bool | None = None
+    artifact_schema: dict[str, Any] = Field(default_factory=dict, alias="schema")
+    formatting: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class RuntimeJob(RuntimeModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    job_type: str
+    status: RuntimeJobStatus | str = RuntimeJobStatus.queued
+    priority: RuntimeJobPriority | str = RuntimeJobPriority.normal
+    actor_id: uuid.UUID | None = None
+    subject_type: str | None = None
+    subject_id: uuid.UUID | None = None
+    queue_name: str = "default"
+    required_capabilities: list[str] = Field(default_factory=list)
+    runtime_pool_id: str | None = None
+    affinity_key: str | None = None
+    concurrency_key: str | None = None
+    idempotency_key: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+    progress: dict[str, Any] | int = Field(default_factory=dict)
+    status_message: str | None = None
+    last_sequence: int = 0
+    terminal_sequence: int | None = None
+    attempt: int = 0
+    max_attempts: int = 1
+    lock_owner: str | None = None
+    locked_until: datetime | None = None
+    heartbeat_at: datetime | None = None
+    scheduled_at: datetime | None = None
+    queued_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    failed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    tasks: list[RuntimeJobTask] = Field(default_factory=list)
+    events: list[RuntimeJobEvent] = Field(default_factory=list)
+    artifacts: list[RuntimeJobArtifact] = Field(default_factory=list)
+
+
+class CreateRuntimeJobRequest(RuntimeRequestModel):
+    job_type: str = Field(..., min_length=1, max_length=255)
+    subject_type: str | None = Field(default=None, max_length=64)
+    subject_id: uuid.UUID | None = None
+    queue_name: str = Field(default="default", min_length=1, max_length=128)
+    priority: RuntimeJobPriority = RuntimeJobPriority.normal
+    required_capabilities: list[str] = Field(default_factory=list)
+    runtime_pool_id: str | None = Field(default=None, max_length=255)
+    affinity_key: str | None = Field(default=None, max_length=255)
+    concurrency_key: str | None = Field(default=None, max_length=255)
+    idempotency_key: str | None = Field(default=None, max_length=255)
+    max_attempts: int = Field(default=1, ge=1, le=20)
+    scheduled_at: datetime | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_request(self) -> "CreateRuntimeJobRequest":
+        self.job_type = str(self.job_type or "").strip()
+        self.queue_name = str(self.queue_name or "default").strip() or "default"
+        self.required_capabilities = [
+            capability.strip()
+            for capability in self.required_capabilities
+            if isinstance(capability, str) and capability.strip()
+        ]
+        if self.subject_type is not None:
+            self.subject_type = str(self.subject_type).strip().lower() or None
+        return self
+
+
+class RuntimeJobCancelRequest(RuntimeRequestModel):
+    reason: str | None = Field(default=None, max_length=1024)
 
 
 class SqlWorkbenchMode(str, Enum):

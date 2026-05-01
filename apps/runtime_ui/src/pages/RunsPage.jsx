@@ -26,7 +26,7 @@ import {
 } from "../lib/runtimeUi";
 
 const RUN_FILTERS = [
-  { value: "all", label: "All runs" },
+  { value: "all", label: "All jobs" },
   { value: "agent", label: "Agent turns" },
   { value: "query", label: "Queries" },
   { value: "dashboard", label: "Dashboards" },
@@ -36,11 +36,11 @@ const RUN_KIND_META = {
   agent: {
     icon: MessageSquareText,
     label: "Agent turn",
-    emptyMessage: "Ask the runtime to generate agent runs and thread history.",
+    emptyMessage: "Ask the runtime to generate agent jobs and thread history.",
   },
   query: {
     icon: Table2,
-    label: "Query run",
+    label: "Query job",
     emptyMessage: "Run semantic, dataset, or source SQL to capture query executions.",
   },
   dashboard: {
@@ -307,9 +307,9 @@ export function RunsPage() {
   const failedRuns = allRuns.filter((run) => run.status === "error").length;
   const runSummaryItems = [
     {
-      label: "Recent runs",
+      label: "Recent jobs",
       value: formatValue(allRuns.length),
-      detail: activeFilter === "all" ? "Across runtime surfaces." : `${RUN_KIND_META[activeFilter]?.label || "Run"} history.`,
+      detail: activeFilter === "all" ? "Across runtime surfaces." : `${RUN_KIND_META[activeFilter]?.label || "Job"} history.`,
     },
     {
       label: "Failures",
@@ -320,7 +320,7 @@ export function RunsPage() {
     {
       label: "Latest activity",
       value: allRuns[0]?.timestamp ? formatRelativeTime(allRuns[0].timestamp) : "None yet",
-      detail: selectedRun ? `${RUN_KIND_META[selectedRun.kind]?.label || "Run"} selected.` : "Pick a run to inspect.",
+      detail: selectedRun ? `${RUN_KIND_META[selectedRun.kind]?.label || "Job"} selected.` : "Pick a job to inspect.",
     },
   ];
 
@@ -332,10 +332,10 @@ export function RunsPage() {
             <p className="eyebrow">Execution</p>
             <h2>Review recent runtime executions</h2>
             <div className="product-command-bar-meta">
-              <span className="chip">{formatValue(allRuns.length)} recent runs</span>
+              <span className="chip">{formatValue(allRuns.length)} recent jobs</span>
               <span className="chip">{formatValue(agentRuns.length)} agent turns</span>
-              <span className="chip">{formatValue(queryRuns.length)} query runs</span>
-              <span className="chip">{formatValue(dashboardRuns.length)} dashboard runs</span>
+              <span className="chip">{formatValue(queryRuns.length)} query jobs</span>
+              <span className="chip">{formatValue(dashboardRuns.length)} dashboard jobs</span>
             </div>
           </div>
           <div className="product-command-bar-actions">

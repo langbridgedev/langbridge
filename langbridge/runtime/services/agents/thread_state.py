@@ -56,7 +56,7 @@ class AgentThreadStateManager:
     async def reset_after_failure(self, *, thread_id: uuid.UUID) -> RuntimeThread | None:
         thread = await self._thread_repository.get_by_id(thread_id)
         if thread is not None:
-            self.clear_active_run_metadata(thread)
+            self.clear_active_job_metadata(thread)
             self.set_awaiting_user_input(thread)
             thread.updated_at = datetime.now(timezone.utc)
             await self._thread_repository.save(thread)
@@ -135,10 +135,10 @@ class AgentThreadStateManager:
         thread.updated_at = datetime.now(timezone.utc)
         return assistant_message
 
-    def clear_active_run_metadata(self, thread: RuntimeThread) -> None:
+    def clear_active_job_metadata(self, thread: RuntimeThread) -> None:
         metadata = dict(thread.metadata or {})
-        metadata.pop("active_run_id", None)
-        metadata.pop("active_run_type", None)
+        metadata.pop("active_job_id", None)
+        metadata.pop("active_job_type", None)
         thread.metadata = metadata
 
     def set_awaiting_user_input(self, thread: RuntimeThread) -> None:

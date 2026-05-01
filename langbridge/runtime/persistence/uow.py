@@ -54,6 +54,7 @@ class _ConfiguredRuntimePersistenceController:
             DatasetRevisionRepository,
         )
         from langbridge.runtime.persistence.repositories.lineage_repository import LineageEdgeRepository
+        from langbridge.runtime.persistence.repositories.job_repository import JobRepository
         from langbridge.runtime.persistence.repositories.llm_connection_repository import (
             LLMConnectionRepository,
         )
@@ -82,6 +83,7 @@ class _ConfiguredRuntimePersistenceController:
             "connector_sync_state_repository": ConnectorSyncStateRepository(session),
             "dataset_revision_repository": DatasetRevisionRepository(session),
             "lineage_edge_repository": LineageEdgeRepository(session),
+            "job_repository": JobRepository(session),
             "agent_repository": AgentRepository(session),
             "llm_repository": LLMConnectionRepository(session),
             "thread_repository": ThreadRepository(session),

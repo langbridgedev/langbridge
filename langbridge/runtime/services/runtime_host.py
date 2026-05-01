@@ -15,6 +15,7 @@ from langbridge.runtime.providers import (
 from langbridge.runtime.services.agents import AgentExecutionService
 from langbridge.runtime.services.dataset_query import DatasetQueryService
 from langbridge.runtime.services.dataset_sync import ConnectorSyncRuntime
+from langbridge.runtime.services.jobs import RuntimeJobService
 from langbridge.runtime.services.semantic_query_execution_service import (
     SemanticQueryExecutionService,
 )
@@ -43,6 +44,7 @@ class RuntimeServices:
     dataset_query: DatasetQueryService
     dataset_sync: ConnectorSyncRuntime
     agent_execution: AgentExecutionService | None
+    jobs: RuntimeJobService | None = None
     semantic_sql_query: SemanticSqlQueryService | None = None
 
 

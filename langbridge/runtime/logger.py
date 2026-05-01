@@ -7,25 +7,26 @@ import tempfile
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
-from opentelemetry import _logs, trace
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
-    OTLPLogExporter as GrpcOTLPLogExporter,
-)
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-    OTLPSpanExporter as GrpcOTLPSpanExporter,
-)
-from opentelemetry.exporter.otlp.proto.http._log_exporter import (
-    OTLPLogExporter as HttpOTLPLogExporter,
-)
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-    OTLPSpanExporter as HttpOTLPSpanExporter,
-)
-from opentelemetry.instrumentation.logging import LoggingInstrumentor
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+# from opentelemetry import _logs, trace
+# from opentelemetry.instrumentation.logging import LoggingInstrumentor
+# from opentelemetry.sdk._logs import LoggerProvider
+# from opentelemetry.sdk.resources import Resource
+# from opentelemetry.sdk.trace import TracerProvider
+# from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+#     OTLPLogExporter as GrpcOTLPLogExporter,
+# )
+# from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+#     OTLPSpanExporter as GrpcOTLPSpanExporter,
+# )
+# from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+#     OTLPLogExporter as HttpOTLPLogExporter,
+# )
+# from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+#     OTLPSpanExporter as HttpOTLPSpanExporter,
+# )
+# from opentelemetry.sdk._logs import LoggingHandler
+# from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+# from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 
 DEFAULT_LOG_DIR = "./"
@@ -101,29 +102,29 @@ def _get_protocol(env_key: str) -> str:
     return os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc").strip().lower()
 
 
-def _build_log_exporter() -> Optional[object]:
-    if not _exporter_enabled("OTEL_LOGS_EXPORTER"):
-        return None
-    protocol = _get_protocol("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL")
-    if protocol in {"http/protobuf", "http"}:
-        return HttpOTLPLogExporter()
-    return GrpcOTLPLogExporter()
+# def _build_log_exporter() -> Optional[object]:
+#     if not _exporter_enabled("OTEL_LOGS_EXPORTER"):
+#         return None
+#     protocol = _get_protocol("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL")
+#     if protocol in {"http/protobuf", "http"}:
+#         return HttpOTLPLogExporter()
+#     return GrpcOTLPLogExporter()
 
 
-def _build_span_exporter() -> Optional[object]:
-    if not _exporter_enabled("OTEL_TRACES_EXPORTER"):
-        return None
-    protocol = _get_protocol("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")
-    if protocol in {"http/protobuf", "http"}:
-        return HttpOTLPSpanExporter()
-    return GrpcOTLPSpanExporter()
+# def _build_span_exporter() -> Optional[object]:
+#     if not _exporter_enabled("OTEL_TRACES_EXPORTER"):
+#         return None
+#     protocol = _get_protocol("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")
+#     if protocol in {"http/protobuf", "http"}:
+#         return HttpOTLPSpanExporter()
+#     return GrpcOTLPSpanExporter()
 
 
-def _build_resource(service_name: Optional[str]) -> Resource: # type: ignore
-    if Resource is None:  # pragma: no cover - guarded by _otel_disabled
-        raise RuntimeError("OpenTelemetry resource support is unavailable")
-    name = service_name or DEFAULT_SERVICE_NAME
-    return Resource.create({"service.name": name})
+# def _build_resource(service_name: Optional[str]) -> Resource: # type: ignore
+#     if Resource is None:  # pragma: no cover - guarded by _otel_disabled
+#         raise RuntimeError("OpenTelemetry resource support is unavailable")
+#     name = service_name or DEFAULT_SERVICE_NAME
+#     return Resource.create({"service.name": name})
 
 
 def setup_logging(
@@ -166,25 +167,25 @@ def setup_logging(
         ),
     )
     _ensure_handlers(root, handlers)
-    resource = _build_resource(service_name)
+    # resource = _build_resource(service_name)
 
-    tracer_provider = TracerProvider(resource=resource)
-    trace.set_tracer_provider(tracer_provider)
+    # tracer_provider = TracerProvider(resource=resource)
+    # trace.set_tracer_provider(tracer_provider)
 
-    span_exporter = _build_span_exporter()
-    if span_exporter is not None:
-        tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+    # span_exporter = _build_span_exporter()
+    # if span_exporter is not None:
+    #     tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
-    logger_provider = LoggerProvider(resource=resource)
-    _logs.set_logger_provider(logger_provider)
+    # logger_provider = LoggerProvider(resource=resource)
+    # _logs.set_logger_provider(logger_provider)
 
-    log_exporter = _build_log_exporter()
-    if log_exporter is not None:
-        logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
-        otel_handler = LoggingHandler(level=level, logger_provider=logger_provider)
-        handlers.insert(0, otel_handler)
+    # log_exporter = _build_log_exporter()
+    # if log_exporter is not None:
+    #     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+    #     otel_handler = LoggingHandler(level=level, logger_provider=logger_provider)
+    #     handlers.insert(0, otel_handler)
 
-    LoggingInstrumentor().instrument(set_logging_format=False)
+    # LoggingInstrumentor().instrument(set_logging_format=False)
 
     _ensure_handlers(root, handlers)
 

@@ -7,11 +7,11 @@ import { ChatTopBar } from "../components/chat/ChatTopBar";
 import { ConversationTimeline } from "../components/chat/ConversationTimeline";
 import { useAsyncData } from "../hooks/useAsyncData";
 import {
+  createAgentRun,
   fetchAgents,
   fetchThread,
   fetchThreadMessages,
-  streamAgentRun,
-  streamRuntimeRun,
+  streamRuntimeJob,
   updateThread,
 } from "../lib/runtimeApi";
 import { getErrorMessage } from "../lib/format";
@@ -24,26 +24,26 @@ import {
   normalizeRuntimeAgentMode,
 } from "../lib/runtimeUi";
 
-function buildRunStorageKey(threadId) {
-  return `runtime-thread-run:${threadId}`;
+function buildJobStorageKey(threadId) {
+  return `runtime-thread-job:${threadId}`;
 }
 
-function readStoredRunState(threadId) {
+function readStoredJobState(threadId) {
   if (!threadId || typeof window === "undefined") {
     return null;
   }
   try {
-    const raw = window.sessionStorage.getItem(buildRunStorageKey(threadId));
+    const raw = window.sessionStorage.getItem(buildJobStorageKey(threadId));
     if (!raw) {
       return null;
     }
     const payload = JSON.parse(raw);
-    const runId = String(payload?.runId || payload?.run_id || "").trim();
-    if (!runId) {
+    const jobId = String(payload?.jobId || payload?.job_id || "").trim();
+    if (!jobId) {
       return null;
     }
     return {
-      runId,
+      jobId,
       lastSequence: Number(payload?.lastSequence || payload?.last_sequence || 0) || 0,
       terminal: Boolean(payload?.terminal),
     };
@@ -52,15 +52,15 @@ function readStoredRunState(threadId) {
   }
 }
 
-function writeStoredRunState(threadId, payload) {
+function writeStoredJobState(threadId, payload) {
   if (!threadId || typeof window === "undefined") {
     return;
   }
   try {
     window.sessionStorage.setItem(
-      buildRunStorageKey(threadId),
+      buildJobStorageKey(threadId),
       JSON.stringify({
-        runId: payload?.runId || "",
+        jobId: payload?.jobId || "",
         lastSequence: Number(payload?.lastSequence || 0) || 0,
         terminal: Boolean(payload?.terminal),
       }),
@@ -68,12 +68,12 @@ function writeStoredRunState(threadId, payload) {
   } catch {}
 }
 
-function clearStoredRunState(threadId) {
+function clearStoredJobState(threadId) {
   if (!threadId || typeof window === "undefined") {
     return;
   }
   try {
-    window.sessionStorage.removeItem(buildRunStorageKey(threadId));
+    window.sessionStorage.removeItem(buildJobStorageKey(threadId));
   } catch {}
 }
 
@@ -107,8 +107,8 @@ function normalizeProgressEvent(event) {
     timestamp: event?.timestamp || new Date().toISOString(),
     source: event?.source || "",
     rawEventType: event?.raw_event_type || "",
-    runId: event?.run_id || event?.job_id || "",
-    runType: event?.run_type || "agent",
+    jobId: event?.job_id || "",
+    jobType: event?.job_type || "agent.run",
     terminal: Boolean(event?.terminal),
     details,
   };
@@ -237,8 +237,8 @@ export function ChatPage() {
   const timelineEndRef = useRef(null);
   const latestTurnRef = useRef(null);
   const streamAbortRef = useRef(null);
-  const activeRunRef = useRef(null);
-  const resumedRunKeyRef = useRef("");
+  const activeJobRef = useRef(null);
+  const resumedJobKeyRef = useRef("");
   const initialThreadAnchorRef = useRef(false);
   const previousTailSignatureRef = useRef("");
   const readyTurns = displayTurns.filter((turn) => turn.status === "ready");
@@ -325,8 +325,8 @@ export function ChatPage() {
   }, [threadId]);
 
   useEffect(() => {
-    activeRunRef.current = readStoredRunState(threadId);
-    resumedRunKeyRef.current = "";
+    activeJobRef.current = readStoredJobState(threadId);
+    resumedJobKeyRef.current = "";
     initialThreadAnchorRef.current = false;
     previousTailSignatureRef.current = "";
   }, [threadId]);
@@ -423,31 +423,31 @@ export function ChatPage() {
     };
   }, []);
 
-  function persistRunState(event, resolvedThreadId = threadId) {
+  function persistJobState(event, resolvedThreadId = threadId) {
     const normalizedEvent = normalizeProgressEvent(event);
-    const runId =
-      normalizedEvent.runId ||
-      activeRunRef.current?.runId ||
+    const jobId =
+      normalizedEvent.jobId ||
+      activeJobRef.current?.jobId ||
       "";
-    if (!runId) {
+    if (!jobId) {
       return;
     }
     const nextState = {
-      runId,
+      jobId,
       lastSequence: Math.max(
         normalizedEvent.sequence,
-        Number(activeRunRef.current?.lastSequence || 0),
+        Number(activeJobRef.current?.lastSequence || 0),
       ),
       terminal: Boolean(normalizedEvent.terminal),
     };
-    activeRunRef.current = nextState;
-    writeStoredRunState(resolvedThreadId, nextState);
+    activeJobRef.current = nextState;
+    writeStoredJobState(resolvedThreadId, nextState);
   }
 
-  function clearActiveRunState(resolvedThreadId = threadId) {
-    activeRunRef.current = null;
-    resumedRunKeyRef.current = "";
-    clearStoredRunState(resolvedThreadId);
+  function clearActiveJobState(resolvedThreadId = threadId) {
+    activeJobRef.current = null;
+    resumedJobKeyRef.current = "";
+    clearStoredJobState(resolvedThreadId);
   }
 
   async function reloadThreadState(resolvedThreadId = threadId) {
@@ -464,7 +464,7 @@ export function ChatPage() {
     };
   }
 
-  async function finalizeStreamedRun({
+  async function finalizeStreamedJob({
     resolvedThreadId = threadId,
     promptValue,
     fallbackTurn,
@@ -485,14 +485,14 @@ export function ChatPage() {
       lastTurn.prompt === promptValue &&
       lastTurn.status !== "pending",
     );
-    const canonicalRunFinished = threadPayload?.state !== "processing";
+    const canonicalJobFinished = threadPayload?.state !== "processing";
 
-    if (terminalEvent?.terminal || canonicalTurnCompleted || canonicalRunFinished) {
-      clearActiveRunState(resolvedThreadId);
+    if (terminalEvent?.terminal || canonicalTurnCompleted || canonicalJobFinished) {
+      clearActiveJobState(resolvedThreadId);
     }
 
-    if (!terminalEvent && !canonicalTurnCompleted && !canonicalRunFinished) {
-      const streamErrorMessage = "The runtime stream ended before the run completed.";
+    if (!terminalEvent && !canonicalTurnCompleted && !canonicalJobFinished) {
+      const streamErrorMessage = "The runtime stream ended before the job completed.";
       setTransientTurn({
         ...(lastTurn && lastTurn.prompt === promptValue ? lastTurn : fallbackTurn),
         status: "error",
@@ -516,7 +516,7 @@ export function ChatPage() {
       setTransientTurn({
         ...lastTurn,
         status: "error",
-        errorMessage: terminalEvent.message || "Run failed.",
+        errorMessage: terminalEvent.message || "Job failed.",
         progressEvents: streamedProgressEvents,
         assistantSummary: terminalEvent.message || lastTurn.assistantSummary,
       });
@@ -532,22 +532,22 @@ export function ChatPage() {
     }
 
     if (thread.state !== "processing") {
-      clearActiveRunState(threadId);
+      clearActiveJobState(threadId);
       return;
     }
 
-    const threadRunId = String(thread?.metadata?.active_run_id || "").trim();
-    const storedRun = readStoredRunState(threadId);
-    const activeRun = threadRunId
+    const threadJobId = String(thread?.metadata?.active_job_id || "").trim();
+    const storedJob = readStoredJobState(threadId);
+    const activeJob = threadJobId
       ? {
-          runId: threadRunId,
-          lastSequence: storedRun?.runId === threadRunId ? Number(storedRun?.lastSequence || 0) : 0,
+          jobId: threadJobId,
+          lastSequence: storedJob?.jobId === threadJobId ? Number(storedJob?.lastSequence || 0) : 0,
           terminal: false,
         }
-      : storedRun?.runId
-        ? storedRun
+      : storedJob?.jobId
+        ? storedJob
         : null;
-    if (!activeRun?.runId) {
+    if (!activeJob?.jobId) {
       return;
     }
 
@@ -556,13 +556,13 @@ export function ChatPage() {
       return;
     }
 
-    const resumeKey = `${threadId}:${activeRun.runId}:${activeRun.lastSequence}`;
-    if (resumedRunKeyRef.current === resumeKey) {
+    const resumeKey = `${threadId}:${activeJob.jobId}:${activeJob.lastSequence}`;
+    if (resumedJobKeyRef.current === resumeKey) {
       return;
     }
-    resumedRunKeyRef.current = resumeKey;
-    activeRunRef.current = activeRun;
-    writeStoredRunState(threadId, activeRun);
+    resumedJobKeyRef.current = resumeKey;
+    activeJobRef.current = activeJob;
+    writeStoredJobState(threadId, activeJob);
     setTransientTurn((current) =>
       current && current.status === "pending"
         ? current
@@ -579,16 +579,16 @@ export function ChatPage() {
 
     void (async () => {
       try {
-        await streamRuntimeRun(activeRun.runId, {
-          afterSequence: activeRun.lastSequence,
+        await streamRuntimeJob(activeJob.jobId, {
+          afterSequence: activeJob.lastSequence,
           signal: controller.signal,
           onEvent: (event) => {
             streamedEvents.push(event);
-            persistRunState(event, threadId);
+            persistJobState(event, threadId);
             setTransientTurn((current) => applyStreamEventToTurn(current, event));
           },
         });
-        await finalizeStreamedRun({
+        await finalizeStreamedJob({
           resolvedThreadId: threadId,
           promptValue: pendingTurn.prompt,
           fallbackTurn: buildResumedPendingTurn({
@@ -604,7 +604,7 @@ export function ChatPage() {
         try {
           const { threadPayload } = await reloadThreadState(threadId);
           if (threadPayload?.state !== "processing") {
-            clearActiveRunState(threadId);
+            clearActiveJobState(threadId);
             setTransientTurn(null);
             return;
           }
@@ -641,20 +641,31 @@ export function ChatPage() {
     streamAbortRef.current = controller;
     const streamedEvents = [];
     try {
-      await streamAgentRun({
+      const queued = await createAgentRun({
         message: pendingPrompt,
         agent_name: selectedAgentName,
         thread_id: threadId,
         agent_mode: selectedAgentMode,
-      }, {
+      });
+      const activeJob = {
+        jobId: String(queued?.job_id || ""),
+        lastSequence: 0,
+        terminal: false,
+      };
+      if (!activeJob.jobId) {
+        throw new Error("The runtime did not return an agent run job id.");
+      }
+      activeJobRef.current = activeJob;
+      writeStoredJobState(threadId, activeJob);
+      await streamRuntimeJob(activeJob.jobId, {
         signal: controller.signal,
         onEvent: (event) => {
           streamedEvents.push(event);
-          persistRunState(event, threadId);
+          persistJobState(event, threadId);
           setTransientTurn((current) => applyStreamEventToTurn(current, event));
         },
       });
-      await finalizeStreamedRun({
+      await finalizeStreamedJob({
         resolvedThreadId: threadId,
         promptValue: pendingPrompt,
         fallbackTurn: pendingTurn,
@@ -664,19 +675,19 @@ export function ChatPage() {
       if (caughtError?.name === "AbortError") {
         return;
       }
-      const activeRun = activeRunRef.current;
-      if (activeRun?.runId && !activeRun?.terminal) {
+      const activeJob = activeJobRef.current;
+      if (activeJob?.jobId && !activeJob?.terminal) {
         try {
-          await streamRuntimeRun(activeRun.runId, {
-            afterSequence: activeRun.lastSequence,
+          await streamRuntimeJob(activeJob.jobId, {
+            afterSequence: activeJob.lastSequence,
             signal: controller.signal,
             onEvent: (event) => {
               streamedEvents.push(event);
-              persistRunState(event, threadId);
+              persistJobState(event, threadId);
               setTransientTurn((current) => applyStreamEventToTurn(current, event));
             },
           });
-          await finalizeStreamedRun({
+          await finalizeStreamedJob({
             resolvedThreadId: threadId,
             promptValue: pendingPrompt,
             fallbackTurn: pendingTurn,

@@ -315,6 +315,8 @@ class SyncRunResourceResult(_AwaitableModel):
 
 class SyncRunResult(_AwaitableModel):
     status: str
+    job_id: uuid.UUID | None = None
+    job_type: str | None = None
     dataset_id: uuid.UUID | None = None
     dataset_name: str | None = None
     connector_id: uuid.UUID | None = None
@@ -322,6 +324,7 @@ class SyncRunResult(_AwaitableModel):
     sync_mode: str | None = None
     resources: list[SyncRunResourceResult] = Field(default_factory=list)
     summary: str | None = None
+    stream_path: str | None = None
     error: str | None = None
 
 
@@ -837,7 +840,57 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
                 },
             )
         )
-        return SyncRunResult.model_validate(payload.model_dump(mode="json"))
+        result = SyncRunResult.model_validate(payload.model_dump(mode="json"))
+        if result.job_id is None:
+            return result
+        return self._wait_for_sync_job(
+            queued_result=result,
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
+        )
+
+    def _wait_for_sync_job(
+        self,
+        *,
+        queued_result: SyncRunResult,
+        timeout_s: float,
+        poll_interval_s: float,
+    ) -> SyncRunResult:
+        if queued_result.job_id is None:
+            return queued_result
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        delay = max(0.05, float(poll_interval_s))
+        while True:
+            job_payload = self._request(
+                "GET",
+                f"/api/runtime/v1/jobs/{queued_result.job_id}",
+            )
+            status = str(job_payload.get("status") or "").strip().lower()
+            if status == "succeeded":
+                result_payload = dict(job_payload.get("result") or {})
+                result_payload.setdefault("job_id", str(queued_result.job_id))
+                result_payload.setdefault("job_type", queued_result.job_type)
+                return SyncRunResult.model_validate(result_payload)
+            if status in {"failed", "cancelled"}:
+                error_payload = job_payload.get("error")
+                return queued_result.model_copy(
+                    update={
+                        "status": status,
+                        "error": (
+                            str(error_payload.get("message"))
+                            if isinstance(error_payload, dict)
+                            else str(error_payload or f"Dataset sync job {status}.")
+                        ),
+                    }
+                )
+            if time.monotonic() >= deadline:
+                return queued_result.model_copy(
+                    update={
+                        "status": "queued",
+                        "error": f"Dataset sync job did not complete within {timeout_s} seconds.",
+                    }
+                )
+            time.sleep(delay)
 
 
 class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):

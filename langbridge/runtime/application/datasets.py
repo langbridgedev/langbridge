@@ -15,12 +15,14 @@ from langbridge.connectors.base.resource_paths import (
     normalize_api_resource_path,
 )
 from langbridge.runtime.application.errors import BusinessValidationError
+from langbridge.runtime.application.job_handlers import DATASET_SYNC_JOB_TYPE
 from langbridge.runtime.config.models import (
     LocalRuntimeDatasetConfig,
     LocalRuntimeDatasetPolicyConfig,
 )
 from langbridge.runtime.models import (
     ConnectorMetadata,
+    CreateRuntimeJobRequest,
     DatasetColumnMetadata,
     DatasetMaterializationConfig,
     DatasetMetadata,
@@ -1890,6 +1892,82 @@ class DatasetApplication:
         }
 
     async def sync_dataset(
+        self,
+        *,
+        dataset_ref: str,
+        sync_mode: str = "INCREMENTAL",
+        force_full_refresh: bool = False,
+    ) -> dict[str, Any]:
+        return await self.execute_dataset_sync(
+            dataset_ref=dataset_ref,
+            sync_mode=sync_mode,
+            force_full_refresh=force_full_refresh,
+        )
+
+    async def create_dataset_sync_job(
+        self,
+        *,
+        dataset_ref: str,
+        sync_mode: str = "INCREMENTAL",
+        force_full_refresh: bool = False,
+    ) -> dict[str, Any]:
+        async with self._host._runtime_operation_scope():
+            dataset = await self._host._resolve_dataset_record(dataset_ref)
+            connector = self._host._connector_for_id(dataset.connection_id)
+            connector, sync_config = self._require_dataset_sync_contract(
+                dataset=dataset,
+                connector=connector,
+            )
+            sync_source = _DatasetSourceInput.from_source_config(sync_config.source)
+            source_key = _sync_source_key(sync_source)
+            source_payload = _sync_source_payload(sync_source)
+
+        requested_sync_mode = self._host._normalize_sync_mode(sync_mode)
+        effective_sync_mode = (
+            ConnectorSyncMode.FULL_REFRESH
+            if force_full_refresh
+            else requested_sync_mode
+        )
+        async with self._host._runtime_operation_scope() as uow:
+            job = await self._host.services.jobs.create_job(
+                workspace_id=self._host.context.workspace_id,
+                actor_id=self._host.context.actor_id,
+                request=CreateRuntimeJobRequest(
+                    job_type=DATASET_SYNC_JOB_TYPE,
+                    subject_type="dataset",
+                    subject_id=dataset.id,
+                    concurrency_key=f"dataset.sync:{self._host.context.workspace_id}:{dataset.id}",
+                    payload={
+                        "dataset_ref": str(dataset.id),
+                        "dataset_name": dataset.name,
+                        "connector_id": str(connector.id),
+                        "connector_name": connector.name,
+                        "source_key": source_key,
+                        "source": source_payload,
+                        "sync_mode": effective_sync_mode.value,
+                        "force_full_refresh": bool(force_full_refresh),
+                    },
+                ),
+            )
+            if uow is not None:
+                await uow.commit()
+
+        self._host.wake_job_processor()
+        return {
+            "status": "queued",
+            "job_id": job.id,
+            "job_type": DATASET_SYNC_JOB_TYPE,
+            "dataset_id": dataset.id,
+            "dataset_name": dataset.name,
+            "connector_id": connector.id,
+            "connector_name": connector.name,
+            "sync_mode": effective_sync_mode.value,
+            "resources": [],
+            "summary": f"Dataset sync queued for '{dataset.name}'.",
+            "stream_path": f"/api/runtime/v1/jobs/{job.id}/stream",
+        }
+
+    async def execute_dataset_sync(
         self,
         *,
         dataset_ref: str,

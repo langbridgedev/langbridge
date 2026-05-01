@@ -779,6 +779,86 @@ def test_remote_sdk_runtime_host_sql_defaults_to_federation_without_selected_dat
     assert result.rows == [{"value": 7}]
 
 
+def test_remote_sdk_sync_run_waits_for_dataset_sync_job() -> None:
+    workspace_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+    dataset_id = uuid.uuid4()
+    job_id = uuid.uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/api/runtime/v1/info":
+            return httpx.Response(
+                200,
+                json={
+                    "runtime_mode": "configured_local",
+                    "workspace_id": str(workspace_id),
+                    "actor_id": str(actor_id),
+                    "roles": ["runtime:operator"],
+                    "capabilities": ["jobs", "dataset.sync"],
+                },
+            )
+        if request.method == "POST" and request.url.path == "/api/runtime/v1/datasets/billing_customers/sync":
+            return httpx.Response(
+                202,
+                json={
+                    "status": "queued",
+                    "job_id": str(job_id),
+                    "job_type": "dataset.sync",
+                    "dataset_id": str(dataset_id),
+                    "dataset_name": "billing_customers",
+                    "sync_mode": "INCREMENTAL",
+                    "resources": [],
+                    "summary": "Dataset sync queued for 'billing_customers'.",
+                },
+            )
+        if request.method == "GET" and request.url.path == f"/api/runtime/v1/jobs/{job_id}":
+            return httpx.Response(
+                200,
+                json={
+                    "id": str(job_id),
+                    "workspace_id": str(workspace_id),
+                    "job_type": "dataset.sync",
+                    "status": "succeeded",
+                    "payload": {},
+                    "result": {
+                        "status": "succeeded",
+                        "dataset_id": str(dataset_id),
+                        "dataset_name": "billing_customers",
+                        "sync_mode": "INCREMENTAL",
+                        "resources": [
+                            {
+                                "resource_name": "customers",
+                                "records_synced": 2,
+                                "dataset_names": ["billing_customers"],
+                            }
+                        ],
+                        "summary": "Dataset sync completed for 'billing_customers'.",
+                    },
+                    "events": [],
+                    "tasks": [],
+                    "artifacts": [],
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://sdk.test")
+    client = LangbridgeClient.remote(
+        base_url="https://sdk.test",
+        http_client=http_client,
+    )
+
+    result = client.sync.run(
+        dataset="billing_customers",
+        timeout_s=1.0,
+        poll_interval_s=0.01,
+    )
+
+    assert result.status == "succeeded"
+    assert result.job_id == job_id
+    assert result.dataset_name == "billing_customers"
+    assert result.resources[0].records_synced == 2
+
+
 def test_local_sdk_sync_clients_use_runtime_host() -> None:
     actor_id = uuid.uuid4()
     runtime_host = _FakeRuntimeHost(actor_id=actor_id)

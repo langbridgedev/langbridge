@@ -12,7 +12,6 @@ class Connector(Base):
     description = Column(String(1024))
     connector_type = Column(String(50), nullable=False)
     connector_family = Column(String(50), nullable=True)
-    type = Column(String(50), nullable=False)
     config_json = Column(String, nullable=False)
     connection_metadata_json = Column(JSON, nullable=True)
     secret_references_json = Column(JSON, nullable=True)
@@ -25,17 +24,3 @@ class Connector(Base):
     updated_by_actor_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     management_mode = Column(String(50), nullable=False)
     lifecycle_state = Column(String(50), nullable=False)
-
-    # polymorphic
-    __mapper_args__ = {"polymorphic_identity": "connector", "polymorphic_on": type}
-
-class DatabaseConnector(Connector):
-    __tablename__ = "database_connectors"
-    id = Column(UUID(as_uuid=True), ForeignKey("connectors.id"), primary_key=True)
-    __mapper_args__ = {"polymorphic_identity": "database_connector"}
-
-
-class APIConnector(Connector):
-    __tablename__ = "api_connectors"
-    id = Column(UUID(as_uuid=True), ForeignKey("connectors.id"), primary_key=True)
-    __mapper_args__ = {"polymorphic_identity": "api_connector"}

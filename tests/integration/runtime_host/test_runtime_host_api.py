@@ -175,7 +175,7 @@ ai:
             runtime._thread_message_repository.add(assistant_message)
             thread.last_message_id = assistant_message.id
             thread.state = "awaiting_user_input"
-            _clear_active_run_metadata(thread)
+            _clear_active_job_metadata(thread)
             await runtime._thread_repository.save(thread)
             if event_emitter is not None:
                 await event_emitter.emit(
@@ -199,6 +199,20 @@ def _create_runtime_app(runtime_host, **kwargs):
         runtime_host.services.semantic_vector_search = None
     kwargs.setdefault("default_background_tasks", [])
     return create_runtime_api_app(runtime_host=runtime_host, auth_config=auth_config, **kwargs)
+
+
+def _wait_for_runtime_job(client: TestClient, job_id: str, *, expected_status: str = "succeeded") -> dict[str, object]:
+    job = None
+    for _ in range(50):
+        response = client.get(f"/api/runtime/v1/jobs/{job_id}")
+        assert response.status_code == 200
+        job = response.json()
+        if job["status"] == expected_status:
+            return job
+        if job["status"] in {"failed", "cancelled"}:
+            pytest.fail(f"Runtime job {job_id} ended with status {job['status']}: {job.get('error')}")
+        time.sleep(0.1)
+    pytest.fail(f"Runtime job {job_id} did not reach {expected_status}: {job}")
 
 
 def _create_runtime_managed_resources(client: TestClient, tmp_path: Path) -> dict[str, dict[str, object]]:
@@ -463,10 +477,10 @@ def _extract_sse_payloads(response_text: str) -> list[dict[str, object]]:
     return payloads
 
 
-def _clear_active_run_metadata(thread) -> None:
+def _clear_active_job_metadata(thread) -> None:
     metadata = dict(getattr(thread, "metadata", {}) or {})
-    metadata.pop("active_run_id", None)
-    metadata.pop("active_run_type", None)
+    metadata.pop("active_job_id", None)
+    metadata.pop("active_job_type", None)
     thread.metadata = metadata
 
 
@@ -485,6 +499,7 @@ def test_runtime_host_api_exposes_runtime_features(tmp_path: Path) -> None:
     assert "connectors.create" in info_payload["capabilities"]
     assert "datasets.create" in info_payload["capabilities"]
     assert "semantic_models.create" in info_payload["capabilities"]
+    assert "agents.run" in info_payload["capabilities"]
 
     datasets = client.get("/api/runtime/v1/datasets")
     assert datasets.status_code == 200
@@ -579,6 +594,164 @@ def test_runtime_host_api_exposes_runtime_features(tmp_path: Path) -> None:
     }
 
 
+def test_runtime_host_api_queues_and_executes_sql_query_jobs(tmp_path: Path) -> None:
+    runtime = _build_runtime(tmp_path)
+    with TestClient(_create_runtime_app(runtime)) as client:
+        queued = client.post(
+            "/api/runtime/v1/sql/query/jobs",
+            json={
+                "query_scope": "source",
+                "query": "SELECT COUNT(*) AS row_count FROM orders_enriched",
+                "connection_name": "commerce_demo",
+            },
+        )
+        assert queued.status_code == 202
+        queued_payload = queued.json()
+        assert queued_payload["status"] == "queued"
+        assert queued_payload["job_type"] == "sql.query"
+        assert queued_payload["query_scope"] == "source"
+        assert queued_payload["stream_path"] == f"/api/runtime/v1/jobs/{queued_payload['job_id']}/stream"
+
+        job = _wait_for_runtime_job(client, queued_payload["job_id"])
+
+    assert job["job_type"] == "sql.query"
+    assert job["result"]["rows"] == [{"row_count": 3}]
+    assert {artifact["artifact_key"] for artifact in job["artifacts"]} == {
+        "result_table",
+        "sql_diagnostics",
+    }
+
+
+def test_runtime_host_api_queues_and_executes_agent_run_jobs(tmp_path: Path) -> None:
+    runtime = _build_runtime(tmp_path)
+    with TestClient(_create_runtime_app(runtime)) as client:
+        queued = client.post(
+            "/api/runtime/v1/agents/run",
+            json={
+                "message": "Summarize revenue",
+                "agent_name": "commerce_analyst",
+                "agent_mode": "sql",
+                "metadata_json": {"surface": "job"},
+            },
+        )
+        assert queued.status_code == 202
+        queued_payload = queued.json()
+        assert queued_payload["status"] == "queued"
+        assert queued_payload["job_type"] == "agent.run"
+        assert queued_payload["agent_name"] == "commerce_analyst"
+        assert queued_payload["stream_path"] == f"/api/runtime/v1/jobs/{queued_payload['job_id']}/stream"
+
+        job = _wait_for_runtime_job(client, queued_payload["job_id"])
+        thread_id = queued_payload["thread_id"]
+        messages = client.get(f"/api/runtime/v1/threads/{thread_id}/messages")
+
+    assert job["job_type"] == "agent.run"
+    assert job["result"]["summary"] == "commerce_analyst answered runtime prompt"
+    assert {artifact["artifact_key"] for artifact in job["artifacts"]} == {"agent_response"}
+    assert messages.status_code == 200
+    assert messages.json()["total"] == 2
+    assert messages.json()["items"][0]["content"]["agent_mode"] == "sql"
+    assert messages.json()["items"][0]["content"]["metadata_json"] == {"surface": "job"}
+    assert messages.json()["items"][1]["role"] == "assistant"
+
+
+def test_runtime_host_api_persists_agent_run_progress_before_completion(tmp_path: Path) -> None:
+    runtime = _build_runtime(
+        tmp_path,
+        metadata_store_block="""
+  metadata_store:
+    type: sqlite
+    path: runtime_metadata.db
+""",
+    )
+    release_execution = threading.Event()
+    progress_emitted = threading.Event()
+
+    async def _slow_execute(*, job_id, request, event_emitter=None):
+        _ = job_id
+        if event_emitter is not None:
+            await event_emitter.emit(
+                event_type="SqlExecutionStarted",
+                message="Running query through Langbridge runtime.",
+                source="tool:analyst:sql",
+            )
+        progress_emitted.set()
+        await asyncio.to_thread(release_execution.wait, 5)
+
+        thread = await runtime._thread_repository.get_by_id(request.thread_id)
+        assert thread is not None
+        assistant_message = RuntimeThreadMessage(
+            id=uuid.uuid4(),
+            thread_id=request.thread_id,
+            parent_message_id=thread.last_message_id,
+            role=RuntimeMessageRole.assistant,
+            content={
+                "summary": "Durable run completed.",
+                "result": {"text": "ok"},
+                "visualization": None,
+                "error": None,
+            },
+            created_at=datetime.now(timezone.utc),
+        )
+        runtime._thread_message_repository.add(assistant_message)
+        thread.last_message_id = assistant_message.id
+        thread.state = "awaiting_user_input"
+        _clear_active_job_metadata(thread)
+        await runtime._thread_repository.save(thread)
+        return SimpleNamespace(
+            response={
+                "summary": "Durable run completed.",
+                "result": {"text": "ok"},
+                "visualization": None,
+                "error": None,
+                "events": [],
+            },
+            assistant_message=assistant_message,
+        )
+
+    runtime._runtime_host.services.agent_execution.execute = _slow_execute  # type: ignore[assignment]
+
+    with TestClient(_create_runtime_app(runtime)) as client:
+        queued = client.post(
+            "/api/runtime/v1/agents/run",
+            json={
+                "message": "Summarize revenue",
+                "agent_name": "commerce_analyst",
+                "agent_mode": "sql",
+            },
+        )
+        assert queued.status_code == 202
+        job_id = queued.json()["job_id"]
+
+        try:
+            assert progress_emitted.wait(timeout=5)
+            running_job = None
+            for _ in range(50):
+                response = client.get(f"/api/runtime/v1/jobs/{job_id}")
+                assert response.status_code == 200
+                running_job = response.json()
+                public_messages = [
+                    event["message"]
+                    for event in running_job["events"]
+                    if event.get("visibility") == "public"
+                ]
+                if "Running governed query." in public_messages:
+                    break
+                time.sleep(0.1)
+            else:
+                pytest.fail(f"Durable agent progress was not visible before completion: {running_job}")
+
+            assert running_job is not None
+            assert running_job["status"] == "running"
+        finally:
+            release_execution.set()
+
+        completed = _wait_for_runtime_job(client, job_id)
+
+    assert completed["status"] == "succeeded"
+    assert completed["result"]["summary"] == "Durable run completed."
+
+
 def test_runtime_host_api_returns_500_for_unexpected_agent_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -657,8 +830,8 @@ def test_runtime_host_api_streams_agent_run_progress_and_persists_final_message(
     payloads = _extract_sse_payloads(body)
     assert payloads[0]["event"] == "run.started"
     assert payloads[0]["status"] == "in_progress"
-    assert payloads[0]["run_type"] == "agent"
-    assert payloads[0]["run_id"] == payloads[0]["job_id"]
+    assert payloads[0]["job_type"] == "agent.run"
+    assert payloads[0]["job_id"]
     assert payloads[1]["event"] == "run.progress"
     assert payloads[1]["stage"] == "planning"
     assert payloads[2]["stage"] == "running_query"
@@ -676,7 +849,7 @@ def test_runtime_host_api_streams_agent_run_progress_and_persists_final_message(
     assert messages.json()["items"][1]["role"] == "assistant"
 
 
-def test_runtime_host_api_replays_active_run_progress_from_run_stream_endpoint(tmp_path: Path) -> None:
+def test_runtime_host_api_replays_active_job_progress_from_job_stream_endpoint(tmp_path: Path) -> None:
     runtime = _build_runtime(tmp_path)
     app = _create_runtime_app(runtime)
     release_execution = threading.Event()
@@ -716,7 +889,7 @@ def test_runtime_host_api_replays_active_run_progress_from_run_stream_endpoint(t
         runtime._thread_message_repository.add(assistant_message)
         thread.last_message_id = assistant_message.id
         thread.state = "awaiting_user_input"
-        _clear_active_run_metadata(thread)
+        _clear_active_job_metadata(thread)
         await runtime._thread_repository.save(thread)
         if event_emitter is not None:
             await event_emitter.emit(
@@ -748,7 +921,7 @@ def test_runtime_host_api_replays_active_run_progress_from_run_stream_endpoint(t
                     if event is None:
                         continue
                     if not stream_started.is_set():
-                        starter_state["run_id"] = str(event.run_id)
+                        starter_state["job_id"] = str(event.job_id)
                         starter_state["thread_id"] = str(event.thread_id)
                         stream_started.set()
 
@@ -763,10 +936,10 @@ def test_runtime_host_api_replays_active_run_progress_from_run_stream_endpoint(t
         assert stream_started.wait(timeout=5)
         assert not starter_errors
 
-        run_id = str(starter_state["run_id"])
+        job_id = str(starter_state["job_id"])
         with attach_client.stream(
             "GET",
-            f"/api/runtime/v1/runs/{run_id}/stream",
+            f"/api/runtime/v1/jobs/{job_id}/stream",
             params={"after_sequence": 1},
         ) as response:
             release_execution.set()
@@ -779,20 +952,63 @@ def test_runtime_host_api_replays_active_run_progress_from_run_stream_endpoint(t
         assert replay_payloads[0]["sequence"] == 2
         assert replay_payloads[0]["stage"] == "planning"
         assert replay_payloads[1]["sequence"] == 3
-        assert replay_payloads[1]["stage"] == "running_query"
+        assert replay_payloads[1]["stage"] == "planning"
+        assert replay_payloads[2]["sequence"] == 4
+        assert replay_payloads[2]["stage"] == "running_query"
         assert replay_payloads[-1]["event"] == "run.completed"
-        assert replay_payloads[-1]["run_id"] == run_id
+        assert replay_payloads[-1]["job_id"] == job_id
 
 
-def test_runtime_host_api_returns_404_for_missing_run_stream(tmp_path: Path) -> None:
+def test_runtime_host_api_returns_404_for_missing_job_stream(tmp_path: Path) -> None:
     runtime = _build_runtime(tmp_path)
     app = _create_runtime_app(runtime)
     client = TestClient(app)
 
-    response = client.get(f"/api/runtime/v1/runs/{uuid.uuid4()}/stream")
+    response = client.get(f"/api/runtime/v1/jobs/{uuid.uuid4()}/stream")
 
     assert response.status_code == 404
-    assert response.json()["detail"].startswith("Run '")
+    assert response.json()["detail"].startswith("Job '")
+
+
+def test_runtime_host_api_creates_lists_cancels_and_streams_generic_job(tmp_path: Path) -> None:
+    runtime = _build_runtime(tmp_path)
+    app = _create_runtime_app(runtime)
+    client = TestClient(app)
+
+    created = client.post(
+        "/api/runtime/v1/jobs",
+        json={
+            "job_type": "test.manual",
+            "payload": {"value": "queued"},
+            "idempotency_key": "manual-job",
+        },
+    )
+    assert created.status_code == 202
+    job = created.json()
+    assert job["job_type"] == "test.manual"
+    assert job["status"] == "queued"
+
+    listed = client.get("/api/runtime/v1/jobs", params={"job_type": "test.manual"})
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 1
+    assert listed.json()["items"][0]["id"] == job["id"]
+
+    cancelled = client.post(
+        f"/api/runtime/v1/jobs/{job['id']}/cancel",
+        json={"reason": "no longer needed"},
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+
+    with client.stream("GET", f"/api/runtime/v1/jobs/{job['id']}/stream") as response:
+        body = "".join(response.iter_text())
+    payloads = _extract_sse_payloads(body)
+    assert response.status_code == 200
+    assert len(payloads) == 1
+    assert payloads[0]["event"] == "job.cancelled"
+    assert payloads[0]["status"] == "cancelled"
+    assert payloads[0]["stage"] == "cancelled"
+    assert payloads[0]["terminal"] is True
 
 
 def test_runtime_host_api_streams_agent_run_failure_and_resets_thread(tmp_path: Path) -> None:
@@ -871,7 +1087,7 @@ def test_runtime_host_api_streams_access_denied_and_persists_canonical_message(t
         runtime._thread_message_repository.add(assistant_message)
         thread.last_message_id = assistant_message.id
         thread.state = "awaiting_user_input"
-        _clear_active_run_metadata(thread)
+        _clear_active_job_metadata(thread)
         await runtime._thread_repository.save(thread)
         return SimpleNamespace(
             response={
@@ -945,7 +1161,7 @@ def test_runtime_host_api_streams_specific_clarification_question(tmp_path: Path
         runtime._thread_message_repository.add(assistant_message)
         thread.last_message_id = assistant_message.id
         thread.state = "awaiting_user_input"
-        _clear_active_run_metadata(thread)
+        _clear_active_job_metadata(thread)
         await runtime._thread_repository.save(thread)
         return SimpleNamespace(
             response={
@@ -1742,9 +1958,14 @@ def test_runtime_host_api_supports_dataset_owned_sync_for_declared_synced_datase
                 "sync_mode": "INCREMENTAL",
             },
         )
-        assert sync.status_code == 200
+        assert sync.status_code == 202
+        assert sync.json()["status"] == "queued"
+        assert sync.json()["job_id"]
         assert sync.json()["dataset_name"] == "billing_customers"
-        assert sync.json()["resources"][0]["dataset_names"] == ["billing_customers"]
+        assert asyncio.run(runtime._job_processor.process_once()) is True
+        job = _wait_for_runtime_job(client, sync.json()["job_id"])
+        assert job["job_type"] == "dataset.sync"
+        assert job["result"]["resources"][0]["dataset_names"] == ["billing_customers"]
 
         datasets_after = client.get("/api/runtime/v1/datasets")
         assert datasets_after.status_code == 200
