@@ -554,15 +554,11 @@ class AgentApplication:
             "thread_id": prepared.thread.id,
             "job_id": prepared.job_id,
             "message_id": getattr(assistant_message, "id", None),
-            "summary": response.get("summary"),
-            "answer": response.get("answer"),
             "answer_markdown": response.get("answer_markdown"),
             "artifacts": response.get("artifacts"),
-            "result": response.get("result"),
-            "visualization": response.get("visualization"),
-            "research": response.get("research"),
-            "error": response.get("error"),
             "diagnostics": response.get("diagnostics"),
+            "metadata": response.get("metadata"),
+            "error": response.get("error"),
             "events": list(events or []),
         }
 
@@ -612,11 +608,10 @@ class AgentApplication:
                 "thread_id": str(prepared.thread.id),
                 "message_id": str(payload.get("message_id")) if payload.get("message_id") else None,
                 "outcome_status": outcome_status or None,
-                "result_available": payload.get("result") is not None,
-                "visualization_available": payload.get("visualization") is not None,
+                "artifact_count": self._artifact_count(payload),
+                "table_available": self._has_artifact_type(payload, "table"),
+                "chart_available": self._has_artifact_type(payload, "chart"),
                 "error": payload.get("error"),
-                "summary": payload.get("summary"),
-                "answer": payload.get("answer"),
                 "diagnostics": payload.get("diagnostics"),
                 "clarifying_question": clarification_question,
             },
@@ -645,12 +640,9 @@ class AgentApplication:
         )
         if clarifying_question:
             return clarifying_question
-        answer = payload.get("answer")
-        if isinstance(answer, str) and answer.strip():
-            return answer.strip()
-        summary = payload.get("summary")
-        if isinstance(summary, str) and summary.strip():
-            return summary.strip()
+        answer_markdown = payload.get("answer_markdown")
+        if isinstance(answer_markdown, str) and answer_markdown.strip():
+            return answer_markdown.strip()
         return "Run completed."
 
     def _extract_clarifying_question(self, *, payload: dict[str, Any], response: dict[str, Any]) -> str | None:
@@ -661,20 +653,37 @@ class AgentApplication:
                 return question.strip()
             ai_run = diagnostics.get("ai_run")
             if self._is_clarification_ai_run(ai_run):
-                answer = payload.get("answer")
-                if isinstance(answer, str) and answer.strip():
-                    return answer.strip()
+                answer_markdown = payload.get("answer_markdown")
+                if isinstance(answer_markdown, str) and answer_markdown.strip():
+                    return answer_markdown.strip()
 
-        answer = response.get("answer")
-        if isinstance(answer, str) and answer.strip():
+        answer_markdown = response.get("answer_markdown")
+        if isinstance(answer_markdown, str) and answer_markdown.strip():
             response_diagnostics = response.get("diagnostics")
             if isinstance(response_diagnostics, dict):
                 question = response_diagnostics.get("clarifying_question")
                 if isinstance(question, str) and question.strip():
                     return question.strip()
                 if self._is_clarification_ai_run(response_diagnostics.get("ai_run")):
-                    return answer.strip()
+                    return answer_markdown.strip()
         return None
+
+    @staticmethod
+    def _artifact_count(payload: dict[str, Any]) -> int:
+        artifacts = payload.get("artifacts")
+        return len(artifacts) if isinstance(artifacts, list) else 0
+
+    @staticmethod
+    def _has_artifact_type(payload: dict[str, Any], artifact_type: str) -> bool:
+        artifacts = payload.get("artifacts")
+        if not isinstance(artifacts, list):
+            return False
+        expected = artifact_type.strip().lower()
+        return any(
+            isinstance(artifact, dict)
+            and str(artifact.get("type") or "").strip().lower() == expected
+            for artifact in artifacts
+        )
 
     def _is_clarification_ai_run(self, value: Any) -> bool:
         if not isinstance(value, dict):

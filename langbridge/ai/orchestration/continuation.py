@@ -347,8 +347,8 @@ class ContinuationStateBuilder:
         answer_markdown = content.get("answer_markdown")
         return cls._from_parts(
             user_query=None,
-            result=cls.primary_result_from_artifacts(artifacts) or content.get("result"),
-            visualization=cls.primary_visualization_from_artifacts(artifacts) or content.get("visualization"),
+            result=cls.primary_result_from_artifacts(artifacts),
+            visualization=cls.primary_visualization_from_artifacts(artifacts),
             research=None,
             summary=cls.summary_from_markdown(answer_markdown),
             answer=answer_markdown,

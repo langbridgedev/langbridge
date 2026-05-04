@@ -2,7 +2,7 @@ from datetime import datetime
 import uuid
 from typing import Any
 
-from pydantic import Field, field_serializer, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_serializer, field_validator, model_validator
 
 from langbridge.connectors.base.config import (
     ConnectorFamily,
@@ -469,13 +469,16 @@ class RuntimeAgentAskRequest(RuntimeAgentRunRequest):
 
 
 class RuntimeAgentAskResponse(RuntimeModel):
+    model_config = ConfigDict(extra="forbid")
+
     thread_id: uuid.UUID | None = None
     status: str
     job_id: uuid.UUID | None = None
     message_id: uuid.UUID | None = None
-    summary: str | None = None
-    result: Any | None = None
-    visualization: Any | None = None
+    answer_markdown: str
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     error: dict[str, Any] | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
 

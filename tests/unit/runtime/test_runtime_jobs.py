@@ -209,18 +209,23 @@ class RecordingAgentRunRuntimeHost:
             "thread_id": kwargs["payload"]["thread_id"],
             "job_id": kwargs["job_id"],
             "message_id": uuid.uuid4(),
-            "summary": "Agent run completed.",
-            "answer": "Paid Social led Q3 revenue.",
             "answer_markdown": "Paid Social led Q3 revenue.",
-            "result": {"rows": [{"order_channel": "Paid Social"}]},
             "artifacts": [
                 {
                     "id": "primary_result",
                     "type": "table",
+                    "role": "primary_result",
                     "title": "Primary result",
+                    "payload": {
+                        "columns": ["order_channel"],
+                        "rows": [["Paid Social"]],
+                        "row_count": 1,
+                    },
+                    "provenance": {"source": "unit-agent"},
                 }
             ],
             "diagnostics": {"query_scope": "semantic"},
+            "metadata": {"contract_version": "markdown_artifacts.v1"},
         }
 
 
@@ -551,7 +556,11 @@ async def test_agent_run_job_handler_executes_agent_run_and_records_artifacts() 
     assert runtime_host.commit_counts_after_events == [1, 2, 3, 4, 5, 6]
     assert completed.status == RuntimeJobStatus.succeeded.value
     assert completed.result is not None
-    assert completed.result["answer"] == "Paid Social led Q3 revenue."
+    assert completed.result["answer_markdown"] == "Paid Social led Q3 revenue."
+    assert "answer" not in completed.result
+    assert "summary" not in completed.result
+    assert "result" not in completed.result
+    assert "visualization" not in completed.result
     assert completed.tasks[0].status == RuntimeJobStatus.succeeded.value
     assert artifact_keys == {"agent_response", "agent_diagnostics", "agent_artifacts"}
     assert public_messages[:5] == [

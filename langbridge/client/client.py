@@ -76,9 +76,10 @@ class JobEventResponse(RuntimeModel):
 
 
 class JobFinalResponse(RuntimeModel):
-    result: Any | None = None
-    visualization: Any | None = None
-    summary: str | None = None
+    answer_markdown: str | None = None
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentJobStateResponse(RuntimeModel):
@@ -332,20 +333,17 @@ class AgentAskResult(_AwaitableModel):
     thread_id: uuid.UUID | None = None
     status: str
     job_id: uuid.UUID | None = None
-    summary: str | None = None
-    result: Any | None = None
-    visualization: Any | None = None
+    message_id: uuid.UUID | None = None
+    answer_markdown: str | None = None
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     error: dict[str, Any] | None = None
     events: list[JobEventResponse] = Field(default_factory=list)
 
     @property
     def text(self) -> str | None:
-        if self.summary:
-            return self.summary
-        if isinstance(self.result, dict):
-            value = self.result.get("text")
-            return str(value) if value is not None else None
-        return None
+        return self.answer_markdown
 
 
 class _SdkAdapter(Protocol):
@@ -1137,12 +1135,21 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
             thread_id=resolved_thread_id,
             status=job.status,
             job_id=job.id,
-            summary=final_response.summary if final_response else None,
-            result=final_response.result if final_response else None,
-            visualization=final_response.visualization if final_response else None,
+            answer_markdown=self._final_response_markdown(final_response),
+            artifacts=list(final_response.artifacts) if final_response else [],
+            diagnostics=dict(final_response.diagnostics) if final_response else {},
+            metadata=dict(final_response.metadata) if final_response else {},
             error=job.error,
             events=job.events,
         )
+
+    @staticmethod
+    def _final_response_markdown(final_response: JobFinalResponse | None) -> str | None:
+        if final_response is None:
+            return None
+        if isinstance(final_response.answer_markdown, str) and final_response.answer_markdown.strip():
+            return final_response.answer_markdown.strip()
+        return None
 
     def list_connectors(self) -> ConnectorListResult:
         raise ValueError(
@@ -1553,9 +1560,15 @@ class LocalRuntimeAdapter(_SdkAdapter):
                 if payload_job_id is not None
                 else None
             ),
-            summary=payload.get("summary"),
-            result=payload.get("result"),
-            visualization=payload.get("visualization"),
+            message_id=(
+                uuid.UUID(str(payload.get("message_id")))
+                if payload.get("message_id") is not None
+                else None
+            ),
+            answer_markdown=payload.get("answer_markdown"),
+            artifacts=list(payload.get("artifacts") or []),
+            diagnostics=dict(payload.get("diagnostics") or {}),
+            metadata=dict(payload.get("metadata") or {}),
             error=payload.get("error"),
             events=[],
         )

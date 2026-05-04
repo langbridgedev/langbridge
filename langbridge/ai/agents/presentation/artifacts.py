@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Mapping
 
+from pydantic import ValidationError
+
+from langbridge.ai.agents.presentation.contracts import PresentationArtifactAdapter
 from langbridge.ai.agents.presentation.guidance import build_column_formatting
 from langbridge.ai.tools.charting import ChartSpec
 
@@ -68,10 +71,8 @@ def build_available_artifacts(
             "rows": rows,
             "row_count": _row_count(data_payload),
         }
-        extra = {"row_count": _row_count(data_payload)}
         if formatting:
             payload["formatting"] = formatting
-            extra["formatting"] = formatting
         _append_artifact(
             artifacts,
             _artifact(
@@ -81,7 +82,6 @@ def build_available_artifacts(
                 title="Verified analyst result",
                 payload=payload,
                 provenance={"source": "analyst", "source_key": "result"},
-                extra={"row_count": extra["row_count"]},
             ),
         )
 
@@ -178,7 +178,7 @@ def _artifact(
     provenance: dict[str, Any] | None = None,
     data_ref: dict[str, Any] | None = None,
     extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     item: dict[str, Any] = {
         "id": artifact_id,
         "type": artifact_type,
@@ -192,10 +192,12 @@ def _artifact(
         item["data_ref"] = data_ref
     if extra:
         item.update(extra)
-    return item
+    return _validate_artifact(item)
 
 
-def _append_artifact(artifacts: list[dict[str, Any]], artifact: dict[str, Any]) -> None:
+def _append_artifact(artifacts: list[dict[str, Any]], artifact: dict[str, Any] | None) -> None:
+    if artifact is None:
+        return
     artifact_id = str(artifact.get("id") or "").strip()
     if not artifact_id:
         return
@@ -258,16 +260,21 @@ def _normalize_step_artifact(
         or artifact.get("kind")
         or artifact.get("artifact_type")
         or ""
-    ).strip()
+    ).strip().lower()
+    if artifact_type not in {"table", "chart", "sql", "diagnostics"}:
+        return None
     source = str(artifact.get("source") or "analyst").strip() or "analyst"
     normalized = dict(artifact)
     normalized.pop("placeholder", None)
     normalized.pop("source", None)
+    top_level_formatting = normalized.pop("formatting", None)
+    normalized.pop("row_count", None)
+    normalized.pop("rowcount", None)
     normalized.update(
         {
             "id": artifact_id,
-            "type": artifact_type or "artifact",
-            "role": str(artifact.get("role") or "supporting_result").strip(),
+            "type": artifact_type,
+            "role": _normalize_role(artifact.get("role"), artifact_type=artifact_type),
             "title": str(artifact.get("title") or artifact_id.replace("_", " ")).strip(),
             "provenance": (
                 artifact.get("provenance")
@@ -276,11 +283,64 @@ def _normalize_step_artifact(
             ),
         }
     )
+    normalized["data_ref"] = _normalize_data_ref(normalized.get("data_ref"))
+    if normalized["data_ref"] is None:
+        normalized.pop("data_ref", None)
+    _normalize_artifact_payload(
+        artifact=normalized,
+        top_level_formatting=top_level_formatting,
+    )
     _attach_formatting(
         artifact=normalized,
         presentation_guidance=presentation_guidance,
     )
-    return normalized
+    return _validate_artifact(normalized)
+
+
+def _normalize_role(value: Any, *, artifact_type: str) -> str:
+    role = str(value or "").strip()
+    if role in {"primary_result", "supporting_result", "diagnostic"}:
+        return role
+    return "diagnostic" if artifact_type == "diagnostics" else "supporting_result"
+
+
+def _normalize_data_ref(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, Mapping):
+        return dict(value)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return {"kind": "source", "source_key": text}
+
+
+def _normalize_artifact_payload(
+    *,
+    artifact: dict[str, Any],
+    top_level_formatting: Any,
+) -> None:
+    artifact_type = str(artifact.get("type") or "").strip()
+    payload = artifact.get("payload")
+    if not isinstance(payload, dict):
+        if artifact_type == "diagnostics":
+            return
+        artifact["payload"] = {}
+        payload = artifact["payload"]
+    if artifact_type == "table":
+        rowcount = payload.pop("rowcount", None)
+        if "row_count" not in payload and isinstance(rowcount, int):
+            payload["row_count"] = rowcount
+        if "row_count" not in payload and isinstance(payload.get("rows"), list):
+            payload["row_count"] = len(payload["rows"])
+    if isinstance(top_level_formatting, dict) and "formatting" not in payload:
+        payload["formatting"] = top_level_formatting
+
+
+def _validate_artifact(artifact: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        validated = PresentationArtifactAdapter.validate_python(artifact)
+    except ValidationError:
+        return None
+    return validated.model_dump(mode="json", exclude_none=True)
 
 
 def _attach_formatting(

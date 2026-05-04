@@ -1,12 +1,13 @@
 from typing import Any
 
 from langbridge.ai import MetaControllerRun
-from langbridge.ai.agents.presentation.contracts import MARKDOWN_ARTIFACT_RESPONSE_VERSION
+from langbridge.ai.agents.presentation.contracts import (
+    MARKDOWN_ARTIFACT_RESPONSE_VERSION,
+    PresentationResponseContract,
+)
 
 
 class AgentRunResponseBuilder:
-    PUBLIC_RESPONSE_KEYS = {"answer_markdown", "artifacts", "diagnostics", "metadata"}
-
     def build_response(self, ai_run: MetaControllerRun) -> dict[str, Any]:
         response = self.public_response(ai_run.final_result or {})
         diagnostics = response.get("diagnostics")
@@ -49,26 +50,13 @@ class AgentRunResponseBuilder:
                 "step_results": execution_diagnostics.get("step_results", []),
             },
         }
-        return response
+        return self.public_response(response)
 
     def public_response(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
-            payload = {}
-        response = {
-            key: payload[key]
-            for key in self.PUBLIC_RESPONSE_KEYS
-            if key in payload and payload[key] is not None
-        }
-        answer_markdown = response.get("answer_markdown")
-        if not isinstance(answer_markdown, str) or not answer_markdown.strip():
-            response["answer_markdown"] = self._answer_markdown_from_payload(payload)
-        if not isinstance(response.get("artifacts"), list):
-            response["artifacts"] = []
-        if not isinstance(response.get("diagnostics"), dict):
-            response["diagnostics"] = {}
-        if not isinstance(response.get("metadata"), dict):
-            response["metadata"] = {}
-        return response
+            raise ValueError("Agent final response must be a markdown artifact contract object.")
+        contract = PresentationResponseContract.model_validate(payload)
+        return contract.model_dump(mode="json", exclude_none=True)
 
     def execution_diagnostics(self, ai_run: MetaControllerRun) -> dict[str, Any]:
         run_diagnostics = dict(ai_run.diagnostics or {})
@@ -376,15 +364,3 @@ class AgentRunResponseBuilder:
             return int(value)
         except (TypeError, ValueError):
             return None
-
-    def _answer_markdown_from_payload(self, payload: dict[str, Any]) -> str:
-        for key in ("answer_markdown", "answer", "summary"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        result = payload.get("result")
-        if isinstance(result, dict):
-            value = result.get("text") or result.get("answer_markdown")
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return "Agent run completed."

@@ -922,9 +922,10 @@ def create_runtime_api_app(
                 if result.get("message_id") is not None
                 else None
             ),
-            summary=result.get("summary"),
-            result=result.get("result"),
-            visualization=result.get("visualization"),
+            answer_markdown=str(result.get("answer_markdown") or ""),
+            artifacts=list(result.get("artifacts") or []),
+            diagnostics=dict(result.get("diagnostics") or {}),
+            metadata=dict(result.get("metadata") or {}),
             error=result.get("error"),
             events=list(result.get("events", [])),
         )

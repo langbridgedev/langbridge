@@ -1,11 +1,26 @@
 import asyncio
 
+import pytest
+from pydantic import ValidationError
+
 from langbridge.ai.agents.presentation import PresentationAgent, PresentationGuidance
+from langbridge.ai.agents.presentation.contracts import PresentationLLMOutput
 from langbridge.ai.tools.charting import ChartingTool
 
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def test_presentation_llm_contract_rejects_legacy_top_level_fields() -> None:
+    with pytest.raises(ValidationError):
+        PresentationLLMOutput.model_validate(
+            {
+                "summary": "legacy summary",
+                "answer": "legacy answer",
+                "result": {"columns": [], "rows": []},
+            }
+        )
 
 
 class _PromptCheckingLLMProvider:

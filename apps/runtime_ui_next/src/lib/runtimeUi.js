@@ -557,49 +557,7 @@ function findNormalizedArtifact(artifacts, id, type = "") {
   );
 }
 
-function inferArtifactForPlaceholder({ id, result, visualization, diagnostics }) {
-  const type = normalizeRuntimeArtifactType("", id);
-  if (type === "chart" && visualization && typeof visualization === "object") {
-    return {
-      id,
-      type: "chart",
-      title: visualization.title || visualization.chart_title || "Visualization",
-      placeholder: `{{artifact:${id}}}`,
-      source: "visualization",
-    };
-  }
-  if (type === "table" && hasTabularArtifactPayload(result)) {
-    return {
-      id,
-      type: "table",
-      title: "Verified result table",
-      placeholder: `{{artifact:${id}}}`,
-      source: "result",
-      row_count: Array.isArray(result?.rows) ? result.rows.length : undefined,
-    };
-  }
-  if (type === "sql" && diagnostics && typeof diagnostics === "object") {
-    return {
-      id,
-      type: "sql",
-      title: "Generated SQL",
-      placeholder: `{{artifact:${id}}}`,
-      source: "diagnostics",
-    };
-  }
-  if (type === "diagnostics" && diagnostics && typeof diagnostics === "object") {
-    return {
-      id,
-      type: "diagnostics",
-      title: "Runtime diagnostics",
-      placeholder: `{{artifact:${id}}}`,
-      source: "diagnostics",
-    };
-  }
-  return null;
-}
-
-export function normalizeAssistantArtifacts(content, options = {}) {
+export function normalizeAssistantArtifacts(content) {
   const source = content && typeof content === "object" ? content : {};
   const rawArtifacts = source.artifacts;
   const rawItems = Array.isArray(rawArtifacts)
@@ -612,30 +570,6 @@ export function normalizeAssistantArtifacts(content, options = {}) {
   const normalized = rawItems
     .map((item, index) => normalizeAssistantArtifactItem(item, index))
     .filter(Boolean);
-  const result = options.result || null;
-  const visualization = options.visualization || null;
-  const diagnostics = options.diagnostics || source.diagnostics || null;
-  const placeholderIds = extractArtifactPlaceholderIds(
-    options.answerMarkdown || source.answer_markdown || "",
-  );
-  const seenIds = new Set(normalized.map((item) => item.id));
-
-  placeholderIds.forEach((id) => {
-    if (seenIds.has(id)) {
-      return;
-    }
-    const inferred = inferArtifactForPlaceholder({
-      id,
-      result,
-      visualization,
-      diagnostics,
-    });
-    if (inferred) {
-      normalized.push(inferred);
-      seenIds.add(id);
-    }
-  });
-
   return normalized;
 }
 
@@ -1083,10 +1017,7 @@ export function buildConversationTurns(messages, agents) {
         ? readAssistantAnswerMarkdown(assistant)
         : "";
       const assistantArtifacts = assistant
-        ? normalizeAssistantArtifacts(assistantContent, {
-            answerMarkdown: assistantAnswerMarkdown,
-            diagnostics,
-          })
+        ? normalizeAssistantArtifacts(assistantContent)
         : [];
       const assistantTable = normalizeTableFromArtifacts(assistantArtifacts);
       const assistantVisualization = normalizeVisualizationFromArtifacts(assistantArtifacts);

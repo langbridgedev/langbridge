@@ -13,6 +13,7 @@ from langbridge.ai.agents.presentation.artifacts import (
 )
 from langbridge.ai.agents.presentation.contracts import (
     MARKDOWN_ARTIFACT_RESPONSE_VERSION,
+    PresentationLLMOutput,
     PresentationResponseContract,
 )
 
@@ -32,13 +33,11 @@ class PresentationResponseAssembler:
         research_payload: dict[str, Any] | None,
         answer_payload: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        llm_output = PresentationLLMOutput.model_validate(parsed or {})
         answer_markdown = self._resolve_answer_markdown(
             mode=mode,
             context=context,
-            parsed=parsed,
-            analysis_payload=analysis_payload,
-            research_payload=research_payload,
-            answer_payload=answer_payload,
+            llm_output=llm_output,
         )
         answer_markdown = self._ensure_requested_visualization_placeholder(
             answer_markdown=answer_markdown,
@@ -58,14 +57,14 @@ class PresentationResponseAssembler:
         diagnostics = self._diagnostics(
             mode=mode,
             context=context,
-            parsed=parsed,
+            llm_output=llm_output,
             answer_markdown=answer_markdown,
         )
-        metadata = self._metadata(mode=mode, parsed=parsed)
+        metadata = self._metadata(mode=mode, llm_output=llm_output)
         contract = PresentationResponseContract(
             answer_markdown=answer_markdown,
             artifacts=resolve_referenced_artifacts(
-                parsed=parsed,
+                parsed=llm_output.model_dump(mode="json", exclude_none=True),
                 answer_markdown=answer_markdown,
                 available_artifacts=available_artifacts,
             ),
@@ -79,49 +78,30 @@ class PresentationResponseAssembler:
         *,
         mode: str,
         context: dict[str, Any],
-        parsed: dict[str, Any],
-        analysis_payload: dict[str, Any] | None,
-        research_payload: dict[str, Any] | None,
-        answer_payload: dict[str, Any] | None,
+        llm_output: PresentationLLMOutput,
     ) -> str:
         candidates: list[Any] = []
         if mode == "clarification":
             candidates.extend(
                 [
-                    parsed.get("answer_markdown"),
+                    llm_output.answer_markdown,
                     context.get("clarification_question"),
                 ]
             )
         elif mode == "failure":
             candidates.extend(
                 [
-                    parsed.get("answer_markdown"),
+                    llm_output.answer_markdown,
                     context.get("error"),
                 ]
             )
         else:
-            candidates.append(parsed.get("answer_markdown"))
-
-        candidates.extend(
-            [
-                parsed.get("answer"),
-                self._payload_text(answer_payload, "answer"),
-                self._payload_text(analysis_payload, "analysis"),
-                self._payload_text(research_payload, "synthesis"),
-            ]
-        )
+            candidates.append(llm_output.answer_markdown)
 
         for candidate in candidates:
             if isinstance(candidate, str) and candidate.strip():
                 return candidate.strip()
         raise ValueError("Presentation LLM response missing answer_markdown.")
-
-    @staticmethod
-    def _payload_text(payload: dict[str, Any] | None, key: str) -> str | None:
-        if not isinstance(payload, dict):
-            return None
-        value = payload.get(key)
-        return value.strip() if isinstance(value, str) and value.strip() else None
 
     def _ensure_requested_visualization_placeholder(
         self,
@@ -194,14 +174,10 @@ class PresentationResponseAssembler:
         *,
         mode: str,
         context: dict[str, Any],
-        parsed: dict[str, Any],
+        llm_output: PresentationLLMOutput,
         answer_markdown: str,
     ) -> dict[str, Any]:
-        diagnostics = (
-            dict(parsed.get("diagnostics"))
-            if isinstance(parsed.get("diagnostics"), dict)
-            else {}
-        )
+        diagnostics = dict(llm_output.diagnostics or {})
         diagnostics.setdefault("mode", mode)
         if mode == "clarification":
             clarification = (
@@ -213,12 +189,8 @@ class PresentationResponseAssembler:
         return diagnostics
 
     @staticmethod
-    def _metadata(*, mode: str, parsed: dict[str, Any]) -> dict[str, Any]:
-        metadata = (
-            dict(parsed.get("metadata"))
-            if isinstance(parsed.get("metadata"), dict)
-            else {}
-        )
+    def _metadata(*, mode: str, llm_output: PresentationLLMOutput) -> dict[str, Any]:
+        metadata = dict(llm_output.metadata or {})
         return {
             "contract_version": MARKDOWN_ARTIFACT_RESPONSE_VERSION,
             "mode": mode,

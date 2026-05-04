@@ -70,10 +70,10 @@ def test_execution_diagnostics_include_generated_sql_and_friendly_summary() -> N
             )
         ],
         final_result={
-            "summary": "US revenue is 2200.",
-            "answer": "US revenue is 2200.",
-            "result": {"columns": ["region", "revenue"], "rows": [["US", 2200]]},
+            "answer_markdown": "US revenue is 2200.",
+            "artifacts": [],
             "diagnostics": {"mode": "test"},
+            "metadata": {},
         },
         diagnostics={
             "selected_agent": "analyst.commerce",
@@ -85,6 +85,10 @@ def test_execution_diagnostics_include_generated_sql_and_friendly_summary() -> N
 
     response = AgentRunResponseBuilder().build_response(run)
 
+    assert response["answer_markdown"] == "US revenue is 2200."
+    assert "summary" not in response
+    assert "answer" not in response
+    assert "result" not in response
     execution = response["diagnostics"]["execution"]
     assert execution["summary"] == (
         "Run completed via direct:analyst.commerce. Generated 1 SQL query across dataset. "

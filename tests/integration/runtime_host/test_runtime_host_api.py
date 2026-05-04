@@ -580,7 +580,10 @@ def test_runtime_host_api_exposes_runtime_features(tmp_path: Path) -> None:
     )
     assert agent.status_code == 200
     assert agent.json()["status"] == "succeeded"
-    assert "commerce_analyst" in agent.json()["summary"]
+    assert "commerce_analyst" in agent.json()["answer_markdown"]
+    assert "summary" not in agent.json()
+    assert "result" not in agent.json()
+    assert "visualization" not in agent.json()
     thread_id = agent.json()["thread_id"]
 
     messages = client.get(f"/api/runtime/v1/threads/{thread_id}/messages")

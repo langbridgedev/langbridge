@@ -116,17 +116,19 @@ class _FakeRuntimeHost:
         return {
             "thread_id": uuid.uuid4(),
             "job_id": uuid.uuid4(),
-            "summary": f"Answered: {prompt}",
-            "result": {"text": "hello"},
-            "visualization": None,
+            "answer_markdown": f"Answered: {prompt}",
+            "artifacts": [],
+            "diagnostics": {},
+            "metadata": {"contract_version": "markdown_artifacts.v1"},
         }
 
     async def create_agent(self, *, job_id, request, event_emitter=None):
         return SimpleNamespace(
             response={
-                "summary": f"Answered for {request.thread_id}",
-                "result": {"text": "hello"},
-                "visualization": None,
+                "answer_markdown": f"Answered for {request.thread_id}",
+                "artifacts": [],
+                "diagnostics": {},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             }
         )
 
@@ -398,7 +400,7 @@ def test_remote_sdk_agents_ask_creates_thread_and_polls_job() -> None:
         job_type="agent",
         status="succeeded",
         progress=100,
-        final_response=JobFinalResponse(summary="done", result={"text": "hello"}),
+        final_response=JobFinalResponse(answer_markdown="done"),
         events=[],
     )
 
@@ -427,8 +429,8 @@ def test_remote_sdk_agents_ask_creates_thread_and_polls_job() -> None:
 
     assert result.status == "succeeded"
     assert result.thread_id == thread_id
-    assert result.summary == "done"
-    assert result.result == {"text": "hello"}
+    assert result.answer_markdown == "done"
+    assert result.text == "done"
 
 
 def test_local_sdk_dataset_and_sql_queries_use_runtime_adapter() -> None:
@@ -573,7 +575,7 @@ def test_local_sdk_agents_ask_uses_runtime_host() -> None:
     result = client.agents.ask(agent_id=uuid.uuid4(), message="hello local")
 
     assert result.status == "succeeded"
-    assert result.summary is not None
+    assert result.answer_markdown is not None
     assert result.thread_id is not None
     assert result.job_id is not None
 
@@ -693,8 +695,10 @@ def test_remote_sdk_runtime_host_requests_use_runtime_payload_shapes() -> None:
                     "thread_id": str(thread_id),
                     "status": "succeeded",
                     "job_id": str(job_id),
-                    "summary": "done",
-                    "result": {"text": "hello"},
+                    "answer_markdown": "done",
+                    "artifacts": [],
+                    "diagnostics": {},
+                    "metadata": {"contract_version": "markdown_artifacts.v1"},
                     "events": [],
                 },
             )

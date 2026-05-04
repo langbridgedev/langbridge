@@ -333,12 +333,15 @@ class AgentRunJobHandler(RuntimeJobHandler):
             )
 
     def _diagnostics(self, result: dict[str, Any]) -> dict[str, Any]:
+        artifacts = result.get("artifacts")
+        answer_markdown = result.get("answer_markdown")
+        diagnostics = result.get("diagnostics")
         return {
             "thread_id": result.get("thread_id"),
             "message_id": result.get("message_id"),
-            "summary": result.get("summary"),
-            "has_result": result.get("result") is not None,
-            "has_visualization": result.get("visualization") is not None,
+            "has_answer_markdown": isinstance(answer_markdown, str) and bool(answer_markdown.strip()),
+            "artifact_count": len(artifacts) if isinstance(artifacts, list) else 0,
+            "has_diagnostics": isinstance(diagnostics, dict) and bool(diagnostics),
             "has_error": result.get("error") is not None,
         }
 
@@ -351,12 +354,9 @@ class AgentRunJobHandler(RuntimeJobHandler):
         return "completed"
 
     def _success_message(self, result: dict[str, Any]) -> str:
-        answer = result.get("answer")
+        answer = result.get("answer_markdown")
         if isinstance(answer, str) and answer.strip():
             return answer.strip()
-        summary = result.get("summary")
-        if isinstance(summary, str) and summary.strip():
-            return summary.strip()
         return "Agent run completed."
 
     def _required_uuid(self, value: Any, field_name: str) -> uuid.UUID:
