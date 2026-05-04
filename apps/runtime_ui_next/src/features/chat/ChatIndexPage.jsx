@@ -2,20 +2,20 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, Bot, MessageSquarePlus } from "lucide-react";
 
-import { useAsyncData } from "../hooks/useAsyncData";
+import { useAsyncData } from "../../hooks/useAsyncData";
 import {
   createThread,
   fetchAgents,
   fetchThreads,
-} from "../lib/runtimeApi";
-import { getErrorMessage, getRuntimeTimestamp } from "../lib/format";
+} from "../../lib/runtimeApi";
+import { getErrorMessage, getRuntimeTimestamp } from "../../lib/format";
 import {
   CHAT_STARTERS,
   RUNTIME_AGENT_MODE_OPTIONS,
   formatRelativeTime,
   formatRuntimeAgentModeLabel,
   normalizeRuntimeAgentMode,
-} from "../lib/runtimeUi";
+} from "../../lib/runtimeUi";
 
 function buildPromptTitle(prompt) {
   const normalized = String(prompt || "")
@@ -140,6 +140,15 @@ export function ChatIndexPage() {
     }
   }
 
+  function handleKeyDown(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      if (prompt.trim()) {
+        void handleAsk(event);
+      }
+    }
+  }
+
   return (
     <div className="chat-index-shell chat-home-shell chat-home-shell--assistant">
       <section className="chat-home-assistant-stage">
@@ -166,7 +175,7 @@ export function ChatIndexPage() {
             <MessageSquarePlus className="button-icon" aria-hidden="true" />
             {creatingThread ? "Creating..." : "New chat"}
           </button>
-          <button className="ghost-button compact" type="button" onClick={() => navigate("/agents")}>
+          <button className="ghost-button compact" type="button" onClick={() => navigate("/configure/agents")}>
             <Bot className="button-icon" aria-hidden="true" />
             Agents
           </button>
@@ -175,7 +184,7 @@ export function ChatIndexPage() {
         <div className="chat-home-assistant-center">
           <div className="chat-home-copy chat-home-copy--assistant">
             <span className="chat-home-kicker">Langbridge Runtime</span>
-            <h2>What can I help you analyse?</h2>
+            <h3>What can I help you analyse?</h3>
             {/* <p className="chat-home-copy-text">
               Ask a business question, request a chart, or investigate a deeper analytical pattern.
             </p> */}
@@ -186,6 +195,7 @@ export function ChatIndexPage() {
               ref={textareaRef}
               className="chat-home-assistant-input"
               value={prompt}
+              onKeyDown={handleKeyDown}
               onChange={(event) => setPrompt(event.target.value)}
               rows={3}
               disabled={asking}
@@ -231,7 +241,7 @@ export function ChatIndexPage() {
               </div>
 
               <div className="chat-home-assistant-submit">
-                <span className="chat-home-selected-mode">
+                <span style={{marginRight: "10px"}} className="chat-home-selected-mode">
                   {formatRuntimeAgentModeLabel(selectedAgentMode)}
                 </span>
                 <button

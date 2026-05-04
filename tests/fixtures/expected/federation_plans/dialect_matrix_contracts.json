@@ -1,0 +1,160 @@
+{
+  "postgres_btrim_to_duckdb_local_compute": {
+    "pushdown_full_query": false,
+    "pushdown_reasons": [
+      "Local rewrite is required because cross-dialect full-query pushdown contains unrecognized function(s) that may not run on the source dialect: BTRIM."
+    ],
+    "result_stage_id": "local_compute_final",
+    "stages": [
+      {
+        "dependencies": [],
+        "source_id": "src_orders",
+        "sql": null,
+        "stage_id": "scan_o",
+        "stage_type": "remote_scan",
+        "subplan": {
+          "alias": "o",
+          "projected_columns": [
+            "customer_name",
+            "order_id"
+          ],
+          "pushdown": {
+            "aggregation": false,
+            "filter": false,
+            "full_query": false,
+            "join": false,
+            "limit": false,
+            "projection": true
+          },
+          "pushed_filters": [],
+          "pushed_limit": null,
+          "source_id": "src_orders",
+          "sql": "SELECT o.customer_name, o.order_id FROM orders AS o",
+          "stage_id": "scan_o",
+          "table_key": "orders"
+        }
+      },
+      {
+        "dependencies": [
+          "scan_o"
+        ],
+        "source_id": null,
+        "sql": "SELECT o.order_id, TRIM(o.customer_name) AS customer_name FROM scan_o AS o ORDER BY o.order_id",
+        "stage_id": "local_compute_final",
+        "stage_type": "local_compute",
+        "subplan": null
+      }
+    ]
+  },
+  "snowflake_bigquery_remote_scans_local_join": {
+    "pushdown_full_query": false,
+    "pushdown_reasons": [
+      "Cross-source query requires local federation stages."
+    ],
+    "result_stage_id": "local_compute_final",
+    "stages": [
+      {
+        "dependencies": [],
+        "source_id": "src_orders",
+        "sql": null,
+        "stage_id": "scan_o",
+        "stage_type": "remote_scan",
+        "subplan": {
+          "alias": "o",
+          "projected_columns": [
+            "customer_id",
+            "order_date",
+            "order_id"
+          ],
+          "pushdown": {
+            "aggregation": false,
+            "filter": true,
+            "full_query": false,
+            "join": false,
+            "limit": false,
+            "projection": true
+          },
+          "pushed_filters": [
+            "o.order_date >= '2025-01-01'"
+          ],
+          "pushed_limit": null,
+          "source_id": "src_orders",
+          "sql": "SELECT o.customer_id, o.order_date, o.order_id FROM orders AS o WHERE o.order_date >= '2025-01-01'",
+          "stage_id": "scan_o",
+          "table_key": "orders"
+        }
+      },
+      {
+        "dependencies": [],
+        "source_id": "src_customers",
+        "sql": null,
+        "stage_id": "scan_c",
+        "stage_type": "remote_scan",
+        "subplan": {
+          "alias": "c",
+          "projected_columns": [
+            "customer_id",
+            "region"
+          ],
+          "pushdown": {
+            "aggregation": false,
+            "filter": false,
+            "full_query": false,
+            "join": false,
+            "limit": false,
+            "projection": true
+          },
+          "pushed_filters": [],
+          "pushed_limit": null,
+          "source_id": "src_customers",
+          "sql": "SELECT c.customer_id, c.region FROM customers AS c",
+          "stage_id": "scan_c",
+          "table_key": "customers"
+        }
+      },
+      {
+        "dependencies": [
+          "scan_o",
+          "scan_c"
+        ],
+        "source_id": null,
+        "sql": "SELECT o.order_id, c.region FROM scan_o AS o JOIN scan_c AS c ON o.customer_id = c.customer_id WHERE o.order_date >= '2025-01-01' ORDER BY o.order_id",
+        "stage_id": "local_compute_final",
+        "stage_type": "local_compute",
+        "subplan": null
+      }
+    ]
+  },
+  "tsql_top_to_sqlite_full_query": {
+    "pushdown_full_query": true,
+    "pushdown_reasons": [],
+    "result_stage_id": "scan_full_query",
+    "stages": [
+      {
+        "dependencies": [],
+        "source_id": "src_orders",
+        "sql": null,
+        "stage_id": "scan_full_query",
+        "stage_type": "remote_full_query",
+        "subplan": {
+          "alias": "o",
+          "projected_columns": [],
+          "pushdown": {
+            "aggregation": false,
+            "filter": false,
+            "full_query": true,
+            "join": false,
+            "limit": true,
+            "projection": true
+          },
+          "pushed_filters": [],
+          "pushed_limit": null,
+          "source_id": "src_orders",
+          "sql": "SELECT o.order_id, o.net_revenue FROM orders AS o ORDER BY o.order_id LIMIT 2",
+          "stage_id": "scan_full_query",
+          "table_key": "orders"
+        }
+      }
+    ]
+  }
+}
