@@ -10,6 +10,10 @@ from langbridge.ai.tools.charting import ChartSpec
 
 
 ARTIFACT_REF_RE = re.compile(r"\{\{artifact:([A-Za-z0-9_.:-]+)\}\}")
+PRIMARY_RESULT_ARTIFACT_ID = "primary_result"
+PRIMARY_VISUALIZATION_ARTIFACT_ID = "primary_visualization"
+GENERATED_SQL_ARTIFACT_ID = "generated_sql"
+EXECUTION_DIAGNOSTICS_ARTIFACT_ID = "execution_diagnostics"
 
 
 def build_available_artifacts(
@@ -34,26 +38,26 @@ def build_available_artifacts(
         presentation_guidance=presentation_guidance,
     )
 
-    if visualization is not None:
+    has_renderable_visualization = _is_renderable_chart(visualization)
+
+    if has_renderable_visualization and visualization is not None:
         visualization_payload = visualization.model_dump(mode="json")
         if formatting:
             visualization_payload["formatting"] = formatting
         _append_artifact(
             artifacts,
             _artifact(
-                artifact_id="primary_visualization",
+                artifact_id=PRIMARY_VISUALIZATION_ARTIFACT_ID,
                 artifact_type="chart",
                 role="primary_result",
                 title=visualization.title,
-                source="visualization",
                 payload=visualization_payload,
                 provenance={"source": "presentation", "source_key": "visualization"},
                 data_ref=(
-                    {"kind": "artifact", "artifact_id": "result_table"}
+                    {"kind": "artifact", "artifact_id": PRIMARY_RESULT_ARTIFACT_ID}
                     if has_table
-                    else {"kind": "response.visualization", "path": "visualization"}
+                    else None
                 ),
-                extra={"formatting": formatting} if formatting else None,
             ),
         )
 
@@ -71,15 +75,13 @@ def build_available_artifacts(
         _append_artifact(
             artifacts,
             _artifact(
-                artifact_id="result_table",
+                artifact_id=PRIMARY_RESULT_ARTIFACT_ID,
                 artifact_type="table",
-                role="supporting_result" if visualization is not None else "primary_result",
-                title="Verified result table",
-                source="result",
+                role="supporting_result" if has_renderable_visualization else "primary_result",
+                title="Verified analyst result",
                 payload=payload,
                 provenance={"source": "analyst", "source_key": "result"},
-                data_ref={"kind": "response.result", "path": "result"},
-                extra=extra,
+                extra={"row_count": extra["row_count"]},
             ),
         )
 
@@ -88,15 +90,14 @@ def build_available_artifacts(
         _append_artifact(
             artifacts,
             _artifact(
-                artifact_id="generated_sql",
+                artifact_id=GENERATED_SQL_ARTIFACT_ID,
                 artifact_type="sql",
                 role="supporting_result",
                 title="Generated SQL",
-                source="sql",
                 payload=sql_payload,
                 provenance=sql_provenance,
                 data_ref=(
-                    {"kind": "artifact", "artifact_id": "result_table"}
+                    {"kind": "artifact", "artifact_id": PRIMARY_RESULT_ARTIFACT_ID}
                     if has_table
                     else None
                 ),
@@ -108,11 +109,10 @@ def build_available_artifacts(
         _append_artifact(
             artifacts,
             _artifact(
-                artifact_id="execution_diagnostics",
+                artifact_id=EXECUTION_DIAGNOSTICS_ARTIFACT_ID,
                 artifact_type="diagnostics",
                 role="diagnostic",
                 title="Execution diagnostics",
-                source="diagnostics",
                 payload=diagnostics_payload,
                 provenance=diagnostics_provenance,
             ),
@@ -162,6 +162,9 @@ def resolve_referenced_artifacts(
     for artifact_id in _artifact_ids_from_parsed(parsed):
         if artifact_id in by_id and artifact_id not in referenced_ids:
             referenced_ids.append(artifact_id)
+    for artifact_id in (PRIMARY_RESULT_ARTIFACT_ID,):
+        if artifact_id in by_id and artifact_id not in referenced_ids:
+            referenced_ids.append(artifact_id)
     return [by_id[artifact_id] for artifact_id in referenced_ids]
 
 
@@ -171,7 +174,6 @@ def _artifact(
     artifact_type: str,
     role: str,
     title: str,
-    source: str,
     payload: dict[str, Any] | None = None,
     provenance: dict[str, Any] | None = None,
     data_ref: dict[str, Any] | None = None,
@@ -182,9 +184,7 @@ def _artifact(
         "type": artifact_type,
         "role": role,
         "title": title,
-        "placeholder": f"{{{{artifact:{artifact_id}}}}}",
-        "source": source,
-        "provenance": provenance or {"source": source},
+        "provenance": provenance or {"source": "presentation"},
     }
     if payload is not None:
         item["payload"] = payload
@@ -259,18 +259,20 @@ def _normalize_step_artifact(
         or artifact.get("artifact_type")
         or ""
     ).strip()
+    source = str(artifact.get("source") or "analyst").strip() or "analyst"
     normalized = dict(artifact)
+    normalized.pop("placeholder", None)
+    normalized.pop("source", None)
     normalized.update(
         {
             "id": artifact_id,
             "type": artifact_type or "artifact",
             "role": str(artifact.get("role") or "supporting_result").strip(),
             "title": str(artifact.get("title") or artifact_id.replace("_", " ")).strip(),
-            "placeholder": artifact.get("placeholder") or f"{{{{artifact:{artifact_id}}}}}",
             "provenance": (
                 artifact.get("provenance")
                 if isinstance(artifact.get("provenance"), dict)
-                else {"source": str(artifact.get("source") or "analyst")}
+                else {"source": source}
             ),
         }
     )
@@ -304,7 +306,6 @@ def _attach_formatting(
     if not formatting:
         return
     payload["formatting"] = formatting
-    artifact["formatting"] = formatting
 
 
 def _artifact_ids_from_markdown(answer_markdown: str) -> list[str]:
@@ -317,11 +318,11 @@ def _artifact_ids_from_markdown(answer_markdown: str) -> list[str]:
 
 
 def _artifact_ids_from_parsed(parsed: dict[str, Any]) -> list[str]:
-    parsed_artifacts = parsed.get("artifacts")
-    if not isinstance(parsed_artifacts, list):
+    parsed_artifact_ids = parsed.get("artifact_ids")
+    if not isinstance(parsed_artifact_ids, list):
         return []
     ids: list[str] = []
-    for item in parsed_artifacts:
+    for item in parsed_artifact_ids:
         if isinstance(item, str):
             artifact_id = item.strip()
         elif isinstance(item, dict):
@@ -399,6 +400,13 @@ def _latest_diagnostics_payload(
 
 def _is_tabular_payload(data_payload: dict[str, Any] | None) -> bool:
     return bool(data_payload and {"columns", "rows"}.issubset(data_payload))
+
+
+def _is_renderable_chart(visualization: ChartSpec | None) -> bool:
+    if visualization is None:
+        return False
+    chart_type = str(visualization.chart_type or "").strip().lower()
+    return bool(chart_type and chart_type != "table")
 
 
 def _row_count(data_payload: dict[str, Any]) -> int:

@@ -194,8 +194,7 @@ class AgentExecutionService:
                     "job_id": str(job_id),
                     "execution_mode": ai_run.execution_mode,
                     "route": ai_run.plan.route,
-                    "summary": response.get("summary"),
-                    "answer": response.get("answer"),
+                    "answer_markdown": response.get("answer_markdown"),
                     "clarifying_question": self._response_builder.clarifying_question(response),
                 },
             )

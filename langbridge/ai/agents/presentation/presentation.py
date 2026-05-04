@@ -17,10 +17,9 @@ from langbridge.ai.events import AIEventEmitter, AIEventSource
 from langbridge.ai.llm.base import LLMProvider
 from langbridge.ai.agents.presentation.artifacts import (
     build_available_artifacts,
-    resolve_referenced_artifacts,
-    sanitize_artifact_placeholders,
 )
 from langbridge.ai.agents.presentation.prompts import build_presentation_prompt
+from langbridge.ai.agents.presentation.response import PresentationResponseAssembler
 from langbridge.ai.tools.charting import ChartSpec, ChartingTool
 
 
@@ -37,6 +36,7 @@ class PresentationAgent(AIEventSource, BaseAgent):
         super().__init__(event_emitter=event_emitter)
         self._llm = llm_provider
         self._charting_tool = charting_tool
+        self._response_assembler = PresentationResponseAssembler()
 
     @property
     def specification(self) -> AgentSpecification:
@@ -120,89 +120,30 @@ class PresentationAgent(AIEventSource, BaseAgent):
                 max_tokens=2400,
             )
         )
-        parsed_result = parsed.get("result")
-        parsed_research = parsed.get("research")
-        result_payload = parsed_result if isinstance(parsed_result, dict) and parsed_result else data_payload
-        if isinstance(result_payload, dict):
-            result_payload = self._with_artifact_formatting(
-                result_payload=result_payload,
-                available_artifacts=available_artifacts,
-            )
-        answer = self._resolve_answer(
-            parsed=parsed,
+        response = self._response_assembler.assemble(
+            question=question,
             mode=mode,
             context=context,
-            summary=str(parsed.get("summary") or ""),
+            parsed=parsed,
+            available_artifacts=available_artifacts,
             analysis_payload=analysis_payload,
             research_payload=research_payload,
             answer_payload=answer_payload,
         )
-        answer_markdown = self._resolve_answer_markdown(
-            parsed=parsed,
-            answer=answer,
-            summary=str(parsed.get("summary") or ""),
-        )
-        answer_markdown = sanitize_artifact_placeholders(
-            answer_markdown=answer_markdown,
-            available_artifacts=available_artifacts,
-        )
-        answer_markdown = self._ensure_primary_visualization_placeholder(
-            answer_markdown=answer_markdown,
-            available_artifacts=available_artifacts,
-            question=question,
-            context=context,
-        )
-        answer = self._resolve_legacy_answer(
-            mode=mode,
-            answer=answer,
-            answer_markdown=answer_markdown,
-        )
-        response = {
-            "summary": str(parsed.get("summary") or ""),
-            "result": result_payload if isinstance(result_payload, dict) and result_payload else None,
-            "visualization": parsed.get("visualization")
-            if isinstance(parsed.get("visualization"), dict)
-            else (visualization.model_dump(mode="json") if visualization else None),
-            "research": (
-                parsed_research
-                if isinstance(parsed_research, dict) and parsed_research
-                else research_payload or {}
-            ),
-            "answer": answer,
-            "answer_markdown": answer_markdown,
-            "artifacts": resolve_referenced_artifacts(
-                parsed=parsed,
-                answer_markdown=answer_markdown,
-                available_artifacts=available_artifacts,
-            ),
-            "diagnostics": parsed.get("diagnostics") if isinstance(parsed.get("diagnostics"), dict) else {"mode": mode},
-        }
-        if not response["summary"]:
-            raise ValueError("Presentation LLM response missing summary.")
         await self._emit_ai_event(
             event_type="PresentationCompositionCompleted",
             message="Answer composed.",
             source="presentation",
-            details={"has_visualization": isinstance(response.get("visualization"), dict)},
+            details={
+                "artifact_count": len(response.get("artifacts", [])),
+                "has_visualization": any(
+                    str(artifact.get("id") or "") == "primary_visualization"
+                    for artifact in response.get("artifacts", [])
+                    if isinstance(artifact, dict)
+                ),
+            },
         )
         return response
-
-    @staticmethod
-    def _with_artifact_formatting(
-        *,
-        result_payload: dict[str, Any],
-        available_artifacts: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        if isinstance(result_payload.get("formatting"), dict):
-            return result_payload
-        if not {"columns", "rows"}.issubset(result_payload):
-            return result_payload
-        for artifact in available_artifacts:
-            payload = artifact.get("payload") if isinstance(artifact.get("payload"), dict) else {}
-            formatting = payload.get("formatting") if isinstance(payload.get("formatting"), dict) else artifact.get("formatting")
-            if isinstance(formatting, dict) and artifact.get("type") == "table":
-                return {**result_payload, "formatting": formatting}
-        return result_payload
 
     async def _maybe_chart(
         self,
@@ -313,37 +254,6 @@ class PresentationAgent(AIEventSource, BaseAgent):
         return None
 
     @staticmethod
-    def _resolve_answer(
-        *,
-        parsed: dict[str, Any],
-        mode: str,
-        context: dict[str, Any],
-        summary: str,
-        analysis_payload: dict[str, Any] | None,
-        research_payload: dict[str, Any] | None,
-        answer_payload: dict[str, Any] | None,
-    ) -> Any:
-        if mode == "clarification":
-            return context.get("clarification_question") or parsed.get("answer") or summary or None
-        if parsed.get("answer") is not None:
-            return parsed.get("answer")
-        if parsed.get("answer_markdown") is not None:
-            return parsed.get("answer_markdown")
-        if mode == "failure":
-            return context.get("error") or summary or None
-        for payload, key in (
-            (answer_payload, "answer"),
-            (analysis_payload, "analysis"),
-            (research_payload, "synthesis"),
-        ):
-            if not isinstance(payload, dict):
-                continue
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return summary or None
-
-    @staticmethod
     def _recommendation_requests_no_visual(recommendation: dict[str, Any]) -> bool:
         should_visualize = recommendation.get("should_visualize")
         if should_visualize is False:
@@ -407,78 +317,6 @@ class PresentationAgent(AIEventSource, BaseAgent):
             if isinstance(rationale, str) and rationale.strip():
                 return rationale.strip()
         return None
-
-    @staticmethod
-    def _resolve_answer_markdown(
-        *,
-        parsed: dict[str, Any],
-        answer: Any,
-        summary: str,
-    ) -> str:
-        for key in ("answer_markdown", "answer"):
-            value = parsed.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        if isinstance(answer, str) and answer.strip():
-            return answer.strip()
-        return summary.strip()
-
-    @staticmethod
-    def _resolve_legacy_answer(
-        *,
-        mode: str,
-        answer: Any,
-        answer_markdown: str,
-    ) -> Any:
-        if mode in {"clarification", "failure"}:
-            return answer
-        return answer_markdown or answer
-
-    @staticmethod
-    def _ensure_primary_visualization_placeholder(
-        *,
-        answer_markdown: str,
-        available_artifacts: list[dict[str, Any]],
-        question: str,
-        context: dict[str, Any],
-    ) -> str:
-        if "{{artifact:primary_visualization}}" in answer_markdown:
-            return answer_markdown
-        has_visualization = any(
-            str(artifact.get("id") or "").strip() == "primary_visualization"
-            for artifact in available_artifacts
-        )
-        if not has_visualization:
-            return answer_markdown
-        if not PresentationAgent._question_or_context_requests_chart(question=question, context=context):
-            return answer_markdown
-
-        insertion = "Here is the requested visualization:\n\n{{artifact:primary_visualization}}"
-        if "{{artifact:result_table}}" in answer_markdown:
-            return answer_markdown.replace(
-                "{{artifact:result_table}}",
-                insertion + "\n\n{{artifact:result_table}}",
-                1,
-            )
-        if "{{artifact:primary_result}}" in answer_markdown:
-            return answer_markdown.replace(
-                "{{artifact:primary_result}}",
-                insertion + "\n\n{{artifact:primary_result}}",
-                1,
-            )
-        return f"{answer_markdown.rstrip()}\n\n{insertion}".strip()
-
-    @staticmethod
-    def _question_or_context_requests_chart(*, question: str, context: dict[str, Any]) -> bool:
-        text_parts = [
-            question,
-            str(context.get("chart_request") or ""),
-            json.dumps(context.get("presentation_revision_request") or {}, default=str),
-            json.dumps(context.get("visualization_recommendation") or {}, default=str),
-            json.dumps(context.get("recommended_visualization") or {}, default=str),
-        ]
-        text = " ".join(text_parts).casefold()
-        return any(token in text for token in ("chart", "graph", "plot", "visual", "pie", "bar", "line", "scatter"))
 
     @staticmethod
     def _parse_json_object(raw: str) -> dict[str, Any]:

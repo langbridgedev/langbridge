@@ -105,12 +105,52 @@ function findArtifact(artifacts, id) {
   );
 }
 
+function artifactId(artifact) {
+  return String(artifact?.id || artifact?.artifact_id || artifact?.key || "").trim();
+}
+
+function artifactKind(artifact, fallbackId = "") {
+  return normalizeRuntimeArtifactType(
+    artifact?.type || artifact?.kind || artifact?.source,
+    fallbackId || artifactId(artifact),
+  );
+}
+
 function inferArtifact(id) {
   return {
     id,
     type: normalizeRuntimeArtifactType("", id),
     title: String(id || "artifact").replaceAll("_", " "),
   };
+}
+
+function readArtifactReferenceId(artifact) {
+  const dataRef = artifact?.data_ref;
+  if (typeof dataRef === "string") {
+    return dataRef.trim();
+  }
+  if (dataRef && typeof dataRef === "object") {
+    return String(dataRef.artifact_id || dataRef.artifactId || dataRef.id || "").trim();
+  }
+  return "";
+}
+
+function findTableArtifact(artifacts, preferredReference = "") {
+  const list = Array.isArray(artifacts) ? artifacts : [];
+  const normalizedReference = String(preferredReference || "").trim();
+  if (normalizedReference) {
+    const referenced = findArtifact(list, normalizedReference);
+    if (referenced && artifactKind(referenced) === "table") {
+      return referenced;
+    }
+  }
+
+  return (
+    list.find((artifact) => artifactKind(artifact) === "table" && artifactId(artifact) === "primary_result") ||
+    list.find((artifact) => artifactKind(artifact) === "table" && artifact?.role === "primary_result") ||
+    list.find((artifact) => artifactKind(artifact) === "table") ||
+    null
+  );
 }
 
 function resolveArtifactTableResult(artifact, fallbackResult) {
@@ -159,6 +199,41 @@ function resolveArtifactVisualization(artifact, fallbackVisualization) {
   ].filter(Boolean);
   const candidate = candidates.find((item) => looksLikeVisualizationPayload(item));
   return candidate ? normalizeVisualizationSpec(candidate) : null;
+}
+
+function buildArtifactRenderPlan(parts, artifacts, fallbackVisualization) {
+  const aliasById = new Map();
+  const skipIds = new Set();
+  const artifactParts = parts.filter((part) => part.type === "artifact");
+
+  artifactParts.forEach((part, index) => {
+    const artifact = findArtifact(artifacts, part.id);
+    if (!artifact || artifactKind(artifact, part.id) !== "chart") {
+      return;
+    }
+    const visualization = resolveArtifactVisualization(artifact, fallbackVisualization);
+    if (visualization?.chartType !== "table") {
+      return;
+    }
+    const referencedTable = findTableArtifact(artifacts, readArtifactReferenceId(artifact));
+    if (!referencedTable) {
+      return;
+    }
+    const referencedId = artifactId(referencedTable);
+    if (!referencedId || referencedId === part.id) {
+      return;
+    }
+    aliasById.set(part.id, referencedId);
+
+    const laterDuplicate = artifactParts
+      .slice(index + 1)
+      .some((candidate) => candidate.id === referencedId);
+    if (laterDuplicate) {
+      skipIds.add(referencedId);
+    }
+  });
+
+  return { aliasById, skipIds };
 }
 
 function artifactFormatting(artifact) {
@@ -228,10 +303,7 @@ function ArtifactBlock({
   maxPreviewRows,
 }) {
   const resolvedArtifact = artifact || inferArtifact(id);
-  const artifactType = normalizeRuntimeArtifactType(
-    resolvedArtifact.type || resolvedArtifact.kind || resolvedArtifact.source,
-    id,
-  );
+  const artifactType = artifactKind(resolvedArtifact, id);
   const title = resolvedArtifact.title || resolvedArtifact.label || id;
 
   if (artifactType === "chart") {
@@ -242,6 +314,20 @@ function ArtifactBlock({
         ? { ...resolvedChartResult, formatting }
         : resolvedChartResult;
     const chartVisualization = resolveArtifactVisualization(resolvedArtifact, visualization);
+    if (chartVisualization?.chartType === "table") {
+      if (!chartResult) {
+        return null;
+      }
+      return (
+        <div className="artifact-markdown-card artifact-markdown-card--table">
+          <div className="artifact-markdown-card-head">
+            <span>Table</span>
+            <strong>{chartVisualization.title || title}</strong>
+          </div>
+          <ResultTable result={chartResult} maxPreviewRows={maxPreviewRows} />
+        </div>
+      );
+    }
     if (!chartResult || !chartVisualization || !hasRenderableVisualization(chartVisualization)) {
       return <MissingArtifact id={id} />;
     }
@@ -315,15 +401,22 @@ export function ArtifactMarkdown({
   diagnostics,
   maxPreviewRows = 10,
 }) {
+  const parts = splitMarkdownArtifacts(markdown);
+  const renderPlan = buildArtifactRenderPlan(parts, artifacts, visualization);
+
   return (
     <>
-      {splitMarkdownArtifacts(markdown).map((part, index) => {
+      {parts.map((part, index) => {
         if (part.type === "artifact") {
+          if (renderPlan.skipIds.has(part.id)) {
+            return null;
+          }
+          const resolvedId = renderPlan.aliasById.get(part.id) || part.id;
           return (
             <ArtifactBlock
               key={`artifact-${part.id}-${index}`}
-              id={part.id}
-              artifact={findArtifact(artifacts, part.id)}
+              id={resolvedId}
+              artifact={findArtifact(artifacts, resolvedId)}
               result={result}
               visualization={visualization}
               diagnostics={diagnostics}

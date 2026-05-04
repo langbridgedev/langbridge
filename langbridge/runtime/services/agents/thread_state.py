@@ -102,18 +102,15 @@ class AgentThreadStateManager:
         continuation_state: dict[str, Any] | None,
     ) -> RuntimeThreadMessage:
         assistant_message_id = uuid.uuid4()
-        content = {
-            "summary": response.get("summary"),
-            "answer": response.get("answer"),
-            "answer_markdown": response.get("answer_markdown"),
-            "artifacts": response.get("artifacts"),
-            "result": response.get("result"),
-            "visualization": response.get("visualization"),
-            "research": response.get("research"),
-            "diagnostics": response.get("diagnostics"),
-        }
+        metadata = dict(response.get("metadata") if isinstance(response.get("metadata"), dict) else {})
         if isinstance(continuation_state, dict) and continuation_state:
-            content["continuation_state"] = continuation_state
+            metadata["continuation_state"] = continuation_state
+        content = {
+            "answer_markdown": response.get("answer_markdown"),
+            "artifacts": response.get("artifacts") if isinstance(response.get("artifacts"), list) else [],
+            "diagnostics": response.get("diagnostics"),
+            "metadata": metadata,
+        }
         assistant_message = RuntimeThreadMessage(
             id=assistant_message_id,
             thread_id=thread.id,

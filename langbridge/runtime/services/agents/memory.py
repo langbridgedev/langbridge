@@ -21,7 +21,7 @@ class AgentConversationMemoryWriter:
     ) -> None:
         if self._memory_repository is None:
             return
-        answer = response.get("answer") or response.get("summary")
+        answer = response.get("answer_markdown")
         if not isinstance(answer, str) or not answer.strip():
             return
         created = []
@@ -34,10 +34,6 @@ class AgentConversationMemoryWriter:
         )
         if item is not None:
             created.append(item)
-
-        research = response.get("research")
-        if isinstance(research, dict):
-            created.extend(self._write_research_items(thread=thread, user_query=user_query, research=research))
 
         diagnostics = response.get("diagnostics")
         diagnostic_ai_run = diagnostics.get("ai_run") if isinstance(diagnostics, dict) else None
@@ -76,48 +72,6 @@ class AgentConversationMemoryWriter:
         if created:
             await self._memory_repository.flush()
 
-    def _write_research_items(
-        self,
-        *,
-        thread: RuntimeThread,
-        user_query: str,
-        research: dict[str, Any],
-    ) -> list[Any]:
-        if self._memory_repository is None:
-            return []
-        created = []
-        synthesis = str(research.get("synthesis") or "").strip()
-        if synthesis:
-            item = self._memory_repository.create_item(
-                thread_id=thread.id,
-                actor_id=thread.created_by,
-                category=RuntimeConversationMemoryCategory.fact.value,
-                content=f"Research synthesis for '{user_query}': {synthesis}",
-                metadata_json={"runtime": "langbridge.ai", "kind": "research_synthesis"},
-            )
-            if item is not None:
-                created.append(item)
-        findings = research.get("findings")
-        if isinstance(findings, list):
-            for finding in findings[:6]:
-                if not isinstance(finding, dict):
-                    continue
-                insight = str(finding.get("insight") or finding.get("claim") or "").strip()
-                source = str(finding.get("source") or "").strip()
-                if not insight:
-                    continue
-                content = f"{insight}" + (f" Source: {source}" if source else "")
-                item = self._memory_repository.create_item(
-                    thread_id=thread.id,
-                    actor_id=thread.created_by,
-                    category=RuntimeConversationMemoryCategory.fact.value,
-                    content=content,
-                    metadata_json={"runtime": "langbridge.ai", "kind": "research_finding"},
-                )
-                if item is not None:
-                    created.append(item)
-        return created
-
     def build_continuation_state(
         self,
         *,
@@ -151,13 +105,12 @@ class AgentConversationMemoryWriter:
             if isinstance(diagnostics, Mapping)
             else None
         )
-        answer = response.get("answer")
-        summary = response.get("summary")
-        if not any(isinstance(value, str) and value.strip() for value in (clarifying_question, answer, summary)):
+        answer = response.get("answer_markdown")
+        if not any(isinstance(value, str) and value.strip() for value in (clarifying_question, answer)):
             return None
         payload: dict[str, Any] = {
             "question": user_query,
-            "summary": str(summary or "").strip() or None,
+            "summary": str(answer or clarifying_question or "").strip() or None,
             "answer": str(answer or clarifying_question or "").strip() or None,
         }
         run_payload: Mapping[str, Any] = {}

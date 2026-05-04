@@ -152,9 +152,10 @@ ai:
                 source="tool:analyst:sql",
             )
         response_payload = {
-            "summary": f"{runtime._agents['commerce_analyst'].config.name} answered runtime prompt",
-            "result": {"text": "ok"},
-            "visualization": None,
+            "answer_markdown": f"{runtime._agents['commerce_analyst'].config.name} answered runtime prompt",
+            "artifacts": [],
+            "diagnostics": {},
+            "metadata": {"contract_version": "markdown_artifacts.v1"},
             "error": None,
             "events": [],
         }
@@ -166,9 +167,10 @@ ai:
                 parent_message_id=thread.last_message_id,
                 role=RuntimeMessageRole.assistant,
                 content={
-                    "summary": response_payload["summary"],
-                    "result": response_payload["result"],
-                    "visualization": response_payload["visualization"],
+                    "answer_markdown": response_payload["answer_markdown"],
+                    "artifacts": response_payload["artifacts"],
+                    "diagnostics": response_payload["diagnostics"],
+                    "metadata": response_payload["metadata"],
                 },
                 created_at=datetime.now(timezone.utc),
             )
@@ -646,8 +648,11 @@ def test_runtime_host_api_queues_and_executes_agent_run_jobs(tmp_path: Path) -> 
         messages = client.get(f"/api/runtime/v1/threads/{thread_id}/messages")
 
     assert job["job_type"] == "agent.run"
-    assert job["result"]["summary"] == "commerce_analyst answered runtime prompt"
-    assert {artifact["artifact_key"] for artifact in job["artifacts"]} == {"agent_response"}
+    assert job["result"]["answer_markdown"] == "commerce_analyst answered runtime prompt"
+    assert {artifact["artifact_key"] for artifact in job["artifacts"]} == {
+        "agent_response",
+        "agent_diagnostics",
+    }
     assert messages.status_code == 200
     assert messages.json()["total"] == 2
     assert messages.json()["items"][0]["content"]["agent_mode"] == "sql"
@@ -686,10 +691,10 @@ def test_runtime_host_api_persists_agent_run_progress_before_completion(tmp_path
             parent_message_id=thread.last_message_id,
             role=RuntimeMessageRole.assistant,
             content={
-                "summary": "Durable run completed.",
-                "result": {"text": "ok"},
-                "visualization": None,
-                "error": None,
+                "answer_markdown": "Durable run completed.",
+                "artifacts": [],
+                "diagnostics": {},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             },
             created_at=datetime.now(timezone.utc),
         )
@@ -700,9 +705,10 @@ def test_runtime_host_api_persists_agent_run_progress_before_completion(tmp_path
         await runtime._thread_repository.save(thread)
         return SimpleNamespace(
             response={
-                "summary": "Durable run completed.",
-                "result": {"text": "ok"},
-                "visualization": None,
+                "answer_markdown": "Durable run completed.",
+                "artifacts": [],
+                "diagnostics": {},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
                 "error": None,
                 "events": [],
             },
@@ -749,7 +755,7 @@ def test_runtime_host_api_persists_agent_run_progress_before_completion(tmp_path
         completed = _wait_for_runtime_job(client, job_id)
 
     assert completed["status"] == "succeeded"
-    assert completed["result"]["summary"] == "Durable run completed."
+    assert completed["result"]["answer_markdown"] == "Durable run completed."
 
 
 def test_runtime_host_api_returns_500_for_unexpected_agent_errors(
@@ -880,9 +886,10 @@ def test_runtime_host_api_replays_active_job_progress_from_job_stream_endpoint(t
             parent_message_id=thread.last_message_id,
             role=RuntimeMessageRole.assistant,
             content={
-                "summary": "Replay completed.",
-                "result": {"text": "ok"},
-                "visualization": None,
+                "answer_markdown": "Replay completed.",
+                "artifacts": [],
+                "diagnostics": {},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             },
             created_at=datetime.now(timezone.utc),
         )
@@ -900,9 +907,10 @@ def test_runtime_host_api_replays_active_job_progress_from_job_stream_endpoint(t
             )
         return SimpleNamespace(
             response={
-                "summary": "Replay completed.",
-                "result": {"text": "ok"},
-                "visualization": None,
+                "answer_markdown": "Replay completed.",
+                "artifacts": [],
+                "diagnostics": {},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
                 "error": None,
                 "events": [],
             },
@@ -1077,10 +1085,10 @@ def test_runtime_host_api_streams_access_denied_and_persists_canonical_message(t
             parent_message_id=thread.last_message_id,
             role=RuntimeMessageRole.assistant,
             content={
-                "summary": "Access denied summary.",
-                "result": {},
-                "visualization": None,
+                "answer_markdown": "Access denied summary.",
+                "artifacts": [],
                 "diagnostics": {"analyst_outcome": {"status": "access_denied"}},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             },
             created_at=datetime.now(timezone.utc),
         )
@@ -1091,11 +1099,11 @@ def test_runtime_host_api_streams_access_denied_and_persists_canonical_message(t
         await runtime._thread_repository.save(thread)
         return SimpleNamespace(
             response={
-                "summary": "Access denied summary.",
-                "result": {},
-                "visualization": None,
+                "answer_markdown": "Access denied summary.",
+                "artifacts": [],
                 "error": None,
                 "diagnostics": {"analyst_outcome": {"status": "access_denied"}},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             },
             assistant_message=assistant_message,
         )
@@ -1122,7 +1130,7 @@ def test_runtime_host_api_streams_access_denied_and_persists_canonical_message(t
     messages = client.get(f"/api/runtime/v1/threads/{thread_id}/messages")
     assert messages.status_code == 200
     assert messages.json()["total"] == 2
-    assert messages.json()["items"][1]["content"]["summary"] == "Access denied summary."
+    assert messages.json()["items"][1]["content"]["answer_markdown"] == "Access denied summary."
 
 
 def test_runtime_host_api_streams_specific_clarification_question(tmp_path: Path) -> None:
@@ -1144,10 +1152,8 @@ def test_runtime_host_api_streams_specific_clarification_question(tmp_path: Path
             parent_message_id=thread.last_message_id,
             role=RuntimeMessageRole.assistant,
             content={
-                "summary": "I need one clarification before I can answer.",
-                "answer": clarification_question,
-                "result": {},
-                "visualization": None,
+                "answer_markdown": clarification_question,
+                "artifacts": [],
                 "diagnostics": {
                     "ai_run": {
                         "mode": "clarification",
@@ -1155,6 +1161,7 @@ def test_runtime_host_api_streams_specific_clarification_question(tmp_path: Path
                     },
                     "clarifying_question": clarification_question,
                 },
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             },
             created_at=datetime.now(timezone.utc),
         )
@@ -1165,10 +1172,8 @@ def test_runtime_host_api_streams_specific_clarification_question(tmp_path: Path
         await runtime._thread_repository.save(thread)
         return SimpleNamespace(
             response={
-                "summary": "I need one clarification before I can answer.",
-                "answer": clarification_question,
-                "result": {},
-                "visualization": None,
+                "answer_markdown": clarification_question,
+                "artifacts": [],
                 "error": None,
                 "diagnostics": {
                     "ai_run": {
@@ -1177,6 +1182,7 @@ def test_runtime_host_api_streams_specific_clarification_question(tmp_path: Path
                     },
                     "clarifying_question": clarification_question,
                 },
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             },
             assistant_message=assistant_message,
         )
@@ -1203,8 +1209,7 @@ def test_runtime_host_api_streams_specific_clarification_question(tmp_path: Path
     thread_id = payloads[-1]["thread_id"]
     messages = client.get(f"/api/runtime/v1/threads/{thread_id}/messages")
     assert messages.status_code == 200
-    assert messages.json()["items"][1]["content"]["summary"] == "I need one clarification before I can answer."
-    assert messages.json()["items"][1]["content"]["answer"] == clarification_question
+    assert messages.json()["items"][1]["content"]["answer_markdown"] == clarification_question
 
 
 def test_runtime_host_api_executes_joined_semantic_query_with_runtime_response_shape(tmp_path: Path) -> None:

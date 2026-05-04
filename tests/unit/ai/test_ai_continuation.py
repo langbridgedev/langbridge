@@ -11,12 +11,17 @@ from langbridge.ai.orchestration.timeframes import (
 
 def test_continuation_state_builder_anchors_to_last_passed_step() -> None:
     response = {
-        "summary": "Q4 2025 channel answer.",
-        "answer": "Q4 2025 channel answer.",
-        "result": {
-            "columns": ["order_channel", "net_revenue"],
-            "rows": [["Online", 125000]],
-        },
+        "answer_markdown": "Q4 2025 channel answer.\n\n{{artifact:primary_result}}",
+        "artifacts": [
+            {
+                "id": "primary_result",
+                "type": "table",
+                "payload": {
+                    "columns": ["order_channel", "net_revenue"],
+                    "rows": [["Online", 125000]],
+                },
+            }
+        ],
         "diagnostics": {
             "ai_run": {
                 "status": "completed",

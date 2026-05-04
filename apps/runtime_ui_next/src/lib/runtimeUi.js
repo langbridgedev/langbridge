@@ -540,6 +540,23 @@ function normalizeAssistantArtifactItem(item, index) {
   };
 }
 
+function findNormalizedArtifact(artifacts, id, type = "") {
+  const normalizedId = String(id || "").trim();
+  const normalizedType = String(type || "").trim();
+  return (
+    (Array.isArray(artifacts) ? artifacts : []).find((artifact) => {
+      const artifactId = String(artifact?.id || "").trim();
+      if (normalizedId && artifactId !== normalizedId) {
+        return false;
+      }
+      if (!normalizedType) {
+        return true;
+      }
+      return normalizeRuntimeArtifactType(artifact?.type || artifact?.kind, artifactId) === normalizedType;
+    }) || null
+  );
+}
+
 function inferArtifactForPlaceholder({ id, result, visualization, diagnostics }) {
   const type = normalizeRuntimeArtifactType("", id);
   if (type === "chart" && visualization && typeof visualization === "object") {
@@ -595,11 +612,11 @@ export function normalizeAssistantArtifacts(content, options = {}) {
   const normalized = rawItems
     .map((item, index) => normalizeAssistantArtifactItem(item, index))
     .filter(Boolean);
-  const result = options.result || source.result || null;
-  const visualization = options.visualization || source.visualization || null;
+  const result = options.result || null;
+  const visualization = options.visualization || null;
   const diagnostics = options.diagnostics || source.diagnostics || null;
   const placeholderIds = extractArtifactPlaceholderIds(
-    options.answerMarkdown || source.answer_markdown || source.answer || "",
+    options.answerMarkdown || source.answer_markdown || "",
   );
   const seenIds = new Set(normalized.map((item) => item.id));
 
@@ -988,54 +1005,10 @@ export function buildDiagnosticsNotes(diagnostics, visualization) {
   return [...new Set(notes.filter(Boolean))];
 }
 
-function looksLikeMarkdownText(value) {
-  const text = String(value || "").trim();
-  if (!text) {
-    return false;
-  }
-  return (
-    extractArtifactPlaceholderIds(text).length > 0 ||
-    /(^|\n)\s{0,3}#{1,6}\s+\S/.test(text) ||
-    /(^|\n)\s*[-*+]\s+\S/.test(text) ||
-    /(^|\n)\s*\d+\.\s+\S/.test(text) ||
-    /(^|\n)```/.test(text) ||
-    /\|.+\|/.test(text)
-  );
-}
-
 function readAssistantAnswerMarkdown(message) {
   const content =
     message?.content && typeof message.content === "object" ? message.content : {};
-  const direct =
-    typeof content.answer_markdown === "string" && content.answer_markdown.trim()
-      ? content.answer_markdown.trim()
-      : "";
-  if (direct) {
-    return direct;
-  }
-
-  const presentation =
-    content.presentation && typeof content.presentation === "object"
-      ? content.presentation
-      : null;
-  if (typeof presentation?.answer_markdown === "string" && presentation.answer_markdown.trim()) {
-    return presentation.answer_markdown.trim();
-  }
-
-  const result = content.result && typeof content.result === "object" ? content.result : null;
-  if (typeof result?.answer_markdown === "string" && result.answer_markdown.trim()) {
-    return result.answer_markdown.trim();
-  }
-
-  const answer = typeof content.answer === "string" ? content.answer.trim() : "";
-  if (
-    answer &&
-    (!content.summary || looksLikeMarkdownText(answer) || extractArtifactPlaceholderIds(answer).length > 0)
-  ) {
-    return answer;
-  }
-
-  return "";
+  return typeof content.answer_markdown === "string" ? content.answer_markdown.trim() : "";
 }
 
 function readAssistantText(message, answerMarkdown = "") {
@@ -1047,30 +1020,35 @@ function readAssistantText(message, answerMarkdown = "") {
   const isClarification =
     (typeof diagnostics?.clarifying_question === "string" && diagnostics.clarifying_question.trim()) ||
     String(aiRun?.mode || "").trim().toLowerCase() === "clarification";
-  return (
-    (isClarification && typeof content.answer === "string" ? content.answer : "") ||
-    answerMarkdown ||
-    content.summary ||
-    content.answer ||
-    content.text ||
-    (typeof content.result?.text === "string" ? content.result.text : "") ||
-    ""
-  );
+  if (answerMarkdown) {
+    return answerMarkdown;
+  }
+  if (isClarification && typeof diagnostics?.clarifying_question === "string") {
+    return diagnostics.clarifying_question.trim();
+  }
+  return "";
 }
 
-function normalizeAssistantTable(message) {
-  const content =
-    message?.content && typeof message.content === "object" ? message.content : {};
-  const result = content.result;
-  if (!result || typeof result !== "object") {
-    return null;
-  }
+function normalizeTableFromArtifacts(artifacts) {
+  const primaryTable =
+    findNormalizedArtifact(artifacts, "primary_result", "table") ||
+    findNormalizedArtifact(artifacts, "", "table");
+  const payload =
+    primaryTable?.payload && typeof primaryTable.payload === "object"
+      ? primaryTable.payload
+      : null;
+  return hasTabularArtifactPayload(payload) ? normalizeTabularResult(payload) : null;
+}
 
-  if (Array.isArray(result.rows) || Array.isArray(result.data)) {
-    return normalizeTabularResult(result);
-  }
-
-  return null;
+function normalizeVisualizationFromArtifacts(artifacts) {
+  const primaryVisualization =
+    findNormalizedArtifact(artifacts, "primary_visualization", "chart") ||
+    findNormalizedArtifact(artifacts, "", "chart");
+  const payload =
+    primaryVisualization?.payload && typeof primaryVisualization.payload === "object"
+      ? primaryVisualization.payload
+      : null;
+  return payload ? normalizeVisualizationSpec(payload) : null;
 }
 
 export function buildConversationTurns(messages, agents) {
@@ -1096,8 +1074,6 @@ export function buildConversationTurns(messages, agents) {
         assistant?.content && typeof assistant.content === "object"
           ? assistant.content
           : {};
-      const assistantTable = normalizeAssistantTable(assistant);
-      const assistantVisualization = assistantContent.visualization || null;
       const diagnostics =
         assistantContent.diagnostics &&
         typeof assistantContent.diagnostics === "object"
@@ -1109,11 +1085,11 @@ export function buildConversationTurns(messages, agents) {
       const assistantArtifacts = assistant
         ? normalizeAssistantArtifacts(assistantContent, {
             answerMarkdown: assistantAnswerMarkdown,
-            result: assistantTable || assistantContent.result || null,
-            visualization: assistantVisualization,
             diagnostics,
           })
         : [];
+      const assistantTable = normalizeTableFromArtifacts(assistantArtifacts);
+      const assistantVisualization = normalizeVisualizationFromArtifacts(assistantArtifacts);
       const assistantError =
         assistant?.error && typeof assistant.error === "object" ? assistant.error : null;
       const agentId = String(assistant?.model_snapshot?.agent_id || "");

@@ -50,6 +50,45 @@ function buildSummaryFallback(state) {
   }
 }
 
+function readClarificationText(diagnostics) {
+  if (!diagnostics || typeof diagnostics !== "object") {
+    return "";
+  }
+  const direct =
+    typeof diagnostics.clarifying_question === "string"
+      ? diagnostics.clarifying_question.trim()
+      : "";
+  if (direct) {
+    return direct;
+  }
+  const aiRun = diagnostics.ai_run && typeof diagnostics.ai_run === "object" ? diagnostics.ai_run : null;
+  const routeQuestion =
+    typeof aiRun?.diagnostics?.route_decision?.clarification_question === "string"
+      ? aiRun.diagnostics.route_decision.clarification_question.trim()
+      : "";
+  if (routeQuestion) {
+    return routeQuestion;
+  }
+  const planQuestion =
+    typeof aiRun?.plan?.clarification_question === "string"
+      ? aiRun.plan.clarification_question.trim()
+      : "";
+  if (planQuestion) {
+    return planQuestion;
+  }
+  const reviewQuestion = Array.isArray(aiRun?.review_decisions)
+    ? [...aiRun.review_decisions]
+        .reverse()
+        .map((item) =>
+          typeof item?.clarification_question === "string"
+            ? item.clarification_question.trim()
+            : "",
+        )
+        .find(Boolean)
+    : "";
+  return reviewQuestion || "";
+}
+
 function buildStatePills({ result, visualization, diagnostics }) {
   const normalizedResult = result ? normalizeTabularResult(result) : null;
   const normalizedVisualization = normalizeVisualizationSpec(visualization);
@@ -141,8 +180,14 @@ export function RuntimeResultPanel({
     errorMessage,
     errorStatus,
   });
+  const isChatVariant = variant === "chat";
+  const isClarification = state.kind === "needs_clarification";
+  const clarificationText = isClarification ? readClarificationText(diagnostics) : "";
   const answerMarkdownText = String(answerMarkdown || "").trim();
-  const summaryText = String(summary || "").trim() || buildSummaryFallback(state);
+  const summaryText =
+    String(summary || "").trim() ||
+    clarificationText ||
+    (isChatVariant && isClarification ? "" : buildSummaryFallback(state));
   const primaryResponseMarkdown = answerMarkdownText || summaryText;
   const normalizedArtifacts = Array.isArray(artifacts) ? artifacts : [];
   const placeholderArtifactIds = extractArtifactPlaceholderIds(primaryResponseMarkdown);
@@ -164,10 +209,10 @@ export function RuntimeResultPanel({
   const showTable =
     Boolean(normalizedResult) &&
     (state.showTable || normalizedVisualization?.chartType === "table");
-  const isChatVariant = variant === "chat";
   const compactChatSuccess =
     isChatVariant &&
     (state.kind === "success_rows" || state.kind === "success_chart");
+  const hideChatStateCard = isChatVariant && (compactChatSuccess || isClarification);
   const inlineChartArtifactIds = showChart
     ? placeholderArtifactIds.filter((id) =>
         artifactPlaceholderMatchesType(id, normalizedArtifacts, "chart"),
@@ -189,7 +234,7 @@ export function RuntimeResultPanel({
 
   return (
     <div className={`runtime-result-stack ${variant === "chat" ? "runtime-result-stack--chat" : ""}`}>
-      {!compactChatSuccess ? (
+      {!hideChatStateCard ? (
         <div className={`runtime-result-state runtime-result-state--${state.tone}`}>
           <div className="runtime-result-state-copy">
             <span className="runtime-result-state-label">{state.label}</span>

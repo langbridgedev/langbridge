@@ -121,9 +121,10 @@ def test_configured_local_runtime_ask_agent_uses_agent_execution() -> None:
         captured["request"] = request
         return SimpleNamespace(
             response={
-                "summary": "Handled by agent execution",
-                "result": {"rows": [{"value": 1}]},
-                "visualization": None,
+                "answer_markdown": "Handled by agent execution",
+                "artifacts": [],
+                "diagnostics": {},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             }
         )
 
@@ -139,7 +140,7 @@ def test_configured_local_runtime_ask_agent_uses_agent_execution() -> None:
         )
 
         request = captured["request"]
-        assert payload["summary"] == "Handled by agent execution"
+        assert payload["answer_markdown"] == "Handled by agent execution"
         assert payload["thread_id"] == request.thread_id
         assert request.agent_definition_id == next(iter(runtime._agents.values())).id
         assert request.agent_mode == "sql"
@@ -1019,7 +1020,14 @@ def test_configured_runtime_sqlite_metadata_persists_threads_across_rebuilds(tmp
     runtime = build_configured_local_runtime(config_path=config_path)
 
     async def fake_execute(*, job_id, request, event_emitter=None):
-        return SimpleNamespace(response={"summary": "persisted", "result": None, "visualization": None})
+        return SimpleNamespace(
+            response={
+                "answer_markdown": "persisted",
+                "artifacts": [],
+                "diagnostics": {},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
+            }
+        )
 
     runtime.services.agent_execution = SimpleNamespace(execute=fake_execute)
     payload = asyncio.run(runtime.ask_agent(prompt="Persist this thread"))
@@ -1063,16 +1071,17 @@ def test_configured_runtime_sqlite_flushes_thread_messages_before_agent_executio
         )
         return SimpleNamespace(
             response={
-                "summary": "visible within same operation",
-                "result": None,
-                "visualization": None,
+                "answer_markdown": "visible within same operation",
+                "artifacts": [],
+                "diagnostics": {},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             }
         )
 
     runtime.services.agent_execution = SimpleNamespace(execute=fake_execute)
     payload = asyncio.run(runtime.ask_agent(prompt="Verify flush visibility"))
 
-    assert payload["summary"] == "visible within same operation"
+    assert payload["answer_markdown"] == "visible within same operation"
     thread = captured["thread"]
     messages = captured["messages"]
     assert thread is not None

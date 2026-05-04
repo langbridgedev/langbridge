@@ -1642,8 +1642,10 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
         if not isinstance(latest_output, dict):
             latest_output = {}
         answer = (
-            latest_output.get("answer")
+            latest_output.get("answer_markdown")
+            or latest_output.get("answer")
             or latest_output.get("analysis")
+            or context.get("answer_markdown")
             or context.get("answer")
             or context.get("analysis")
             or ""
@@ -1667,7 +1669,7 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
         for key, value in presented_final.items():
             if value is not None:
                 package[key] = value
-        answer = package.get("answer") or package.get("analysis") or package.get("summary") or ""
+        answer = package.get("answer_markdown") or package.get("answer") or package.get("analysis") or ""
         package["answer"] = answer
         return {key: value for key, value in package.items() if value is not None}
 
