@@ -142,7 +142,13 @@ class LLMConnectionTester:
         configuration: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Test Ollama with a local non-streaming chat request."""
-        base_url = str((configuration or {}).get("base_url") or "http://localhost:11434").rstrip("/")
+        config = configuration or {}
+        base_url = str(
+            config.get("base_url")
+            or config.get("api_url")
+            or config.get("api_base_url")
+            or "http://localhost:11434"
+        ).rstrip("/")
         try:
             response = httpx.post(
                 f"{base_url}/api/chat",
@@ -151,7 +157,7 @@ class LLMConnectionTester:
                     "messages": [{"role": "user", "content": "Hello"}],
                     "stream": False,
                 },
-                timeout=(configuration or {}).get("timeout", 30.0),
+                timeout=config.get("timeout", 300.0),
             )
             response.raise_for_status()
             return {

@@ -73,6 +73,64 @@ def test_ollama_chat_response_is_normalized() -> None:
     assert payload["options"] == {"num_ctx": 4096, "temperature": 0.2, "num_predict": 64}
 
 
+def test_ollama_chat_enables_json_mode_for_json_prompts() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": '{"ok":true}'}, "done": True},
+        )
+
+    provider = create_provider(
+        {
+            "provider": "ollama",
+            "model": "llama3.1",
+            "api_key": "",
+            "configuration": {"base_url": "http://ollama.local"},
+        }
+    )
+    transport = httpx.MockTransport(handler)
+    provider.create_async_client = lambda **_: httpx.AsyncClient(  # type: ignore[method-assign]
+        transport=transport,
+        base_url="http://ollama.local",
+    )
+
+    _run(provider.ainvoke([{"role": "user", "content": "Return STRICT JSON only."}]))
+
+    assert _json_payload(requests[0])["format"] == "json"
+
+
+def test_ollama_client_accepts_api_url_configuration_alias() -> None:
+    provider = create_provider(
+        {
+            "provider": "ollama",
+            "model": "llama3.1",
+            "api_key": "",
+            "configuration": {"api_url": "http://ollama.local/"},
+        }
+    )
+
+    with provider.create_client(transport=httpx.MockTransport(lambda _: httpx.Response(200))) as client:
+        assert str(client.base_url) == "http://ollama.local"
+        assert client.timeout.read == 300.0
+
+
+def test_ollama_client_uses_configured_timeout() -> None:
+    provider = create_provider(
+        {
+            "provider": "ollama",
+            "model": "llama3.1",
+            "api_key": "",
+            "configuration": {"base_url": "http://ollama.local", "timeout": 45.0},
+        }
+    )
+
+    with provider.create_client(transport=httpx.MockTransport(lambda _: httpx.Response(200))) as client:
+        assert client.timeout.read == 45.0
+
+
 def test_ollama_embedding_response_is_normalized() -> None:
     requests: list[httpx.Request] = []
 
@@ -127,6 +185,24 @@ def test_runtime_config_allows_ollama_without_credentials() -> None:
     assert config.llm_connections[0].provider == "ollama"
 
 
+def test_runtime_config_normalizes_ollama_top_level_api_url() -> None:
+    config = LocalRuntimeConfig.model_validate(
+        {
+            "version": 1,
+            "llm_connections": [
+                {
+                    "name": "local_ollama",
+                    "provider": "ollama",
+                    "model": "llama3.1",
+                    "api_url": "http://ollama.local",
+                }
+            ],
+        }
+    )
+
+    assert config.llm_connections[0].configuration["base_url"] == "http://ollama.local"
+
+
 def test_runtime_config_still_requires_credentials_for_remote_provider() -> None:
     with pytest.raises(ValueError, match="LLM connection must define api_key or api_key_secret"):
         LocalRuntimeConfig.model_validate(
@@ -173,7 +249,7 @@ def test_runtime_embedding_provider_uses_ollama_embed_api(monkeypatch: pytest.Mo
         {
             "path": "/api/embed",
             "json": {"model": "nomic-embed-text", "input": ["alpha", "beta"]},
-            "kwargs": {"base_url": "http://ollama.local"},
+            "kwargs": {"base_url": "http://ollama.local", "timeout": 300.0},
         }
     ]
 

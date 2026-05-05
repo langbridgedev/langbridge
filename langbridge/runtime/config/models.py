@@ -222,6 +222,24 @@ class LocalRuntimeLLMConnectionConfig(BaseModel):
     configuration: dict[str, Any] = Field(default_factory=dict)
     default: bool = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_configuration_aliases(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        configuration = normalized.get("configuration")
+        if not isinstance(configuration, dict):
+            configuration = {}
+        else:
+            configuration = dict(configuration)
+        for alias in ("base_url", "api_url", "api_base_url"):
+            configured_url = normalized.get(alias)
+            if configuration.get("base_url") is None and configured_url is not None:
+                configuration["base_url"] = configured_url
+        normalized["configuration"] = configuration
+        return normalized
+
     @model_validator(mode="after")
     def _validate_credentials(self) -> "LocalRuntimeLLMConnectionConfig":
         if str(self.provider or "").strip().lower() == "ollama":

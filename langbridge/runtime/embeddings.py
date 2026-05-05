@@ -11,6 +11,7 @@ from langbridge.runtime.models import LLMProvider
 DEFAULT_OPENAI_EMBED_MODEL = "text-embedding-3-small"
 DEFAULT_AZURE_API_VERSION = "2024-05-01-preview"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_TIMEOUT_SECONDS = 300.0
 _OPENAI_COMPATIBLE_CLIENT_CONFIG_KEYS = {
     "base_url",
     "timeout",
@@ -131,8 +132,16 @@ class EmbeddingProvider:
                 api_version=api_version,
             )
         if self.provider == LLMProvider.OLLAMA:
-            base_url = str(self.configuration.get("base_url") or DEFAULT_OLLAMA_BASE_URL).strip()
-            params: dict[str, Any] = {"base_url": (base_url or DEFAULT_OLLAMA_BASE_URL).rstrip("/")}
+            base_url = str(
+                self.configuration.get("base_url")
+                or self.configuration.get("api_url")
+                or self.configuration.get("api_base_url")
+                or DEFAULT_OLLAMA_BASE_URL
+            ).strip()
+            params: dict[str, Any] = {
+                "base_url": (base_url or DEFAULT_OLLAMA_BASE_URL).rstrip("/"),
+                "timeout": DEFAULT_OLLAMA_TIMEOUT_SECONDS,
+            }
             if "timeout" in self.configuration:
                 params["timeout"] = self.configuration["timeout"]
             return httpx.Client(**params)

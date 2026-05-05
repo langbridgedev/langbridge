@@ -8,6 +8,7 @@ from ..factory import register_provider
 from ..structured import json_schema_for_model, parse_structured_text
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_TIMEOUT_SECONDS = 300.0
 
 _CLIENT_CONFIG_KEYS = {
     "timeout",
@@ -18,6 +19,14 @@ _CLIENT_CONFIG_KEYS = {
 def _base_url(value: Any) -> str:
     base_url = str(value or DEFAULT_OLLAMA_BASE_URL).strip() or DEFAULT_OLLAMA_BASE_URL
     return base_url.rstrip("/")
+
+
+def _configured_base_url(configuration: Mapping[str, Any]) -> str:
+    return _base_url(
+        configuration.get("base_url")
+        or configuration.get("api_url")
+        or configuration.get("api_base_url")
+    )
 
 
 def _response_payload(response: httpx.Response) -> dict[str, Any]:
@@ -36,14 +45,16 @@ class OllamaProvider(LLMProvider):
         params = {key: self.configuration.get(key) for key in _CLIENT_CONFIG_KEYS if key in self.configuration}
         params.update(overrides)
         params = self._clean_kwargs(params)
-        params.setdefault("base_url", _base_url(self.configuration.get("base_url")))
+        params.setdefault("base_url", _configured_base_url(self.configuration))
+        params.setdefault("timeout", DEFAULT_OLLAMA_TIMEOUT_SECONDS)
         return httpx.Client(**params)
 
     def create_async_client(self, **overrides: Any) -> httpx.AsyncClient:
         params = {key: self.configuration.get(key) for key in _CLIENT_CONFIG_KEYS if key in self.configuration}
         params.update(overrides)
         params = self._clean_kwargs(params)
-        params.setdefault("base_url", _base_url(self.configuration.get("base_url")))
+        params.setdefault("base_url", _configured_base_url(self.configuration))
+        params.setdefault("timeout", DEFAULT_OLLAMA_TIMEOUT_SECONDS)
         return httpx.AsyncClient(**params)
 
     def complete(
@@ -158,6 +169,8 @@ class OllamaProvider(LLMProvider):
             payload["format"] = response_format
         elif self.configuration.get("format") is not None:
             payload["format"] = self.configuration["format"]
+        elif self._json_mode_when_requested(messages):
+            payload["format"] = "json"
         if self.configuration.get("keep_alive") is not None:
             payload["keep_alive"] = self.configuration["keep_alive"]
         options = self._options(temperature=temperature, max_tokens=max_tokens)
@@ -201,6 +214,21 @@ class OllamaProvider(LLMProvider):
             "role": str(message.get("role") or "user"),
             "content": str(message.get("content") or ""),
         }
+
+    def _json_mode_when_requested(self, messages: list[LLMMessage]) -> bool:
+        enabled = self.configuration.get("json_mode_when_requested", True)
+        if enabled is False:
+            return False
+        text = "\n".join(str(message.get("content") or "") for message in messages).casefold()
+        return any(
+            cue in text
+            for cue in (
+                "return strict json",
+                "return valid json",
+                "return json only",
+                "json object",
+            )
+        )
 
     @staticmethod
     def _chat_response(payload: dict[str, Any]) -> LLMResponse:
