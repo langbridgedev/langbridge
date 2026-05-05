@@ -220,7 +220,7 @@ flowchart TD
     Execute[RuntimeHost.create_agent]
     AgentSvc[AgentExecutionService.execute]
     Orchestrator[Orchestrator tools and agent runtime]
-    Response[Thread id job id summary result visualization]
+    Response[Thread id job id answer_markdown artifacts diagnostics metadata]
 
     Route --> Resolve
     Resolve --> Host

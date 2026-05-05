@@ -9,6 +9,7 @@ from langbridge.federation.models.virtual_dataset import TableStatistics, Virtua
 
 @dataclass(slots=True)
 class SourceCapabilities:
+    pushdown_full_query: bool = False
     pushdown_filter: bool = True
     pushdown_projection: bool = True
     pushdown_aggregation: bool = True

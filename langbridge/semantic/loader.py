@@ -108,7 +108,24 @@ def _parse_standard_payload(payload: Mapping[str, Any]) -> SemanticModel:
     normalized.pop("tables", None)
     normalized["relationships"] = _parse_relationships(payload.get("relationships") or payload.get("joins")) or None
     normalized["metrics"] = _parse_metrics(payload.get("metrics")) or None
+    if not str(normalized.get("sql_instructions") or "").strip():
+        sql_instructions = _extract_orchestration_instructions(payload.get("orchestration"))
+        if sql_instructions:
+            normalized["sql_instructions"] = sql_instructions
     return SemanticModel.model_validate(normalized)
+
+
+def _extract_orchestration_instructions(orchestration: Any) -> str | None:
+    if not isinstance(orchestration, Mapping):
+        return None
+    instructions: list[str] = []
+    for step in orchestration.get("steps") or []:
+        if not isinstance(step, Mapping):
+            continue
+        value = step.get("instructions") or step.get("sql_instructions")
+        if isinstance(value, str) and value.strip():
+            instructions.append(value.strip())
+    return "\n\n".join(instructions) or None
 
 
 def _parse_source_models(source_models_raw: list[Any]) -> list[SemanticGraphSourceModel]:

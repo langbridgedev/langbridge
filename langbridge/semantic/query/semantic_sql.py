@@ -563,7 +563,7 @@ class SemanticSqlFrontend:
                 member, value, normalized_operator = self._comparison_parts(
                     predicate=predicate,
                     relation_names=relation_names,
-                    default_operator=operator,
+                    default_operator=operator
                 )
                 resolved_member = self._resolve_member(member=member, resolver=resolver)
                 normalized_operator, normalized_values = self._normalize_filter_values(
@@ -608,6 +608,7 @@ class SemanticSqlFrontend:
                 self._literal_value(predicate.this),
                 inverted.get(default_operator, default_operator),
             )
+            
         raise SemanticSqlInvalidFilterError(
             "Semantic SQL comparisons must compare one semantic member to one literal value. "
             "Member-to-member comparisons and raw SQL expressions are not supported in semantic scope.",

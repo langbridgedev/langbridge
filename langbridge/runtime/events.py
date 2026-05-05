@@ -4,7 +4,7 @@ from enum import Enum
 import uuid
 from typing import Any, Protocol
 
-from langbridge.runtime.models.streaming import RuntimeRunStreamEvent
+from langbridge.runtime.models.streaming import RuntimeJobStreamEvent
 
 
 class AgentEventVisibility(str, Enum):
@@ -116,7 +116,7 @@ class QueueingAgentStreamEmitter:
         *,
         thread_id: uuid.UUID,
         job_id: uuid.UUID,
-        enqueue: Callable[[RuntimeRunStreamEvent], Awaitable[None]],
+        enqueue: Callable[[RuntimeJobStreamEvent], Awaitable[None]],
         message_id: uuid.UUID | None = None,
         initial_sequence: int = 0,
     ) -> None:
@@ -141,7 +141,7 @@ class QueueingAgentStreamEmitter:
     ) -> None:
         self._sequence += 1
         await self._enqueue(
-            RuntimeRunStreamEvent(
+            RuntimeJobStreamEvent(
                 sequence=self._sequence,
                 event="run.progress",
                 status=normalize_agent_stream_status(event_type=event_type, message=message),
@@ -152,8 +152,7 @@ class QueueingAgentStreamEmitter:
                 ),
                 message=message,
                 timestamp=datetime.now(timezone.utc),
-                run_type="agent",
-                run_id=self._job_id,
+                job_type="agent.run",
                 thread_id=self._thread_id,
                 job_id=self._job_id,
                 message_id=self._message_id,

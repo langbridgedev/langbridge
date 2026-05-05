@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
 
 _ALLOWED_ANALYST_DECISION_MODES = {"sql", "context_analysis", "research", "clarify"}
+_ANALYST_DECISION_MODE_ALIASES = {
+    "answer": "context_analysis",
+    "analysis": "context_analysis",
+    "context": "context_analysis",
+    "deep_research": "research",
+    "deep-research": "research",
+    "web_research": "research",
+    "web-research": "research",
+}
 
 
 class AnalystModeDecision(BaseModel):
@@ -15,9 +24,24 @@ class AnalystModeDecision(BaseModel):
     reason: str
     clarification_question: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_mode_alias(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        raw_mode = payload.get("agent_mode")
+        if raw_mode in (None, ""):
+            raw_mode = payload.get("mode")
+        mode = str(raw_mode or "").strip().lower()
+        if mode:
+            payload["agent_mode"] = _ANALYST_DECISION_MODE_ALIASES.get(mode, mode)
+        return payload
+
     @model_validator(mode="after")
     def _validate_mode(self) -> "AnalystModeDecision":
         mode = str(self.agent_mode or "").strip().lower()
+        mode = _ANALYST_DECISION_MODE_ALIASES.get(mode, mode)
         if mode not in _ALLOWED_ANALYST_DECISION_MODES:
             raise ValueError(f"Unsupported analyst decision mode '{self.agent_mode}'.")
         self.agent_mode = mode
@@ -26,6 +50,110 @@ class AnalystModeDecision(BaseModel):
             self.clarification_question = text or None
         self.reason = str(self.reason or "").strip()
         return self
+
+
+class AnalystContextAnalysisOutput(BaseModel):
+    analysis: str
+    result: dict[str, Any]
+
+
+class AnalystSqlToolSelection(BaseModel):
+    tool_name: str
+    reason: str | None = None
+
+
+class AnalystEntityReference(BaseModel):
+    """Strong entity signal extracted from a user question."""
+
+    identifier: str
+    supplied_name: str | None = None
+    original_text: str
+    source: Literal["parenthesized_identifier", "code_identifier"] = "code_identifier"
+
+    @model_validator(mode="after")
+    def _normalize_payload(self) -> "AnalystEntityReference":
+        self.identifier = str(self.identifier or "").strip()
+        if not self.identifier:
+            raise ValueError("Entity identifier is required.")
+        if self.supplied_name is not None:
+            supplied_name = str(self.supplied_name or "").strip()
+            self.supplied_name = supplied_name or None
+        self.original_text = str(self.original_text or "").strip() or self.identifier
+        return self
+
+
+class AnalystResolvedEntity(BaseModel):
+    """Governed entity-resolution outcome used to ground downstream analysis."""
+
+    status: Literal["resolved", "not_found", "ambiguous", "error"]
+    reference: AnalystEntityReference
+    canonical_identifier: str | None = None
+    canonical_name: str | None = None
+    source_tool: str | None = None
+    query_scope: str | None = None
+    sql_canonical: str | None = None
+    sql_executable: str | None = None
+    selected_datasets: list[str] = Field(default_factory=list)
+    selected_semantic_models: list[str] = Field(default_factory=list)
+    row_count: int | None = None
+    matched_row: dict[str, Any] = Field(default_factory=dict)
+    matched_rows_sample: list[dict[str, Any]] = Field(default_factory=list)
+    match_column: str | None = None
+    name_mismatch: bool = False
+    message: str | None = None
+    attempts: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _normalize_payload(self) -> "AnalystResolvedEntity":
+        for attr in (
+            "canonical_identifier",
+            "canonical_name",
+            "source_tool",
+            "query_scope",
+            "sql_canonical",
+            "sql_executable",
+            "match_column",
+            "message",
+        ):
+            value = getattr(self, attr)
+            if value is not None:
+                text = str(value).strip()
+                setattr(self, attr, text or None)
+        self.selected_datasets = [str(item).strip() for item in self.selected_datasets if str(item).strip()]
+        self.selected_semantic_models = [
+            str(item).strip() for item in self.selected_semantic_models if str(item).strip()
+        ]
+        return self
+
+    @property
+    def resolved(self) -> bool:
+        return self.status == "resolved"
+
+
+class AnalystSqlSummaryOutput(BaseModel):
+    analysis: str
+
+
+class AnalystSqlEvidenceReviewOutput(BaseModel):
+    decision: Literal["answer", "augment_with_web", "clarify"]
+    reason: str
+    sufficiency: Literal["sufficient", "partial", "insufficient"]
+    clarification_question: str | None = None
+
+
+class AnalystSqlSynthesisOutput(BaseModel):
+    analysis: str
+    findings: list[dict[str, Any]] = Field(default_factory=list)
+    follow_ups: list[str] = Field(default_factory=list)
+
+
+class AnalystResearchSynthesisOutput(BaseModel):
+    synthesis: str
+    verdict: str | None = None
+    key_comparisons: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    findings: list[dict[str, Any]] = Field(default_factory=list)
+    follow_ups: list[str] = Field(default_factory=list)
 
 
 class VisualizationRecommendation(BaseModel):
@@ -107,6 +235,14 @@ class AnalystEvidencePlan(BaseModel):
 __all__ = [
     "AnalystEvidencePlan",
     "AnalystEvidencePlanStep",
+    "AnalystContextAnalysisOutput",
+    "AnalystEntityReference",
     "AnalystModeDecision",
+    "AnalystResearchSynthesisOutput",
+    "AnalystResolvedEntity",
+    "AnalystSqlEvidenceReviewOutput",
+    "AnalystSqlSummaryOutput",
+    "AnalystSqlSynthesisOutput",
+    "AnalystSqlToolSelection",
     "VisualizationRecommendation",
 ]

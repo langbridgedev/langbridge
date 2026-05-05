@@ -1,14 +1,28 @@
 from typing import Any
 
 from langbridge.ai import MetaControllerRun
+from langbridge.ai.agents.presentation.contracts import (
+    MARKDOWN_ARTIFACT_RESPONSE_VERSION,
+    PresentationResponseContract,
+)
 
 
 class AgentRunResponseBuilder:
     def build_response(self, ai_run: MetaControllerRun) -> dict[str, Any]:
-        response = dict(ai_run.final_result or {})
+        response = self.public_response(ai_run.final_result or {})
         diagnostics = response.get("diagnostics")
         execution_diagnostics = self.execution_diagnostics(ai_run)
         clarifying_question = self.clarifying_question_from_run(response=response, ai_run=ai_run)
+        metadata = dict(response.get("metadata") if isinstance(response.get("metadata"), dict) else {})
+        metadata.update(
+            {
+                "contract_version": metadata.get("contract_version") or MARKDOWN_ARTIFACT_RESPONSE_VERSION,
+                "status": ai_run.status,
+                "route": ai_run.plan.route,
+                "execution_mode": ai_run.execution_mode,
+            }
+        )
+        response["metadata"] = metadata
         response["diagnostics"] = {
             **(diagnostics if isinstance(diagnostics, dict) else {}),
             "execution": execution_diagnostics,
@@ -36,7 +50,13 @@ class AgentRunResponseBuilder:
                 "step_results": execution_diagnostics.get("step_results", []),
             },
         }
-        return response
+        return self.public_response(response)
+
+    def public_response(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("Agent final response must be a markdown artifact contract object.")
+        contract = PresentationResponseContract.model_validate(payload)
+        return contract.model_dump(mode="json", exclude_none=True)
 
     def execution_diagnostics(self, ai_run: MetaControllerRun) -> dict[str, Any]:
         run_diagnostics = dict(ai_run.diagnostics or {})
@@ -302,12 +322,6 @@ class AgentRunResponseBuilder:
         answer_markdown = response.get("answer_markdown")
         if isinstance(answer_markdown, str) and answer_markdown.strip():
             return answer_markdown.strip()
-        answer = response.get("answer")
-        if isinstance(answer, str) and answer.strip():
-            return answer.strip()
-        summary = response.get("summary")
-        if isinstance(summary, str) and summary.strip():
-            return summary.strip()
         return "Agent run completed."
 
     def clarifying_question(self, response: dict[str, Any]) -> str | None:
@@ -335,12 +349,6 @@ class AgentRunResponseBuilder:
         answer_markdown = response.get("answer_markdown")
         if isinstance(answer_markdown, str) and answer_markdown.strip():
             return answer_markdown.strip()
-        answer = response.get("answer")
-        if isinstance(answer, str) and answer.strip():
-            return answer.strip()
-        summary = response.get("summary")
-        if isinstance(summary, str) and summary.strip():
-            return summary.strip()
         return None
 
     def unique_non_empty(self, values: Any) -> list[str]:

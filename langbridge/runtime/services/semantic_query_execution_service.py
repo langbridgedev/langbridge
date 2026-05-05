@@ -231,6 +231,11 @@ class SemanticQueryExecutionService:
     def to_semantic_filters(filters: list[dict[str, Any]]) -> list[dict[str, Any]]:
         payload: list[dict[str, Any]] = []
         for filter_entry in filters:
+            group_payload = SemanticQueryExecutionService._to_semantic_filter_group(filter_entry)
+            if group_payload is not None:
+                payload.append(group_payload)
+                continue
+
             member = str(filter_entry.get("member") or "").strip()
             if not member:
                 continue
@@ -261,6 +266,17 @@ class SemanticQueryExecutionService:
                 }
             )
         return payload
+
+    @staticmethod
+    def _to_semantic_filter_group(filter_entry: dict[str, Any]) -> dict[str, Any] | None:
+        for group_key in ("and", "or"):
+            if group_key not in filter_entry:
+                continue
+            children = SemanticQueryExecutionService.to_semantic_filters(
+                list(filter_entry.get(group_key) or [])
+            )
+            return {group_key: children} if children else None
+        return None
 
     @staticmethod
     def _normalize_filter_values(

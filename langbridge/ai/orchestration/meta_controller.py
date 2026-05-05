@@ -1,5 +1,4 @@
 """LLM-guided meta-controller gateway for the Langbridge AI package."""
-import json
 from enum import Enum
 from typing import Any
 
@@ -18,6 +17,7 @@ from langbridge.ai.base import (
 )
 from langbridge.ai.events import AIEventEmitter, AIEventSource
 from langbridge.ai.llm.base import LLMProvider
+from langbridge.ai.llm.structured import acomplete_structured
 from langbridge.ai.modes import AnalystAgentMode, analyst_output_contract_for_task_input, normalize_analyst_task_input
 from langbridge.ai.orchestration.continuation import (
     ContinuationState,
@@ -56,6 +56,16 @@ class MetaControllerDecision(BaseModel):
     rationale: str
     agent_name: str | None = None
     task_kind: AgentTaskKind | None = None
+    input: dict[str, Any] = Field(default_factory=dict)
+    clarification_question: str | None = None
+    plan_guidance: str | None = None
+
+
+class MetaControllerLLMDecision(BaseModel):
+    action: MetaControllerAction
+    rationale: str
+    agent_name: str | None = None
+    task_kind: str | None = None
     input: dict[str, Any] = Field(default_factory=dict)
     clarification_question: str | None = None
     plan_guidance: str | None = None
@@ -312,12 +322,18 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             requested_agent_mode=str(context.get("requested_agent_mode") or context.get("agent_mode") or ""),
             specification_payloads=[self._spec_payload(item) for item in specifications],
         )
-        raw = await self._llm.acomplete(prompt, temperature=0.0, max_tokens=700)
-        parsed = self._parse_json_object(raw)
+        decision = await acomplete_structured(
+            self._llm,
+            prompt,
+            response_model=MetaControllerLLMDecision,
+            temperature=0.0,
+            max_tokens=700,
+        )
+        decision_payload = decision.model_dump(mode="python")
         for key in ("agent_name", "task_kind", "clarification_question", "plan_guidance"):
-            if parsed.get(key) in ("", None):
-                parsed[key] = None
-        decision = MetaControllerDecision.model_validate(parsed)
+            if decision_payload.get(key) in ("", None):
+                decision_payload[key] = None
+        decision = MetaControllerDecision.model_validate(decision_payload)
         decision = self._normalize_route_decision(
             decision,
             question=question,
@@ -1465,12 +1481,13 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
         context: dict[str, Any],
         mode: str,
     ) -> dict[str, Any]:
+        presentation_context = self._context_with_presentation_guidance(context)
         task = AgentTask(
             task_id="presentation",
             task_kind=AgentTaskKind.presentation,
             question=question,
             input={"mode": mode},
-            context=context,
+            context=presentation_context,
             expected_output=self._presentation_agent.specification.output_contract,
         )
         await self._emit_ai_event(
@@ -1488,6 +1505,53 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
         )
         response = result.output.get("response")
         return response if isinstance(response, dict) else result.output
+
+    def _context_with_presentation_guidance(self, context: dict[str, Any]) -> dict[str, Any]:
+        if isinstance(context.get("presentation_guidance"), dict):
+            return context
+        agent_name = self._presentation_guidance_agent_name(context)
+        if not agent_name:
+            return context
+        try:
+            agent = self._registry.get(agent_name)
+        except KeyError:
+            return context
+        guidance = getattr(agent, "presentation_guidance", None)
+        if callable(guidance):
+            guidance = guidance()
+        if guidance is None:
+            return context
+        if hasattr(guidance, "to_dict"):
+            payload = guidance.to_dict()
+        elif isinstance(guidance, dict):
+            payload = guidance
+        else:
+            return context
+        return {**context, "presentation_guidance": payload} if isinstance(payload, dict) and payload else context
+
+    @staticmethod
+    def _presentation_guidance_agent_name(context: dict[str, Any]) -> str | None:
+        step_results = context.get("step_results")
+        if isinstance(step_results, list):
+            for item in reversed(step_results):
+                if isinstance(item, dict):
+                    agent_name = str(item.get("agent_name") or "").strip()
+                    if agent_name:
+                        return agent_name
+        plan = context.get("plan")
+        if isinstance(plan, dict):
+            steps = plan.get("steps")
+            if isinstance(steps, list):
+                for step in reversed(steps):
+                    if isinstance(step, dict):
+                        agent_name = str(step.get("agent_name") or "").strip()
+                        if agent_name:
+                            return agent_name
+        for key in ("selected_agent", "agent_name"):
+            agent_name = str(context.get(key) or "").strip()
+            if agent_name:
+                return agent_name
+        return None
 
     @staticmethod
     def _build_run(
@@ -1594,8 +1658,10 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
         if not isinstance(latest_output, dict):
             latest_output = {}
         answer = (
-            latest_output.get("answer")
+            latest_output.get("answer_markdown")
+            or latest_output.get("answer")
             or latest_output.get("analysis")
+            or context.get("answer_markdown")
             or context.get("answer")
             or context.get("analysis")
             or ""
@@ -1619,7 +1685,7 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
         for key, value in presented_final.items():
             if value is not None:
                 package[key] = value
-        answer = package.get("answer") or package.get("analysis") or package.get("summary") or ""
+        answer = package.get("answer_markdown") or package.get("answer") or package.get("analysis") or ""
         package["answer"] = answer
         return {key: value for key, value in package.items() if value is not None}
 
@@ -1695,18 +1761,6 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
     def _uses_mode_aware_analyst_contract(specification: AgentSpecification) -> bool:
         supported_modes = specification.metadata.get("supported_modes")
         return isinstance(supported_modes, list) and bool(supported_modes)
-
-    @staticmethod
-    def _parse_json_object(raw: str) -> dict[str, Any]:
-        text = raw.strip()
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end < start:
-            raise ValueError("Meta-controller LLM response did not contain a JSON object.")
-        parsed = json.loads(text[start : end + 1])
-        if not isinstance(parsed, dict):
-            raise ValueError("Meta-controller LLM response JSON must be an object.")
-        return parsed
 
 
 __all__ = ["MetaControllerAction", "MetaControllerAgent", "MetaControllerDecision", "MetaControllerRun"]

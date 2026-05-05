@@ -110,7 +110,6 @@ def to_connector_record(value: ConnectorMetadata | Connector) -> Connector:
         description=value.description,
         connector_type=value.connector_type_value or "",
         connector_family=value.connector_family_value,
-        type="connector",
         config_json=json.dumps(value.config or {}),
         connection_metadata_json=(
             None

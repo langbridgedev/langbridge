@@ -279,12 +279,6 @@ class Dataset(BaseModel):
         self.catalog_name = normalized or None
 
 
-_LEGACY_RELATIONSHIP_PATTERN = re.compile(
-    r"^\s*(?P<left_dataset>[A-Za-z_][A-Za-z0-9_]*)\.(?P<left_field>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<operator>=|!=|>|>=|<|<=)\s*"
-    r"(?P<right_dataset>[A-Za-z_][A-Za-z0-9_]*)\.(?P<right_field>[A-Za-z_][A-Za-z0-9_]*)\s*$"
-)
-
-
 class Relationship(BaseModel):
     name: str
     source_dataset: str
@@ -311,17 +305,6 @@ class Relationship(BaseModel):
         normalized = dict(value)
         if normalized.get("source_dataset") and normalized.get("target_dataset"):
             return normalized
-
-        condition = normalized.get("join_on") or normalized.get("joinOn") or normalized.get("on") or normalized.get("condition")
-        if condition:
-            match = _LEGACY_RELATIONSHIP_PATTERN.match(str(condition))
-            if match:
-                groups = match.groupdict()
-                normalized.setdefault("source_dataset", groups["left_dataset"])
-                normalized.setdefault("source_field", groups["left_field"])
-                normalized.setdefault("target_dataset", groups["right_dataset"])
-                normalized.setdefault("target_field", groups["right_field"])
-                normalized.setdefault("operator", groups["operator"])
         left_dataset = normalized.get("source_dataset") or normalized.get("from_") or normalized.get("from") or normalized.get("left")
         right_dataset = normalized.get("target_dataset") or normalized.get("to") or normalized.get("right")
         if left_dataset is not None:
@@ -365,6 +348,7 @@ class SemanticModel(BaseModel):
     connector: Optional[str] = None
     dialect: Optional[str] = None
     description: Optional[str] = None
+    sql_instructions: Optional[str] = None
     orchestration: Optional[SemanticOrchestration] = None
     tags: Optional[List[str]] = None
     datasets: Dict[str, Dataset] = Field(default_factory=dict)

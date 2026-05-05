@@ -7,8 +7,7 @@ runtime:
   # Configured runtimes default to sqlite metadata persistence; postgres is the
   # production/self-managed hosted alternative when you need shared durability.
   metadata_store:
-    type: sqlite
-    path: .langbridge/metadata.db
+    type: in_memory
   execution:
     engine: duckdb
     duckdb:

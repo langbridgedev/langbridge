@@ -99,6 +99,7 @@ class FederatedOptimizer:
                 for table in logical_plan.tables.values()
             )
         )
+        requires_full_query_rewrite = requires_physical_name_rewrite or requires_logical_name_rewrite
         has_join = bool(logical_plan.joins)
         has_filter = where_expr is not None
         has_limit = logical_plan.limit is not None
@@ -108,20 +109,12 @@ class FederatedOptimizer:
             input_dialect=input_dialect,
             target_dialect=single_source_target_dialect,
         )
-        pushdown_reasons = _full_query_pushdown_reasons(
+        pushdown_reasons = _full_query_pushdown_blockers(
             distinct_source_count=len(distinct_sources),
             has_cte=logical_plan.has_cte,
-            requires_physical_name_rewrite=(
-                requires_physical_name_rewrite and not can_remote_rewrite_full_query
-            ),
-            requires_logical_name_rewrite=(
-                requires_logical_name_rewrite and not can_remote_rewrite_full_query
-            ),
+            requires_full_query_rewrite=requires_full_query_rewrite,
+            can_rewrite_full_query_bindings=can_remote_rewrite_full_query,
             cross_dialect_block_reason=cross_dialect_block_reason,
-            has_join=has_join,
-            has_filter=has_filter,
-            has_aggregation=has_aggregation,
-            has_limit=has_limit,
             source_capabilities=single_source_capabilities,
         )
         pushdown_full_query = not pushdown_reasons
@@ -136,9 +129,7 @@ class FederatedOptimizer:
                     logical_plan=logical_plan,
                     virtual_dataset=virtual_dataset,
                 )
-                if can_remote_rewrite_full_query and (
-                    requires_physical_name_rewrite or requires_logical_name_rewrite
-                )
+                if can_remote_rewrite_full_query and requires_full_query_rewrite
                 else expression
             )
             full_sql = _transpile(
@@ -166,9 +157,7 @@ class FederatedOptimizer:
                             supported=True,
                             reason=(
                                 "Single-source query can execute remotely after mapping logical tables to physical relations."
-                                if can_remote_rewrite_full_query and (
-                                    requires_physical_name_rewrite or requires_logical_name_rewrite
-                                )
+                                if can_remote_rewrite_full_query and requires_full_query_rewrite
                                 else (
                                     "Single-source query can execute remotely after transpiling to the source dialect."
                                     if requires_cross_dialect_transpile
@@ -745,42 +734,29 @@ def _rewrite_expression_for_full_query_pushdown(
     return expression.copy().transform(_replace)
 
 
-def _full_query_pushdown_reasons(
+def _full_query_pushdown_blockers(
     *,
     distinct_source_count: int,
     has_cte: bool,
-    requires_physical_name_rewrite: bool,
-    requires_logical_name_rewrite: bool,
+    requires_full_query_rewrite: bool,
+    can_rewrite_full_query_bindings: bool,
     cross_dialect_block_reason: str | None,
-    has_join: bool,
-    has_filter: bool,
-    has_aggregation: bool,
-    has_limit: bool,
     source_capabilities: SourceCapabilities | None,
 ) -> list[str]:
     reasons: list[str] = []
     if distinct_source_count != 1:
         reasons.append("Cross-source query requires local federation stages.")
+        return _dedupe_reasons(reasons)
     if has_cte:
-        reasons.append("Local rewrite is required because the query contains a CTE.")
-    if requires_physical_name_rewrite:
-        reasons.append("Local rewrite is required to map logical tables to physical relations.")
-    if requires_logical_name_rewrite:
-        reasons.append("Local rewrite is required to preserve runtime dataset aliases.")
+        reasons.append("Full-query pushdown is unavailable because CTE rewrite is not supported yet.")
+    if source_capabilities is None:
+        reasons.append("Source capabilities are unavailable; full-query pushdown support is unknown.")
+    elif not source_capabilities.pushdown_full_query:
+        reasons.append("Unsupported connector/source capability: full-query SQL pushdown is unavailable.")
+    if requires_full_query_rewrite and not can_rewrite_full_query_bindings:
+        reasons.append("Full-query pushdown cannot safely rewrite physical SQL bindings.")
     if cross_dialect_block_reason:
         reasons.append(cross_dialect_block_reason)
-    if source_capabilities is None:
-        return _dedupe_reasons(reasons)
-    if has_filter and not source_capabilities.pushdown_filter:
-        reasons.append("Unsupported connector/source capability: filter pushdown is unavailable.")
-    if not source_capabilities.pushdown_projection:
-        reasons.append("Unsupported connector/source capability: projection pushdown is unavailable.")
-    if has_aggregation and not source_capabilities.pushdown_aggregation:
-        reasons.append("Unsupported connector/source capability: aggregation pushdown is unavailable.")
-    if has_limit and not source_capabilities.pushdown_limit:
-        reasons.append("Unsupported connector/source capability: limit pushdown is unavailable.")
-    if has_join and not source_capabilities.pushdown_join:
-        reasons.append("Unsupported connector/source capability: join pushdown is unavailable.")
     return _dedupe_reasons(reasons)
 
 

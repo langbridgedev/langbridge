@@ -1,14 +1,12 @@
 
 import uuid
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from langbridge.runtime.persistence.db.sql import (
     SqlJobRecord,
     SqlJobResultArtifactRecord,
-    SqlSavedQueryRecord,
-    SqlWorkspacePolicyRecord,
 )
 
 from .base import AsyncBaseRepository
@@ -93,61 +91,6 @@ class SqlJobResultArtifactRepository(AsyncBaseRepository[SqlJobResultArtifactRec
                 SqlJobResultArtifactRecord.id == artifact_id,
                 SqlJobResultArtifactRecord.workspace_id == workspace_id,
             )
-        )
-        return result.one_or_none()
-
-
-class SqlSavedQueryRepository(AsyncBaseRepository[SqlSavedQueryRecord]):
-    def __init__(self, session: AsyncSession):
-        super().__init__(session, SqlSavedQueryRecord)
-
-    async def list_for_workspace(
-        self,
-        *,
-        workspace_id: uuid.UUID,
-        actor_id: uuid.UUID,
-        include_shared: bool = True,
-    ) -> list[SqlSavedQueryRecord]:
-        clauses = [SqlSavedQueryRecord.workspace_id == workspace_id]
-        if include_shared:
-            clauses.append(
-                or_(
-                    SqlSavedQueryRecord.created_by_actor_id == actor_id,
-                    SqlSavedQueryRecord.is_shared.is_(True),
-                )
-            )
-        else:
-            clauses.append(SqlSavedQueryRecord.created_by_actor_id == actor_id)
-
-        result = await self._session.scalars(
-            select(SqlSavedQueryRecord)
-            .where(and_(*clauses))
-            .order_by(SqlSavedQueryRecord.updated_at.desc(), SqlSavedQueryRecord.created_at.desc())
-        )
-        return list(result.all())
-
-    async def get_for_workspace(
-        self,
-        *,
-        saved_query_id: uuid.UUID,
-        workspace_id: uuid.UUID,
-    ) -> SqlSavedQueryRecord | None:
-        result = await self._session.scalars(
-            select(SqlSavedQueryRecord).where(
-                SqlSavedQueryRecord.id == saved_query_id,
-                SqlSavedQueryRecord.workspace_id == workspace_id,
-            )
-        )
-        return result.one_or_none()
-
-
-class SqlWorkspacePolicyRepository(AsyncBaseRepository[SqlWorkspacePolicyRecord]):
-    def __init__(self, session: AsyncSession):
-        super().__init__(session, SqlWorkspacePolicyRecord)
-
-    async def get_by_workspace_id(self, *, workspace_id: uuid.UUID) -> SqlWorkspacePolicyRecord | None:
-        result = await self._session.scalars(
-            select(SqlWorkspacePolicyRecord).where(SqlWorkspacePolicyRecord.workspace_id == workspace_id)
         )
         return result.one_or_none()
 

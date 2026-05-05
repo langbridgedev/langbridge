@@ -76,9 +76,10 @@ class JobEventResponse(RuntimeModel):
 
 
 class JobFinalResponse(RuntimeModel):
-    result: Any | None = None
-    visualization: Any | None = None
-    summary: str | None = None
+    answer_markdown: str | None = None
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentJobStateResponse(RuntimeModel):
@@ -315,6 +316,8 @@ class SyncRunResourceResult(_AwaitableModel):
 
 class SyncRunResult(_AwaitableModel):
     status: str
+    job_id: uuid.UUID | None = None
+    job_type: str | None = None
     dataset_id: uuid.UUID | None = None
     dataset_name: str | None = None
     connector_id: uuid.UUID | None = None
@@ -322,6 +325,7 @@ class SyncRunResult(_AwaitableModel):
     sync_mode: str | None = None
     resources: list[SyncRunResourceResult] = Field(default_factory=list)
     summary: str | None = None
+    stream_path: str | None = None
     error: str | None = None
 
 
@@ -329,20 +333,17 @@ class AgentAskResult(_AwaitableModel):
     thread_id: uuid.UUID | None = None
     status: str
     job_id: uuid.UUID | None = None
-    summary: str | None = None
-    result: Any | None = None
-    visualization: Any | None = None
+    message_id: uuid.UUID | None = None
+    answer_markdown: str | None = None
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     error: dict[str, Any] | None = None
     events: list[JobEventResponse] = Field(default_factory=list)
 
     @property
     def text(self) -> str | None:
-        if self.summary:
-            return self.summary
-        if isinstance(self.result, dict):
-            value = self.result.get("text")
-            return str(value) if value is not None else None
-        return None
+        return self.answer_markdown
 
 
 class _SdkAdapter(Protocol):
@@ -837,7 +838,57 @@ class RuntimeHostApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
                 },
             )
         )
-        return SyncRunResult.model_validate(payload.model_dump(mode="json"))
+        result = SyncRunResult.model_validate(payload.model_dump(mode="json"))
+        if result.job_id is None:
+            return result
+        return self._wait_for_sync_job(
+            queued_result=result,
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
+        )
+
+    def _wait_for_sync_job(
+        self,
+        *,
+        queued_result: SyncRunResult,
+        timeout_s: float,
+        poll_interval_s: float,
+    ) -> SyncRunResult:
+        if queued_result.job_id is None:
+            return queued_result
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        delay = max(0.05, float(poll_interval_s))
+        while True:
+            job_payload = self._request(
+                "GET",
+                f"/api/runtime/v1/jobs/{queued_result.job_id}",
+            )
+            status = str(job_payload.get("status") or "").strip().lower()
+            if status == "succeeded":
+                result_payload = dict(job_payload.get("result") or {})
+                result_payload.setdefault("job_id", str(queued_result.job_id))
+                result_payload.setdefault("job_type", queued_result.job_type)
+                return SyncRunResult.model_validate(result_payload)
+            if status in {"failed", "cancelled"}:
+                error_payload = job_payload.get("error")
+                return queued_result.model_copy(
+                    update={
+                        "status": status,
+                        "error": (
+                            str(error_payload.get("message"))
+                            if isinstance(error_payload, dict)
+                            else str(error_payload or f"Dataset sync job {status}.")
+                        ),
+                    }
+                )
+            if time.monotonic() >= deadline:
+                return queued_result.model_copy(
+                    update={
+                        "status": "queued",
+                        "error": f"Dataset sync job did not complete within {timeout_s} seconds.",
+                    }
+                )
+            time.sleep(delay)
 
 
 class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
@@ -1084,12 +1135,21 @@ class RemoteApiAdapter(_BaseHttpApiAdapter, _SdkAdapter):
             thread_id=resolved_thread_id,
             status=job.status,
             job_id=job.id,
-            summary=final_response.summary if final_response else None,
-            result=final_response.result if final_response else None,
-            visualization=final_response.visualization if final_response else None,
+            answer_markdown=self._final_response_markdown(final_response),
+            artifacts=list(final_response.artifacts) if final_response else [],
+            diagnostics=dict(final_response.diagnostics) if final_response else {},
+            metadata=dict(final_response.metadata) if final_response else {},
             error=job.error,
             events=job.events,
         )
+
+    @staticmethod
+    def _final_response_markdown(final_response: JobFinalResponse | None) -> str | None:
+        if final_response is None:
+            return None
+        if isinstance(final_response.answer_markdown, str) and final_response.answer_markdown.strip():
+            return final_response.answer_markdown.strip()
+        return None
 
     def list_connectors(self) -> ConnectorListResult:
         raise ValueError(
@@ -1500,9 +1560,15 @@ class LocalRuntimeAdapter(_SdkAdapter):
                 if payload_job_id is not None
                 else None
             ),
-            summary=payload.get("summary"),
-            result=payload.get("result"),
-            visualization=payload.get("visualization"),
+            message_id=(
+                uuid.UUID(str(payload.get("message_id")))
+                if payload.get("message_id") is not None
+                else None
+            ),
+            answer_markdown=payload.get("answer_markdown"),
+            artifacts=list(payload.get("artifacts") or []),
+            diagnostics=dict(payload.get("diagnostics") or {}),
+            metadata=dict(payload.get("metadata") or {}),
             error=payload.get("error"),
             events=[],
         )

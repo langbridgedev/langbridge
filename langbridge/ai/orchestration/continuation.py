@@ -336,14 +336,22 @@ class ContinuationStateBuilder:
     def from_content(cls, content: Mapping[str, Any]) -> ContinuationState | None:
         if not isinstance(content, Mapping):
             return None
+        metadata = content.get("metadata") if isinstance(content.get("metadata"), Mapping) else {}
+        stored_state = metadata.get("continuation_state") if isinstance(metadata, Mapping) else None
+        if isinstance(stored_state, Mapping):
+            coerced_state = cls.coerce(stored_state)
+            if coerced_state is not None:
+                return coerced_state
         diagnostics = content.get("diagnostics")
+        artifacts = cls._artifact_list(content.get("artifacts"))
+        answer_markdown = content.get("answer_markdown")
         return cls._from_parts(
             user_query=None,
-            result=content.get("result"),
-            visualization=content.get("visualization"),
-            research=content.get("research"),
-            summary=content.get("summary"),
-            answer=content.get("answer"),
+            result=cls.primary_result_from_artifacts(artifacts),
+            visualization=cls.primary_visualization_from_artifacts(artifacts),
+            research=None,
+            summary=cls.summary_from_markdown(answer_markdown),
+            answer=answer_markdown,
             diagnostics=diagnostics if isinstance(diagnostics, Mapping) else {},
             ai_run=None,
         )
@@ -357,13 +365,15 @@ class ContinuationStateBuilder:
         ai_run: Any | None = None,
     ) -> ContinuationState | None:
         diagnostics = response.get("diagnostics") if isinstance(response, Mapping) else None
+        artifacts = cls._artifact_list(response.get("artifacts")) if isinstance(response, Mapping) else []
+        answer_markdown = response.get("answer_markdown") if isinstance(response, Mapping) else None
         return cls._from_parts(
             user_query=user_query,
-            result=response.get("result") if isinstance(response, Mapping) else None,
-            visualization=response.get("visualization") if isinstance(response, Mapping) else None,
-            research=response.get("research") if isinstance(response, Mapping) else None,
-            summary=response.get("summary") if isinstance(response, Mapping) else None,
-            answer=response.get("answer") if isinstance(response, Mapping) else None,
+            result=cls.primary_result_from_artifacts(artifacts),
+            visualization=cls.primary_visualization_from_artifacts(artifacts),
+            research=None,
+            summary=cls.summary_from_markdown(answer_markdown),
+            answer=answer_markdown,
             diagnostics=diagnostics if isinstance(diagnostics, Mapping) else {},
             ai_run=ai_run,
         )
@@ -589,6 +599,59 @@ class ContinuationStateBuilder:
             if selected_agent:
                 return selected_agent
         return None
+
+    @staticmethod
+    def _artifact_list(value: Any) -> list[Mapping[str, Any]]:
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, Mapping)]
+        if isinstance(value, Mapping):
+            return [
+                {"id": artifact_id, **artifact}
+                for artifact_id, artifact in value.items()
+                if isinstance(artifact, Mapping)
+            ]
+        return []
+
+    @classmethod
+    def primary_result_from_artifacts(cls, artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+        for artifact in artifacts:
+            artifact_id = str(artifact.get("id") or "").strip()
+            artifact_type = str(artifact.get("type") or artifact.get("kind") or "").strip().lower()
+            if artifact_id != "primary_result" and artifact_type != "table":
+                continue
+            payload = artifact.get("payload")
+            if is_tabular_result(payload):
+                return dict(payload)
+        return None
+
+    @classmethod
+    def primary_visualization_from_artifacts(cls, artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+        for artifact in artifacts:
+            artifact_id = str(artifact.get("id") or "").strip()
+            artifact_type = str(artifact.get("type") or artifact.get("kind") or "").strip().lower()
+            if artifact_id != "primary_visualization" and artifact_type != "chart":
+                continue
+            payload = artifact.get("payload")
+            if not isinstance(payload, Mapping) or not payload:
+                continue
+            chart_type = str(payload.get("chart_type") or payload.get("chartType") or "").strip().lower()
+            if chart_type == "table":
+                return None
+            return dict(payload)
+        return None
+
+    @staticmethod
+    def summary_from_markdown(value: Any, *, max_length: int = 320) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        text = re.sub(r"\{\{\s*artifact:[A-Za-z0-9_.:-]+\s*\}\}", " ", value)
+        text = re.sub(r"```[\s\S]*?```", " ", text)
+        text = re.sub(r"`([^`]+)`", r"\1", text)
+        text = re.sub(r"[*_>#-]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            return None
+        return text[:max_length].rstrip()
 
     @classmethod
     def _from_parts(

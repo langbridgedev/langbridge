@@ -1,0 +1,66 @@
+services:
+  runtime-host:
+    build:
+      context: ../../..
+      dockerfile: docker/Dockerfile
+    container_name: langbridge-runtime-host-sync
+    command:
+      - serve
+      - --config
+      - /example/langbridge_config.yml
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    depends_on:
+      mock-stripe:
+        condition: service_healthy
+    environment:
+      DATASET_FILE_LOCAL_DIR: /example/.cache/datasets
+      FEDERATION_ARTIFACT_DIR: /example/.cache/federation
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/example
+      - runtime_host_sync_state:/example/.langbridge
+      - runtime_host_sync_cache:/example/.cache
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import sys,urllib.request; sys.exit(0 if urllib.request.urlopen("http://127.0.0.1:8000/api/runtime/v1/health").status == 200 else 1)
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  mock-stripe:
+    image: python:3.12-slim-bookworm
+    container_name: langbridge-mock-stripe
+    command:
+      - python
+      - /example/mock_stripe.py
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      MOCK_STRIPE_HOST: 0.0.0.0
+      MOCK_STRIPE_PORT: "12111"
+    ports:
+      - "12111:12111"
+    volumes:
+      - ./:/example:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import sys,urllib.request; sys.exit(0 if urllib.request.urlopen("http://127.0.0.1:12111/health").status == 200 else 1)
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  runtime_host_sync_state:
+  runtime_host_sync_cache:

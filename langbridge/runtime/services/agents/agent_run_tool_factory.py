@@ -616,6 +616,7 @@ class RuntimeToolFactory:
             asset_id=str(semantic_model_entry.id),
             asset_name=semantic_model_entry.name or semantic_model.name or config.name,
             description=semantic_model_entry.description or semantic_model.description or config.description,
+            sql_instructions=semantic_model.sql_instructions,
             tags=list(semantic_model.tags or []),
             execution_mode="federated",
             dialect="postgres",

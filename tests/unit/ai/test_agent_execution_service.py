@@ -57,9 +57,9 @@ class _FakeLLMProvider:
             )
         if "Compose the final Langbridge response" in prompt:
             return (
-                '{"summary":"Revenue is highest in US.","result":{"columns":["region","revenue"],'
-                '"rows":[["US",2200]]},"visualization":null,"research":{},'
-                '"answer":"Revenue is highest in US.","diagnostics":{"mode":"test"}}'
+                '{"answer_markdown":"Revenue is highest in US.",'
+                '"artifact_ids":["primary_result"],'
+                '"diagnostics":{"mode":"test"},"metadata":{}}'
             )
         raise AssertionError(f"Unexpected prompt: {prompt[:120]}")
 
@@ -80,13 +80,9 @@ class _ArtifactMarkdownLLMProvider(_FakeLLMProvider):
         self.prompts.append(prompt)
         if "Compose the final Langbridge response" in prompt:
             return (
-                '{"summary":"Revenue is highest in US.",'
-                '"result":{"columns":["region","revenue"],"rows":[["US",2200]]},'
-                '"visualization":null,"research":{},'
-                '"answer":"Revenue is highest in US.\\n\\n{{artifact:primary_result}}",'
-                '"answer_markdown":"Revenue is highest in US.\\n\\n{{artifact:primary_result}}",'
-                '"artifacts":[{"id":"primary_result"}],'
-                '"diagnostics":{"mode":"test"}}'
+                '{"answer_markdown":"Revenue is highest in US.\\n\\n{{artifact:primary_result}}",'
+                '"artifact_ids":["primary_result"],'
+                '"diagnostics":{"mode":"test"},"metadata":{}}'
             )
         return await super().acomplete(prompt, **kwargs)
 
@@ -122,9 +118,9 @@ class _SqlLLMProvider:
             )
         if "Compose the final Langbridge response" in prompt:
             return (
-                '{"summary":"US revenue is 2200.","result":{"columns":["region","revenue"],'
-                '"rows":[["US",2200]]},"visualization":null,"research":{},'
-                '"answer":"US revenue is 2200.","diagnostics":{"mode":"test"}}'
+                '{"answer_markdown":"US revenue is 2200.",'
+                '"artifact_ids":["primary_result"],'
+                '"diagnostics":{"mode":"test"},"metadata":{}}'
             )
         raise AssertionError(f"Unexpected prompt: {prompt[:120]}")
 
@@ -155,10 +151,9 @@ class _SqlQ4FollowUpLLMProvider(_SqlLLMProvider):
             )
         if "Compose the final Langbridge response" in prompt:
             return (
-                '{"summary":"Q4 2025 order channel answer.",'
-                '"result":{"columns":["order_channel","net_revenue","gross_margin"],'
-                '"rows":[["Online",140000,47000]]},"visualization":null,"research":{},'
-                '"answer":"Q4 2025 order channel answer.","diagnostics":{"mode":"test"}}'
+                '{"answer_markdown":"Q4 2025 order channel answer.",'
+                '"artifact_ids":["primary_result"],'
+                '"diagnostics":{"mode":"test"},"metadata":{}}'
             )
         return await super().acomplete(prompt, **kwargs)
 
@@ -186,10 +181,9 @@ class _SqlExcludeRetailFollowUpLLMProvider(_SqlLLMProvider):
             )
         if "Compose the final Langbridge response" in prompt:
             return (
-                '{"summary":"Retail-excluded order channel answer.",'
-                '"result":{"columns":["order_channel","net_revenue","gross_margin"],'
-                '"rows":[["Online",125000,42000]]},"visualization":null,"research":{},'
-                '"answer":"Retail-excluded order channel answer.","diagnostics":{"mode":"test"}}'
+                '{"answer_markdown":"Retail-excluded order channel answer.",'
+                '"artifact_ids":["primary_result"],'
+                '"diagnostics":{"mode":"test"},"metadata":{}}'
             )
         return await super().acomplete(prompt, **kwargs)
 
@@ -217,10 +211,9 @@ class _SqlExcludeRetailWholesaleFollowUpLLMProvider(_SqlLLMProvider):
             )
         if "Compose the final Langbridge response" in prompt:
             return (
-                '{"summary":"Retail and wholesale excluded answer.",'
-                '"result":{"columns":["order_channel","net_revenue","gross_margin"],'
-                '"rows":[["Online",125000,42000]]},"visualization":null,"research":{},'
-                '"answer":"Retail and wholesale excluded answer.","diagnostics":{"mode":"test"}}'
+                '{"answer_markdown":"Retail and wholesale excluded answer.",'
+                '"artifact_ids":["primary_result"],'
+                '"diagnostics":{"mode":"test"},"metadata":{}}'
             )
         return await super().acomplete(prompt, **kwargs)
 
@@ -244,10 +237,9 @@ class _ClarificationLLMProvider:
             )
         if "Compose the final Langbridge response" in prompt:
             return (
-                '{"summary":"I need one clarification before I can answer.",'
-                '"result":{},"visualization":null,"research":{},'
-                '"answer":"Which time period should I use, and should I rank product categories by total gross margin dollars or by gross margin percentage?",'
-                '"diagnostics":{"mode":"clarification"}}'
+                '{"answer_markdown":"Which time period should I use, and should I rank product categories by total gross margin dollars or by gross margin percentage?",'
+                '"artifact_ids":[],"diagnostics":{"mode":"clarification"},'
+                '"metadata":{}}'
             )
         raise AssertionError(f"Unexpected prompt: {prompt[:120]}")
 
@@ -320,17 +312,14 @@ class _ClarificationThenResearchLLMProvider:
         if "Compose the final Langbridge response" in prompt:
             if "cost per signup and in the last 12 months" in prompt:
                 return (
-                    '{"summary":"Regional cost per signup over the last 12 months is ready.",'
-                    '"result":{"columns":["region","revenue"],"rows":[["US",2200]]},'
-                    '"visualization":null,"research":{},'
-                    '"answer":"Regional cost per signup over the last 12 months is ready.",'
-                    '"diagnostics":{"mode":"research"}}'
+                    '{"answer_markdown":"Regional cost per signup over the last 12 months is ready.",'
+                    '"artifact_ids":["primary_result"],'
+                    '"diagnostics":{"mode":"research"},"metadata":{}}'
                 )
             return (
-                '{"summary":"I need one clarification before I can answer.",'
-                '"result":{},"visualization":null,"research":{},'
-                '"answer":"Which time period should I analyze, and how do you want to define marketing efficiency for regions (for example ROAS, CAC, cost per signup, or revenue per marketing dollar)?",'
-                '"diagnostics":{"mode":"clarification"}}'
+                '{"answer_markdown":"Which time period should I analyze, and how do you want to define marketing efficiency for regions (for example ROAS, CAC, cost per signup, or revenue per marketing dollar)?",'
+                '"artifact_ids":[],"diagnostics":{"mode":"clarification"},'
+                '"metadata":{}}'
             )
         raise AssertionError(f"Unexpected prompt: {prompt[:120]}")
 
@@ -606,7 +595,11 @@ def test_agent_execution_service_runs_new_ai_flow_and_persists_message() -> None
         )
     )
 
-    assert result.response["summary"] == "Revenue is highest in US."
+    assert result.response["answer_markdown"] == "Revenue is highest in US.\n\n{{artifact:primary_result}}"
+    assert "summary" not in result.response
+    assert "answer" not in result.response
+    assert "result" not in result.response
+    assert "visualization" not in result.response
     assert result.ai_run.execution_mode == "direct"
     assert result.ai_run.status == "completed"
     assert result.thread.state == RuntimeThreadState.awaiting_user_input
@@ -629,7 +622,7 @@ def test_agent_execution_service_runs_new_ai_flow_and_persists_message() -> None
     assert result.thread.metadata["continuation_state"]["analysis_state"]["metrics"] == ["revenue"]
     assert result.thread.metadata["continuation_state"]["analysis_state"]["dimensions"] == ["region"]
     assert result.thread.metadata["continuation_state"]["analysis_state"]["dimension_value_samples"] == {"region": ["US"]}
-    assert result.assistant_message.content["continuation_state"]["result"]["rows"] == [["US", 2200]]
+    assert result.assistant_message.content["metadata"]["continuation_state"]["result"]["rows"] == [["US", 2200]]
 
 
 def test_agent_execution_service_persists_answer_markdown_and_artifacts() -> None:
@@ -667,7 +660,7 @@ def test_agent_execution_service_accepts_simple_ai_profile_definition_shape() ->
 
     result = _run(service.execute(job_id=ids.job_id, request=_request(ids)))
 
-    assert result.response["summary"] == "Revenue is highest in US."
+    assert result.response["answer_markdown"] == "Revenue is highest in US.\n\n{{artifact:primary_result}}"
     assert result.response["diagnostics"]["ai_run"]["route"] == "direct:analyst.commerce_agent"
 
 
@@ -695,7 +688,7 @@ def test_agent_execution_service_restores_and_writes_conversation_memory() -> No
 
     result = _run(service.execute(job_id=ids.job_id, request=_request(ids)))
 
-    assert result.response["summary"] == "Revenue is highest in US."
+    assert result.response["answer_markdown"] == "Revenue is highest in US.\n\n{{artifact:primary_result}}"
     assert memory_item.id in memory_store.touched
     assert any(
         "Prefer gross revenue" in prompt and "Decide Langbridge agent route" in prompt
@@ -731,7 +724,7 @@ def test_agent_execution_service_passes_requested_agent_mode_to_meta_flow() -> N
 
     result = _run(service.execute(job_id=ids.job_id, request=request))
 
-    assert result.response["summary"] == "Revenue is highest in US."
+    assert result.response["answer_markdown"] == "Revenue is highest in US.\n\n{{artifact:primary_result}}"
     assert any("Requested agent mode: context_analysis" in prompt for prompt in provider.prompts)
     assert not any("Choose the next execution mode" in prompt for prompt in provider.prompts)
 
@@ -755,12 +748,14 @@ def test_agent_execution_service_surfaces_specific_clarification_question() -> N
         "Which time period should I use, and should I rank product categories by total gross margin "
         "dollars or by gross margin percentage?"
     )
-    assert result.response["summary"] == "I need one clarification before I can answer."
-    assert result.response["answer"] == question
-    assert result.response["result"] is None
+    assert result.response["answer_markdown"] == question
+    assert "summary" not in result.response
+    assert "answer" not in result.response
+    assert "result" not in result.response
     assert result.response["diagnostics"]["clarifying_question"] == question
-    assert result.assistant_message.content["answer"] == question
-    assert result.assistant_message.content["result"] is None
+    assert result.assistant_message.content["answer_markdown"] == question
+    assert "answer" not in result.assistant_message.content
+    assert "result" not in result.assistant_message.content
     assert result.assistant_message.content["diagnostics"]["clarifying_question"] == question
     assert "result" not in result.thread.metadata["continuation_state"]
     assert emitter.events[-1]["event_type"] == "AgentRunCompleted"
@@ -836,8 +831,8 @@ def test_agent_execution_service_clarification_follow_up_still_runs_governed_see
 
     first_result = _run(service.execute(job_id=ids.job_id, request=_request(ids)))
 
-    assert first_result.response["summary"] == "I need one clarification before I can answer."
-    assert first_result.response["result"] is None
+    assert first_result.response["answer_markdown"].startswith("Which time period should I analyze")
+    assert "result" not in first_result.response
     assert "result" not in first_result.thread.metadata["continuation_state"]
 
     follow_up_message = RuntimeThreadMessage(
@@ -861,12 +856,14 @@ def test_agent_execution_service_clarification_follow_up_still_runs_governed_see
     assert second_result.ai_run.plan.steps[0].input["agent_mode"] == "research"
     assert second_result.ai_run.step_results[0]["diagnostics"]["agent_mode"] == "research"
     assert second_result.ai_run.step_results[0]["output"]["evidence"]["governed"]["attempted"] is True
-    assert second_result.response["result"]["rows"] == [["US", 2200]]
+    artifacts_by_id = {artifact["id"]: artifact for artifact in second_result.response["artifacts"]}
+    assert artifacts_by_id["primary_result"]["payload"]["rows"] == [["US", 2200]]
     assert second_result.response["diagnostics"].get("clarifying_question") is None
-    assert second_result.assistant_message.content["continuation_state"]["analysis_state"]["period"]["kind"] == (
+    continuation_state = second_result.assistant_message.content["metadata"]["continuation_state"]
+    assert continuation_state["analysis_state"]["period"]["kind"] == (
         "rolling_window"
     )
-    assert second_result.assistant_message.content["continuation_state"]["analysis_state"]["period"]["label"] == (
+    assert continuation_state["analysis_state"]["period"]["label"] == (
         "last 12 months"
     )
     assert any("You are generating dataset-scope SQL" in prompt for prompt in provider.prompts)
@@ -911,9 +908,11 @@ def test_agent_execution_service_rehydrates_prior_result_for_chart_follow_up() -
 
     assert second_result.ai_run.status == "completed"
     assert second_result.ai_run.step_results[0]["diagnostics"]["agent_mode"] == "context_analysis"
-    assert second_result.response["visualization"]["chart_type"] == "pie"
-    assert second_result.assistant_message.content["continuation_state"]["visualization"]["chart_type"] == "pie"
-    assert second_result.assistant_message.content["continuation_state"]["visualization_state"]["chart_type"] == "pie"
+    chart_artifacts = [artifact for artifact in second_result.response["artifacts"] if artifact["type"] == "chart"]
+    assert chart_artifacts[0]["payload"]["chart_type"] == "pie"
+    continuation_state = second_result.assistant_message.content["metadata"]["continuation_state"]
+    assert continuation_state["visualization"]["chart_type"] == "pie"
+    assert continuation_state["visualization_state"]["chart_type"] == "pie"
     assert second_result.response["diagnostics"]["ai_run"]["status"] == "completed"
     assert second_result.response["diagnostics"].get("clarifying_question") is None
     assert any(
@@ -1018,11 +1017,12 @@ def test_agent_execution_service_rewrites_q4_follow_up_from_continuation_state()
     assert result.ai_run.plan.steps[0].question == (
         "Which order channels drove the highest net revenue and gross margin in Q4 2025?"
     )
-    assert result.response["answer"] == "Q4 2025 order channel answer."
-    assert result.assistant_message.content["continuation_state"]["resolved_question"] == (
+    assert result.response["answer_markdown"] == "Q4 2025 order channel answer.\n\n{{artifact:primary_result}}"
+    continuation_state = result.assistant_message.content["metadata"]["continuation_state"]
+    assert continuation_state["resolved_question"] == (
         "Which order channels drove the highest net revenue and gross margin in Q4 2025?"
     )
-    assert result.assistant_message.content["continuation_state"]["analysis_state"]["period"]["label"] == "Q4 2025"
+    assert continuation_state["analysis_state"]["period"]["label"] == "Q4 2025"
     assert all(
         "Decide Langbridge agent route" not in prompt or "Make that Q4" not in prompt
         for prompt in provider.prompts
@@ -1127,18 +1127,19 @@ def test_agent_execution_service_rewrites_exclude_filter_follow_up_from_continua
         "operator": "exclude",
         "value": "Retail",
     }
-    assert result.assistant_message.content["continuation_state"]["resolved_question"] == (
+    continuation_state = result.assistant_message.content["metadata"]["continuation_state"]
+    assert continuation_state["resolved_question"] == (
         "Which order channels drove the highest net revenue and gross margin in Q3 2025. "
         "Exclude Retail from order channel."
     )
-    assert result.assistant_message.content["continuation_state"]["analysis_state"]["active_filters"] == [
+    assert continuation_state["analysis_state"]["active_filters"] == [
         {"field": "order channel", "operator": "exclude", "values": ["Retail"]},
     ]
     assert result.ai_run.plan.steps[0].question == (
         "Which order channels drove the highest net revenue and gross margin in Q3 2025. "
         "Exclude Retail from order channel."
     )
-    assert result.response["answer"] == "Retail-excluded order channel answer."
+    assert result.response["answer_markdown"] == "Retail-excluded order channel answer.\n\n{{artifact:primary_result}}"
     assert all(
         "Decide Langbridge agent route" not in prompt or "Exclude retail" not in prompt
         for prompt in provider.prompts
@@ -1244,10 +1245,11 @@ def test_agent_execution_service_rewrites_multi_value_filter_follow_up_from_cont
     assert result.ai_run.plan.steps[0].input["active_filters"] == [
         {"field": "order channel", "operator": "exclude", "values": ["Retail", "Wholesale"]},
     ]
-    assert result.assistant_message.content["continuation_state"]["analysis_state"]["active_filters"] == [
+    continuation_state = result.assistant_message.content["metadata"]["continuation_state"]
+    assert continuation_state["analysis_state"]["active_filters"] == [
         {"field": "order channel", "operator": "exclude", "values": ["Retail", "Wholesale"]},
     ]
-    assert result.assistant_message.content["continuation_state"]["resolved_question"] == (
+    assert continuation_state["resolved_question"] == (
         "Which order channels drove the highest net revenue and gross margin in Q3 2025. "
         "Exclude Retail and Wholesale from order channel."
     )
@@ -1255,7 +1257,7 @@ def test_agent_execution_service_rewrites_multi_value_filter_follow_up_from_cont
         "Which order channels drove the highest net revenue and gross margin in Q3 2025. "
         "Exclude Retail and Wholesale from order channel."
     )
-    assert result.response["answer"] == "Retail and wholesale excluded answer."
+    assert result.response["answer_markdown"] == "Retail and wholesale excluded answer.\n\n{{artifact:primary_result}}"
     assert all(
         "Decide Langbridge agent route" not in prompt or "Exclude retail and wholesale" not in prompt
         for prompt in provider.prompts
@@ -1342,7 +1344,7 @@ def test_agent_execution_service_auto_builds_sql_tool_from_runtime_catalog() -> 
 
     result = _run(service.execute(job_id=ids.job_id, request=_request(ids), event_emitter=emitter))
 
-    assert result.response["summary"] == "US revenue is 2200."
+    assert result.response["answer_markdown"] == "US revenue is 2200.\n\n{{artifact:primary_result}}"
     assert result.ai_run.step_results[0]["diagnostics"]["agent_mode"] == "sql"
     assert federated_query_tool.calls[0]["query"] == "SELECT orders.region, orders.revenue FROM orders LIMIT 1000"
     event_types = [event["event_type"] for event in emitter.events]

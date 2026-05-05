@@ -1,0 +1,27 @@
+services:
+  runtime-host:
+    build:
+      context: ../../..
+      dockerfile: docker/Dockerfile
+    container_name: langbridge-runtime-host
+    command:
+      - serve
+      - --config
+      - /examples/deployment/runtime_host/langbridge_config.yml
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --features
+      - ui
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../:/examples
+      - runtime_host_state:/examples/deployment/runtime_host/.langbridge
+    restart: unless-stopped
+
+volumes:
+  runtime_host_state:

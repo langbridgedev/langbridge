@@ -40,20 +40,18 @@ class _GoldenLLMProvider:
             if "support load" in prompt:
                 assert "primary_result" in prompt
                 return (
-                    '{"summary":"Higher support load does not clearly predict weaker marketing efficiency.",'
-                    '"result":{},"visualization":null,"research":{},'
-                    '"answer_markdown":"## Higher support load does not clearly predict weaker marketing efficiency\\nDACH has the highest support load but the strongest efficiency, while ANZ is the clearest weak-efficiency region.\\n\\n{{artifact:primary_result}}\\n\\nThe caveat is that marketing spend is not region-native, so the efficiency comparison depends on attribution.",'
-                    '"artifacts":[{"id":"primary_result"}],'
-                    '"diagnostics":{"mode":"golden"}}'
+                    '{"answer_markdown":"## Higher support load does not clearly predict weaker marketing efficiency\\nDACH has the highest support load but the strongest efficiency, while ANZ is the clearest weak-efficiency region.\\n\\n{{artifact:primary_result}}\\n\\nThe caveat is that marketing spend is not region-native, so the efficiency comparison depends on attribution.",'
+                    '"artifact_ids":["primary_result"],'
+                    '"diagnostics":{"mode":"golden"},'
+                    '"metadata":{}}'
                 )
             assert "primary_result" in prompt
             assert "primary_sql" in prompt
             return (
-                '{"summary":"Paid Social led Q3 2025 channel performance.",'
-                '"result":{},"visualization":null,"research":{},'
-                '"answer_markdown":"## Paid Social led Q3 2025 channel performance\\nPaid Social drove the highest net revenue and gross margin among returned channels.\\n\\n{{artifact:primary_result}}\\n\\nThe generated SQL is available for audit.\\n\\n{{artifact:primary_sql}}",'
-                '"artifacts":[{"id":"primary_result"},{"id":"primary_sql"}],'
-                '"diagnostics":{"mode":"golden"}}'
+                '{"answer_markdown":"## Paid Social led Q3 2025 channel performance\\nPaid Social drove the highest net revenue and gross margin among returned channels.\\n\\n{{artifact:primary_result}}\\n\\nThe generated SQL is available for audit.\\n\\n{{artifact:primary_sql}}",'
+                '"artifact_ids":["primary_result","primary_sql"],'
+                '"diagnostics":{"mode":"golden"},'
+                '"metadata":{}}'
             )
         if "Review the final Langbridge answer package" in prompt:
             return (

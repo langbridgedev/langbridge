@@ -698,9 +698,29 @@ export function ConnectorsPage() {
 
       const syncResponses = [];
       for (const datasetRef of selectedDatasetRefs) {
+        setSyncResult({
+          summary: `Dataset sync queued for ${datasetRef}.`,
+          resources: [],
+          jobs: syncResponses.map((item) => item.job_id).filter(Boolean),
+        });
         const payload = await runDatasetSync(datasetRef, {
           sync_mode: syncMode,
           force_full_refresh: forceFullRefresh,
+        }, {
+          onQueued: (queued) => {
+            setSyncResult({
+              summary: queued?.summary || `Dataset sync queued for ${datasetRef}.`,
+              resources: [],
+              jobs: [...syncResponses.map((item) => item.job_id).filter(Boolean), queued?.job_id].filter(Boolean),
+            });
+          },
+          onEvent: (event) => {
+            setSyncResult({
+              summary: event?.message || `Dataset sync running for ${datasetRef}.`,
+              resources: [],
+              jobs: syncResponses.map((item) => item.job_id).filter(Boolean),
+            });
+          },
         });
         syncResponses.push(payload);
       }
@@ -709,6 +729,7 @@ export function ConnectorsPage() {
           syncResponses.length === 1
             ? syncResponses[0]?.summary || "Dataset sync completed"
             : `Dataset sync completed for ${syncResponses.length} datasets.`,
+        jobs: syncResponses.map((item) => item?.job_id).filter(Boolean),
         resources: syncResponses.flatMap((item) =>
           Array.isArray(item?.resources) ? item.resources : [],
         ),
@@ -1411,14 +1432,17 @@ export function ConnectorsPage() {
                       </form>
                       {syncResult ? (
                         <div className="callout success">
-                          <strong>{syncResult.summary || "Sync completed"}</strong>
+                          <strong>{syncing ? "Dataset sync running" : syncResult.summary || "Sync completed"}</strong>
                           <span>
                             {Array.isArray(syncResult.resources)
                               ? syncResult.resources
                                   .map((item) => `${item.resource_name}: ${item.records_synced || 0} records`)
-                                  .join(" | ")
+                                  .join(" | ") || "Waiting for runtime job completion."
                               : "The connector reported a completed sync."}
                           </span>
+                          {Array.isArray(syncResult.jobs) && syncResult.jobs.length > 0 ? (
+                            <span>Jobs: {syncResult.jobs.join(", ")}</span>
+                          ) : null}
                         </div>
                       ) : null}
                     </Panel>

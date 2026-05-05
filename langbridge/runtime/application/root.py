@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from .agents import AgentApplication
 from .connectors import ConnectorApplication
 from .datasets import DatasetApplication
-from .runs import RunApplication
+from .jobs import JobApplication
 from .semantic import SemanticApplication
 from .sql import SqlApplication
 from .threads import ThreadApplication
@@ -19,8 +19,8 @@ class ConfiguredRuntimeApplications:
     datasets: DatasetApplication
     semantic: SemanticApplication
     sql: SqlApplication
+    jobs: JobApplication
     agents: AgentApplication
-    runs: RunApplication
     threads: ThreadApplication
     connectors: ConnectorApplication
 
@@ -30,8 +30,8 @@ def build_runtime_applications(host: "ConfiguredLocalRuntimeHost") -> Configured
         datasets=DatasetApplication(host),
         semantic=SemanticApplication(host),
         sql=SqlApplication(host),
+        jobs=JobApplication(host),
         agents=AgentApplication(host),
-        runs=RunApplication(host),
         threads=ThreadApplication(host),
         connectors=ConnectorApplication(host),
     )

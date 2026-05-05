@@ -1051,9 +1051,21 @@ export function DatasetsPage() {
     setSyncActionSuccess("");
     setSyncResult(null);
     try {
+      setSyncActionSuccess("Dataset sync queued.");
       const payload = await runDatasetSync(String(target.id || target.name), {
         sync_mode: forceFullRefresh ? "FULL_REFRESH" : syncMode,
         force_full_refresh: forceFullRefresh,
+      }, {
+        onQueued: (queued) => {
+          setSyncResult(queued);
+          setSyncActionSuccess(queued?.summary || "Dataset sync queued.");
+        },
+        onEvent: (event) => {
+          const message = event?.message || event?.stage || "";
+          if (message) {
+            setSyncActionSuccess(message);
+          }
+        },
       });
       setSyncResult(payload);
       setSyncActionSuccess(payload?.summary || "Dataset sync completed.");
@@ -1216,8 +1228,11 @@ export function DatasetsPage() {
           ) : null}
           {syncActionSuccess ? (
             <div className="callout success">
-              <strong>Dataset sync completed</strong>
+              <strong>{syncSubmitting ? "Dataset sync running" : "Dataset sync completed"}</strong>
               <span>{syncActionSuccess}</span>
+              {syncResult?.job_id ? (
+                <span>Job: {syncResult.job_id}</span>
+              ) : null}
               {Array.isArray(syncResult?.resources) && syncResult.resources.length > 0 ? (
                 <span>
                   {syncResult.resources

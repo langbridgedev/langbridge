@@ -4,19 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langbridge"
-version = "0.1.0"
-description = "Langbridge orchestration platform"
+version = "0.1.0a1"
+description = "Runtime-first agentic analytics platform"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "alembic==1.14.1",
   "fastapi[standard]==0.117.1",
   "uvicorn[standard]==0.32.0",
-  "opentelemetry-api==1.39.1",
-  "opentelemetry-sdk==1.39.1",
-  "opentelemetry-exporter-otlp==1.39.1",
-  "opentelemetry-instrumentation-fastapi==0.60b1",
-  "opentelemetry-instrumentation-logging==0.60b1",
   "apscheduler==3.11.2",
   "sqlalchemy==2.0.43",
   "aiosqlite==0.20.0",

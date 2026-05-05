@@ -1,5 +1,4 @@
 """Semantic final review scaffold for Langbridge AI."""
-import json
 import re
 from enum import Enum
 from typing import Any
@@ -17,6 +16,7 @@ from langbridge.ai.base import (
     BaseAgent,
 )
 from langbridge.ai.llm.base import LLMProvider
+from langbridge.ai.llm.structured import acomplete_structured
 from langbridge.ai.orchestration.final_review_prompts import build_final_review_prompt
 
 
@@ -41,6 +41,15 @@ class FinalReviewReasonCode(str, Enum):
 class FinalReviewDecision(BaseModel):
     action: FinalReviewAction
     reason_code: FinalReviewReasonCode
+    rationale: str
+    issues: list[str] = Field(default_factory=list)
+    updated_context: dict[str, Any] = Field(default_factory=dict)
+    clarification_question: str | None = None
+
+
+class FinalReviewLLMOutput(BaseModel):
+    action: FinalReviewAction
+    reason_code: FinalReviewReasonCode | None = None
     rationale: str
     issues: list[str] = Field(default_factory=list)
     updated_context: dict[str, Any] = Field(default_factory=dict)
@@ -129,7 +138,15 @@ class FinalReviewAgent(BaseAgent):
             answer_contract=answer_contract,
             reason_codes=[item.value for item in FinalReviewReasonCode],
         )
-        payload = self._parse_json_object(await self._llm.acomplete(prompt, temperature=0.0, max_tokens=700))
+        payload = (
+            await acomplete_structured(
+                self._llm,
+                prompt,
+                response_model=FinalReviewLLMOutput,
+                temperature=0.0,
+                max_tokens=700,
+            )
+        ).model_dump(mode="json")
         self._ensure_reason_code(payload)
         return FinalReviewDecision.model_validate(payload)
 
@@ -262,17 +279,11 @@ class FinalReviewAgent(BaseAgent):
                 return [item for item in candidate if isinstance(item, dict)]
         return None
 
-    @staticmethod
-    def _parse_json_object(raw: str) -> dict[str, Any]:
-        text = raw.strip()
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end < start:
-            raise ValueError("Final review LLM response did not contain a JSON object.")
-        parsed = json.loads(text[start : end + 1])
-        if not isinstance(parsed, dict):
-            raise ValueError("Final review LLM response JSON must be an object.")
-        return parsed
 
-
-__all__ = ["FinalReviewAction", "FinalReviewAgent", "FinalReviewDecision", "FinalReviewReasonCode"]
+__all__ = [
+    "FinalReviewAction",
+    "FinalReviewAgent",
+    "FinalReviewDecision",
+    "FinalReviewLLMOutput",
+    "FinalReviewReasonCode",
+]

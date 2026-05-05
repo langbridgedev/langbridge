@@ -1,6 +1,10 @@
 import asyncio
 
-from langbridge.ai.agents.presentation import PresentationAgent
+import pytest
+from pydantic import ValidationError
+
+from langbridge.ai.agents.presentation import PresentationAgent, PresentationGuidance
+from langbridge.ai.agents.presentation.contracts import PresentationLLMOutput
 from langbridge.ai.tools.charting import ChartingTool
 
 
@@ -8,21 +12,39 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def test_presentation_llm_contract_rejects_legacy_top_level_fields() -> None:
+    with pytest.raises(ValidationError):
+        PresentationLLMOutput.model_validate(
+            {
+                "summary": "legacy summary",
+                "answer": "legacy answer",
+                "result": {"columns": [], "rows": []},
+            }
+        )
+
+
 class _PromptCheckingLLMProvider:
     async def acomplete(self, prompt: str, **kwargs):
         assert "Compose the final Langbridge response" in prompt
+        assert "Return STRICT JSON only with keys: answer_markdown, artifact_ids, diagnostics, metadata." in prompt
         assert "Decide the answer depth from the question and evidence" in prompt
-        assert "Use a detailed answer when the user asks for explanation, evidence, comparisons, drivers, caveats, or source-backed reasoning." in prompt
+        assert (
+            "Use a detailed answer when the user asks for explanation, evidence, comparisons, drivers, caveats, or source-backed reasoning."
+            in prompt
+        )
         assert "If a structured visualization recommendation is provided, honor it when it is compatible with the verified data" in prompt
         assert "answer_markdown" in prompt
+        assert "artifact_ids" in prompt
         assert "Available artifacts:" in prompt
         assert '"role": "primary_result"' in prompt
         assert '"type": "diagnostics"' in prompt
         assert '"analysis": "Detailed governed answer with evidence."' in prompt
         assert kwargs["max_tokens"] == 2400
         return (
-            '{"summary":"Detailed answer ready.",'
-            '"result":{},"visualization":null,"research":{},"diagnostics":{"mode":"final"}}'
+            '{"answer_markdown":"Detailed governed answer with evidence.\\n\\n{{artifact:primary_result}}",'
+            '"artifact_ids":["primary_result"],'
+            '"diagnostics":{"mode":"final"},'
+            '"metadata":{"confidence":"high"}}'
         )
 
 
@@ -30,9 +52,8 @@ class _ClarificationPresentationLLMProvider:
     async def acomplete(self, prompt: str, **kwargs):
         assert "Compose the final Langbridge response" in prompt
         return (
-            '{"summary":"I need one clarification before I can answer.",'
-            '"result":{},"visualization":null,"research":{},'
-            '"answer":"Which time period should I use?",'
+            '{"answer_markdown":"Which time period should I use?",'
+            '"artifact_ids":[],'
             '"diagnostics":{"mode":"clarification"}}'
         )
 
@@ -49,14 +70,56 @@ class _AutoVisualPresentationLLMProvider:
             )
         assert "Compose the final Langbridge response" in prompt
         return (
-            '{"summary":"Higher support load does not clearly map to worse CAC.",'
-            '"result":{},"visualization":null,"research":{},'
-            '"answer":"Higher support load does not clearly map to worse CAC; the regional comparison is easier to read in the attached visual.",'
+            '{"answer_markdown":"Higher support load does not clearly map to worse CAC; the regional comparison is easier to read in the attached visual.",'
+            '"artifact_ids":["primary_result"],'
             '"diagnostics":{"mode":"final"}}'
         )
 
 
-def test_presentation_falls_back_to_detailed_analysis_when_answer_missing() -> None:
+def test_presentation_guidance_derives_gbp_formatting_from_profile_prompt() -> None:
+    guidance = PresentationGuidance.from_prompt(
+        profile_name="commerce_analyst",
+        agent_name="analyst.commerce_analyst",
+        prompt="Format all numbers with commas and no decimals; currency (which is GBP).",
+    )
+
+    assert guidance is not None
+    assert guidance.formatting["currency"] == {"code": "GBP", "symbol": "£"}
+    assert guidance.formatting["number"]["use_grouping"] is True
+    assert guidance.formatting["number"]["maximum_fraction_digits"] == 0
+
+
+def test_presentation_guidance_recognizes_common_currency_markers_safely() -> None:
+    cases = [
+        ("Use CAD for all revenue figures.", "CAD", "C$"),
+        ("Format revenue in Indian rupees.", "INR", "₹"),
+        ("Show spend using Swedish kronor.", "SEK", "kr"),
+        ("Use Brazilian real for commercial metrics.", "BRL", "R$"),
+    ]
+
+    for prompt, expected_code, expected_symbol in cases:
+        guidance = PresentationGuidance.from_prompt(
+            profile_name="analyst",
+            agent_name="analyst",
+            prompt=prompt,
+        )
+        assert guidance is not None
+        assert guidance.formatting["currency"] == {
+            "code": expected_code,
+            "symbol": expected_symbol,
+        }
+
+    guidance = PresentationGuidance.from_prompt(
+        profile_name="analyst",
+        agent_name="analyst",
+        prompt="Use regional marketing language and strong commercial framing.",
+    )
+
+    assert guidance is not None
+    assert "currency" not in guidance.formatting
+
+
+def test_presentation_returns_markdown_first_contract() -> None:
     agent = PresentationAgent(llm_provider=_PromptCheckingLLMProvider())
 
     response = _run(
@@ -85,9 +148,15 @@ def test_presentation_falls_back_to_detailed_analysis_when_answer_missing() -> N
         )
     )
 
-    assert response["summary"] == "Detailed answer ready."
-    assert response["answer"] == "Detailed governed answer with evidence."
-    assert response["result"]["rows"] == [["2026-01-01", 12]]
+    assert set(response) == {"answer_markdown", "artifacts", "diagnostics", "metadata"}
+    assert response["answer_markdown"].startswith("Detailed governed answer")
+    assert response["metadata"]["contract_version"] == "markdown_artifacts.v1"
+    assert response["metadata"]["confidence"] == "high"
+    artifact = response["artifacts"][0]
+    assert artifact["id"] == "primary_result"
+    assert artifact["payload"]["rows"] == [["2026-01-01", 12]]
+    assert "placeholder" not in artifact
+    assert "source" not in artifact
 
 
 def test_presentation_does_not_emit_empty_result_for_clarification_only_response() -> None:
@@ -96,13 +165,20 @@ def test_presentation_does_not_emit_empty_result_for_clarification_only_response
     response = _run(
         agent.compose(
             question="Show me revenue by region",
-            context={"step_results": []},
+            context={
+                "clarification_question": "Which time period should I use?",
+                "step_results": [],
+            },
+            mode="clarification",
         )
     )
 
-    assert response["summary"] == "I need one clarification before I can answer."
-    assert response["answer"] == "Which time period should I use?"
-    assert response["result"] is None
+    assert response["answer_markdown"] == "Which time period should I use?"
+    assert response["artifacts"] == []
+    assert response["diagnostics"]["clarifying_question"] == "Which time period should I use?"
+    assert "summary" not in response
+    assert "answer" not in response
+    assert "result" not in response
 
 
 def test_presentation_auto_adds_visual_for_chartable_relationship_question() -> None:
@@ -136,14 +212,16 @@ def test_presentation_auto_adds_visual_for_chartable_relationship_question() -> 
                             },
                         },
                     }
-                ]
+                ],
             },
         )
     )
 
-    assert response["summary"] == "Higher support load does not clearly map to worse CAC."
-    assert response["answer"].startswith("Higher support load does not clearly map to worse CAC")
-    assert response["visualization"]["chart_type"] == "scatter"
+    assert "{{artifact:primary_visualization}}" in response["answer_markdown"]
+    artifacts_by_id = {artifact["id"]: artifact for artifact in response["artifacts"]}
+    assert artifacts_by_id["primary_visualization"]["payload"]["chart_type"] == "scatter"
+    assert artifacts_by_id["primary_result"]["payload"]["rows"][0][0] == "ANZ"
+    assert "visualization" not in response
 
 
 def test_presentation_uses_structured_visualization_recommendation_before_charting_tool() -> None:
@@ -151,13 +229,15 @@ def test_presentation_uses_structured_visualization_recommendation_before_charti
         async def acomplete(self, prompt: str, **kwargs):
             assert "Visualization recommendation:" in prompt
             return (
-                '{"summary":"The verified result is best shown as a bar chart.","result":{},'
-                '"visualization":null,"research":{},'
-                '"answer":"The verified result is best shown as a bar chart.",'
+                '{"answer_markdown":"The verified result is best shown as a bar chart.\\n\\n{{artifact:primary_visualization}}",'
+                '"artifact_ids":["primary_visualization"],'
                 '"diagnostics":{"mode":"final"}}'
             )
 
-    agent = PresentationAgent(llm_provider=_RecommendationOnlyLLMProvider(), charting_tool=ChartingTool(llm_provider=_AutoVisualPresentationLLMProvider()))
+    agent = PresentationAgent(
+        llm_provider=_RecommendationOnlyLLMProvider(),
+        charting_tool=ChartingTool(llm_provider=_AutoVisualPresentationLLMProvider()),
+    )
 
     response = _run(
         agent.compose(
@@ -186,9 +266,10 @@ def test_presentation_uses_structured_visualization_recommendation_before_charti
         )
     )
 
-    assert response["visualization"]["chart_type"] == "bar"
-    assert response["visualization"]["x"] == "month"
-    assert response["visualization"]["y"] == "orders"
+    chart_payload = {artifact["id"]: artifact for artifact in response["artifacts"]}["primary_visualization"]["payload"]
+    assert chart_payload["chart_type"] == "bar"
+    assert chart_payload["x"] == "month"
+    assert chart_payload["y"] == "orders"
 
 
 def test_charting_preserves_multiple_requested_measures() -> None:
@@ -254,11 +335,10 @@ def test_presentation_inlines_visualization_artifact_for_chart_follow_up() -> No
     class _ChartFollowUpLLMProvider:
         async def acomplete(self, prompt: str, **kwargs):
             assert "primary_visualization" in prompt
-            assert "result_table" in prompt
+            assert "primary_result" in prompt
             return (
-                '{"summary":"Pie chart ready.","result":{},"visualization":null,"research":{},'
-                '"answer_markdown":"Pie chart view using net revenue.\\n\\nHere is the verified result table.\\n\\n{{artifact:result_table}}",'
-                '"artifacts":[{"id":"result_table"}],'
+                '{"answer_markdown":"Pie chart view using net revenue.\\n\\nHere is the verified result table.\\n\\n{{artifact:primary_result}}",'
+                '"artifact_ids":["primary_result"],'
                 '"diagnostics":{"mode":"final"}}'
             )
 
@@ -304,13 +384,12 @@ def test_presentation_inlines_visualization_artifact_for_chart_follow_up() -> No
         )
     )
 
-    assert response["visualization"]["chart_type"] == "pie"
-    assert response["visualization"]["y"] == "monthly_net_revenue"
     assert "{{artifact:primary_visualization}}" in response["answer_markdown"]
-    assert response["answer_markdown"].index("{{artifact:primary_visualization}}") < response["answer_markdown"].index(
-        "{{artifact:result_table}}"
-    )
-    assert [artifact["id"] for artifact in response["artifacts"]] == ["primary_visualization", "result_table"]
+    assert "{{artifact:primary_result}}" in response["answer_markdown"]
+    artifacts_by_id = {artifact["id"]: artifact for artifact in response["artifacts"]}
+    assert artifacts_by_id["primary_visualization"]["payload"]["chart_type"] == "pie"
+    assert artifacts_by_id["primary_visualization"]["payload"]["y"] == "monthly_net_revenue"
+    assert artifacts_by_id["primary_visualization"]["data_ref"]["artifact_id"] == "primary_result"
 
 
 def test_presentation_returns_typed_chart_table_sql_and_diagnostic_artifacts() -> None:
@@ -318,16 +397,13 @@ def test_presentation_returns_typed_chart_table_sql_and_diagnostic_artifacts() -
         async def acomplete(self, prompt: str, **kwargs):
             assert "Available artifacts:" in prompt
             assert "primary_visualization" in prompt
-            assert "result_table" in prompt
+            assert "primary_result" in prompt
             assert "generated_sql" in prompt
             assert "execution_diagnostics" in prompt
             assert "{{artifact:artifact_id}}" in prompt
             return (
-                '{"summary":"Paid Social led Q3 channel performance.",'
-                '"result":{},"visualization":null,"research":{},'
-                '"answer":"## Paid Social led Q3 channel performance\\nPaid Social had the highest net revenue and gross margin.\\n\\n{{artifact:primary_visualization}}\\n\\nThe underlying result is included below.\\n\\n{{artifact:result_table}}\\n\\nThe generated SQL is available for audit.\\n\\n{{artifact:generated_sql}}\\n\\nExecution diagnostics are attached for troubleshooting.\\n\\n{{artifact:execution_diagnostics}}",'
-                '"answer_markdown":"## Paid Social led Q3 channel performance\\nPaid Social had the highest net revenue and gross margin.\\n\\n{{artifact:primary_visualization}}\\n\\nThe underlying result is included below.\\n\\n{{artifact:result_table}}\\n\\nThe generated SQL is available for audit.\\n\\n{{artifact:generated_sql}}\\n\\nExecution diagnostics are attached for troubleshooting.\\n\\n{{artifact:execution_diagnostics}}",'
-                '"artifacts":[{"id":"primary_visualization"},{"id":"result_table"},{"id":"generated_sql"},{"id":"execution_diagnostics"}],'
+                '{"answer_markdown":"## Paid Social led Q3 channel performance\\nPaid Social had the highest net revenue and gross margin.\\n\\n{{artifact:primary_visualization}}\\n\\nThe underlying result is included below.\\n\\n{{artifact:primary_result}}\\n\\nThe generated SQL is available for audit.\\n\\n{{artifact:generated_sql}}\\n\\nExecution diagnostics are attached for troubleshooting.\\n\\n{{artifact:execution_diagnostics}}",'
+                '"artifact_ids":["primary_visualization","primary_result","generated_sql","execution_diagnostics"],'
                 '"diagnostics":{"mode":"final"}}'
             )
 
@@ -401,15 +477,14 @@ def test_presentation_returns_typed_chart_table_sql_and_diagnostic_artifacts() -
         )
     )
 
-    assert response["summary"] == "Paid Social led Q3 channel performance."
+    assert set(response) == {"answer_markdown", "artifacts", "diagnostics", "metadata"}
     assert "{{artifact:primary_visualization}}" in response["answer_markdown"]
-    assert "{{artifact:result_table}}" in response["answer_markdown"]
+    assert "{{artifact:primary_result}}" in response["answer_markdown"]
     assert "{{artifact:generated_sql}}" in response["answer_markdown"]
     assert "{{artifact:execution_diagnostics}}" in response["answer_markdown"]
-    assert response["answer"] == response["answer_markdown"]
     assert [artifact["id"] for artifact in response["artifacts"]] == [
         "primary_visualization",
-        "result_table",
+        "primary_result",
         "generated_sql",
         "execution_diagnostics",
     ]
@@ -417,10 +492,10 @@ def test_presentation_returns_typed_chart_table_sql_and_diagnostic_artifacts() -
     assert artifacts_by_id["primary_visualization"]["type"] == "chart"
     assert artifacts_by_id["primary_visualization"]["role"] == "primary_result"
     assert artifacts_by_id["primary_visualization"]["payload"]["chart_type"] == "bar"
-    assert artifacts_by_id["primary_visualization"]["data_ref"]["artifact_id"] == "result_table"
-    assert artifacts_by_id["result_table"]["type"] == "table"
-    assert artifacts_by_id["result_table"]["role"] == "supporting_result"
-    assert artifacts_by_id["result_table"]["payload"]["rows"][0][0] == "Paid Social"
+    assert artifacts_by_id["primary_visualization"]["data_ref"]["artifact_id"] == "primary_result"
+    assert artifacts_by_id["primary_result"]["type"] == "table"
+    assert artifacts_by_id["primary_result"]["role"] == "supporting_result"
+    assert artifacts_by_id["primary_result"]["payload"]["rows"][0][0] == "Paid Social"
     assert artifacts_by_id["generated_sql"]["type"] == "sql"
     assert artifacts_by_id["generated_sql"]["role"] == "supporting_result"
     assert "monthly_net_revenue" in artifacts_by_id["generated_sql"]["payload"]["sql_executable"]
@@ -428,8 +503,65 @@ def test_presentation_returns_typed_chart_table_sql_and_diagnostic_artifacts() -
     assert artifacts_by_id["execution_diagnostics"]["type"] == "diagnostics"
     assert artifacts_by_id["execution_diagnostics"]["role"] == "diagnostic"
     assert artifacts_by_id["execution_diagnostics"]["payload"]["agent_diagnostics"]["agent_mode"] == "sql"
-    assert response["visualization"]["chart_type"] == "bar"
-    assert response["result"]["rows"][0][0] == "Paid Social"
+    for artifact in response["artifacts"]:
+        assert "placeholder" not in artifact
+        assert "source" not in artifact
+
+
+def test_presentation_applies_profile_guidance_to_prompt_and_artifacts() -> None:
+    class _GuidanceAwareLLMProvider:
+        async def acomplete(self, prompt: str, **kwargs):
+            assert "Profile presentation guidance:" in prompt
+            assert "Please add the currency symbol" in prompt
+            assert '"symbol": "Â£"' in prompt
+            assert '"monthly_net_revenue"' in prompt
+            return (
+                '{"answer_markdown":"Paid Social led Q3 channel performance.\\n\\n{{artifact:primary_result}}",'
+                '"artifact_ids":["primary_result"],'
+                '"diagnostics":{"mode":"final"}}'
+            )
+
+    agent = PresentationAgent(llm_provider=_GuidanceAwareLLMProvider())
+
+    response = _run(
+        agent.compose(
+            question="Which order channels drove the highest net revenue and gross margin?",
+            context={
+                "presentation_guidance": {
+                    "profile_name": "growth_analyst",
+                    "agent_name": "analyst.growth_analyst",
+                    "instructions": "Please add the currency symbol (which is Â£) to all revenue and spend figures.",
+                    "formatting": {
+                        "currency": {"code": "GBP", "symbol": "Â£"},
+                        "number": {"use_grouping": True, "maximum_fraction_digits": 2},
+                    },
+                },
+                "step_results": [
+                    {
+                        "agent_name": "analyst.growth_analyst",
+                        "output": {
+                            "analysis": "Paid Social led both requested metrics.",
+                            "result": {
+                                "columns": [
+                                    "order_channel",
+                                    "monthly_net_revenue",
+                                    "monthly_gross_margin",
+                                ],
+                                "rows": [["Paid Social", 9139.54, 4912.33]],
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    table_artifact = response["artifacts"][0]
+    formatting = table_artifact["payload"]["formatting"]["columns"]
+    assert formatting["monthly_net_revenue"]["kind"] == "currency"
+    assert formatting["monthly_net_revenue"]["symbol"] == "Â£"
+    assert formatting["monthly_gross_margin"]["symbol"] == "Â£"
+    assert "formatting" not in table_artifact
 
 
 def test_presentation_can_arrange_analyst_owned_artifacts() -> None:
@@ -439,10 +571,8 @@ def test_presentation_can_arrange_analyst_owned_artifacts() -> None:
             assert "primary_sql" in prompt
             assert "governed_attempts" in prompt
             return (
-                '{"summary":"Regional efficiency evidence arranged.",'
-                '"result":{},"visualization":null,"research":{},'
-                '"answer_markdown":"## Regional efficiency evidence\\nThe verified result is below.\\n\\n{{artifact:primary_result}}\\n\\nThe generated SQL and attempts are available for audit.\\n\\n{{artifact:primary_sql}}\\n\\n{{artifact:governed_attempts}}",'
-                '"artifacts":[{"id":"primary_result"},{"id":"primary_sql"},{"id":"governed_attempts"}],'
+                '{"answer_markdown":"## Regional efficiency evidence\\nThe verified result is below.\\n\\n{{artifact:primary_result}}\\n\\nThe generated SQL and attempts are available for audit.\\n\\n{{artifact:primary_sql}}\\n\\n{{artifact:governed_attempts}}",'
+                '"artifact_ids":["primary_result","primary_sql","governed_attempts"],'
                 '"diagnostics":{"mode":"final"}}'
             )
 
@@ -511,29 +641,28 @@ def test_presentation_can_arrange_analyst_owned_artifacts() -> None:
         )
     )
 
-    assert response["answer"] == response["answer_markdown"]
     assert [artifact["id"] for artifact in response["artifacts"]] == [
         "primary_result",
         "primary_sql",
         "governed_attempts",
     ]
     artifacts_by_id = {artifact["id"]: artifact for artifact in response["artifacts"]}
-    assert response["result"]["rows"] == [["ANZ", 1.12, 82.4]]
     assert artifacts_by_id["primary_result"]["payload"]["rows"] == [["ANZ", 1.12, 82.4]]
     assert "support_load" in artifacts_by_id["primary_sql"]["payload"]["sql_executable"]
     assert artifacts_by_id["governed_attempts"]["payload"][0]["status"] == "success"
+    for artifact in response["artifacts"]:
+        assert "placeholder" not in artifact
+        assert "source" not in artifact
 
 
 def test_presentation_filters_invented_artifact_ids_from_markdown_and_artifact_list() -> None:
     class _InventedArtifactLLMProvider:
         async def acomplete(self, prompt: str, **kwargs):
-            assert "result_table" in prompt
+            assert "primary_result" in prompt
             assert "made_up_chart" not in prompt
             return (
-                '{"summary":"Returned the verified table.",'
-                '"result":{},"visualization":null,"research":{},'
-                '"answer_markdown":"The verified table is below.\\n\\n{{artifact:result_table}}\\n\\n{{artifact:made_up_chart}}",'
-                '"artifacts":[{"id":"result_table"},{"id":"made_up_chart"},{"id":"not_in_registry"}],'
+                '{"answer_markdown":"The verified table is below.\\n\\n{{artifact:primary_result}}\\n\\n{{artifact:made_up_chart}}",'
+                '"artifact_ids":["primary_result","made_up_chart","not_in_registry"],'
                 '"diagnostics":{"mode":"final"}}'
             )
 
@@ -559,7 +688,48 @@ def test_presentation_filters_invented_artifact_ids_from_markdown_and_artifact_l
         )
     )
 
-    assert "{{artifact:result_table}}" in response["answer_markdown"]
+    assert "{{artifact:primary_result}}" in response["answer_markdown"]
     assert "{{artifact:made_up_chart}}" not in response["answer_markdown"]
-    assert response["answer"] == response["answer_markdown"]
-    assert [artifact["id"] for artifact in response["artifacts"]] == ["result_table"]
+    assert [artifact["id"] for artifact in response["artifacts"]] == ["primary_result"]
+
+
+def test_table_visualization_recommendation_does_not_create_chart_artifact() -> None:
+    class _TableRecommendationLLMProvider:
+        async def acomplete(self, prompt: str, **kwargs):
+            assert '"id": "primary_visualization"' not in prompt
+            assert "primary_result" in prompt
+            return (
+                '{"answer_markdown":"The ranked table is below.\\n\\n{{artifact:primary_result}}",'
+                '"artifact_ids":["primary_result","primary_visualization"],'
+                '"diagnostics":{"mode":"final"}}'
+            )
+
+    agent = PresentationAgent(llm_provider=_TableRecommendationLLMProvider())
+
+    response = _run(
+        agent.compose(
+            question="Which products drove high order count?",
+            context={
+                "visualization_recommendation": {
+                    "chart_type": "table",
+                    "title": "Product drivers",
+                    "rationale": "A ranked table is clearest.",
+                },
+                "step_results": [
+                    {
+                        "agent_name": "analyst",
+                        "output": {
+                            "analysis": "Commuter Pack was a major driver.",
+                            "result": {
+                                "columns": ["product_name", "order_count"],
+                                "rows": [["Commuter Pack", 24]],
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    assert "{{artifact:primary_visualization}}" not in response["answer_markdown"]
+    assert [artifact["id"] for artifact in response["artifacts"]] == ["primary_result"]

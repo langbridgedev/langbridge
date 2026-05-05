@@ -146,6 +146,52 @@ class _AutoModeLLMProvider(_FakeLLMProvider):
         return await super().acomplete(prompt, **kwargs)
 
 
+class _EntityResearchLLMProvider(_FakeLLMProvider):
+    async def acomplete(self, prompt: str, **kwargs):
+        if "Plan the internal evidence path for a Langbridge analyst research workflow." in prompt:
+            assert "NRF1002" in prompt
+            return (
+                '{"objective":"Calculate Alpha and Beta for the resolved entity since inception.",'
+                '"question_type":"reporting",'
+                '"timeframe":"since inception",'
+                '"required_metrics":["alpha","beta"],'
+                '"required_dimensions":["product"],'
+                '"steps":['
+                '{"step_id":"e1","action":"query_governed",'
+                '"question":"Calculate Alpha and Beta for the resolved entity since inception.",'
+                '"evidence_goal":"Retrieve governed alpha and beta for the resolved entity.",'
+                '"success_criteria":"Alpha and beta values are returned.","depends_on":[]},'
+                '{"step_id":"e2","action":"synthesize",'
+                '"evidence_goal":"Answer from governed evidence.",'
+                '"success_criteria":"The answer names the resolved entity.","depends_on":["e1"]}'
+                '],'
+                '"synthesis_requirements":["Use the resolved identifier as the entity filter."],'
+                '"external_context_needed":false,'
+                '"visualization_recommendation":{"recommendation":"none","chart_type":null,"rationale":null}}'
+            )
+        if "You are orchestrating a bounded Langbridge analyst research workflow." in prompt:
+            assert "NRF1002" in prompt
+            if '"governed_round_count": 0' in prompt:
+                return (
+                    '{"action":"query_governed","rationale":"Need governed metrics for the resolved entity.",'
+                    '"governed_question":"Calculate Alpha and Beta for the resolved entity since inception.",'
+                    '"visualization_recommendation":"none","recommended_chart_type":null}'
+                )
+            return (
+                '{"action":"synthesize","rationale":"Governed evidence is sufficient.",'
+                '"visualization_recommendation":"none","recommended_chart_type":null}'
+            )
+        if "Synthesize source-backed research" in prompt:
+            assert "NRF1002" in prompt
+            return (
+                '{"synthesis":"Resolved entity NRF1002 was used for the governed Alpha and Beta query.",'
+                '"verdict":"Resolved entity NRF1002 was queried.",'
+                '"key_comparisons":[],"limitations":[],"findings":[{"insight":"Governed result used.",'
+                '"source":"governed_result"}],"follow_ups":[]}'
+            )
+        return await super().acomplete(prompt, **kwargs)
+
+
 class _OverClarifyingResearchLLMProvider(_AutoModeLLMProvider):
     async def acomplete(self, prompt: str, **kwargs):
         if "You are orchestrating a bounded Langbridge analyst research workflow." in prompt:
@@ -198,6 +244,7 @@ class _FakeSqlTool:
         self.query_scope = query_scope
         self._response = response
         self.calls = 0
+        self.requests = []
 
     def describe(self) -> dict[str, object]:
         return {
@@ -215,7 +262,7 @@ class _FakeSqlTool:
         }
 
     async def arun(self, request):
-        _ = request
+        self.requests.append(request)
         self.calls += 1
         return self._response
 
@@ -226,7 +273,7 @@ class _SequentialSqlTool(_FakeSqlTool):
         self._responses = list(responses)
 
     async def arun(self, request):
-        _ = request
+        self.requests.append(request)
         self.calls += 1
         index = min(self.calls - 1, len(self._responses) - 1)
         return self._responses[index]
@@ -341,6 +388,43 @@ def _semantic_success_response() -> AnalystQueryResponse:
         outcome=AnalystExecutionOutcome(
             status=AnalystOutcomeStatus.success,
             stage=AnalystOutcomeStage.result,
+            recoverable=False,
+            terminal=True,
+            attempted_query_scope=SqlQueryScope.semantic,
+            final_query_scope=SqlQueryScope.semantic,
+            selected_semantic_model_id="commerce",
+            selected_dataset_ids=["orders"],
+        ),
+    )
+
+
+def _entity_resolution_response(
+    *,
+    product_id: str = "NRF1002",
+    product_name: str = "North Ridge Fund",
+    rows: list[tuple] | None = None,
+) -> AnalystQueryResponse:
+    return AnalystQueryResponse(
+        analysis_path="semantic_model",
+        query_scope=SqlQueryScope.semantic,
+        execution_mode="federated",
+        asset_type="semantic_model",
+        asset_id="commerce",
+        asset_name="commerce",
+        selected_semantic_model_id="commerce",
+        sql_canonical="SELECT product_id, product_name, inception_date, status FROM commerce",
+        sql_executable="SELECT product_id, product_name, inception_date, status FROM products",
+        dialect="postgres",
+        selected_datasets=[_dataset_binding()],
+        result=QueryResult(
+            columns=["product_id", "product_name", "inception_date", "status"],
+            rows=rows if rows is not None else [(product_id, product_name, "2021-04-01", "active")],
+            rowcount=len(rows) if rows is not None else 1,
+        ),
+        outcome=AnalystExecutionOutcome(
+            status=AnalystOutcomeStatus.success if rows != [] else AnalystOutcomeStatus.empty_result,
+            stage=AnalystOutcomeStage.result,
+            message="No rows matched the query." if rows == [] else None,
             recoverable=False,
             terminal=True,
             attempted_query_scope=SqlQueryScope.semantic,
@@ -614,6 +698,284 @@ def test_analyst_sql_empty_result_marks_weak_evidence() -> None:
     assert result.output["evidence"]["governed"]["answered_question"] is False
     assert result.output["evidence"]["assessment"]["decision"] == "clarify"
     assert result.output["review_hints"]["governed_empty_result"] is True
+
+
+def test_analyst_resolves_identifier_before_metric_query() -> None:
+    tool = _SequentialSqlTool(
+        name="semantic-orders",
+        asset_type="semantic_model",
+        query_scope=SqlQueryScope.semantic,
+        responses=[_entity_resolution_response(), _semantic_success_response()],
+    )
+    agent = AnalystAgent(
+        llm_provider=_FakeLLMProvider(),
+        config=AnalystAgentConfig.model_validate(
+            {
+                "name": "commerce",
+                "analyst_scope": {
+                    "semantic_models": ["commerce"],
+                    "datasets": ["orders"],
+                    "query_policy": "semantic_preferred",
+                },
+            }
+        ),
+        sql_analysis_tools=[tool],
+    )
+
+    result = _run(
+        agent.execute(
+            AgentTask(
+                task_id="analyst-entity-preflight",
+                task_kind=AgentTaskKind.analyst,
+                question="What's the Alpha and Beta for North Ridge Fund (NRF1002) since inception?",
+                input={"mode": "sql"},
+            )
+        )
+    )
+
+    assert result.status.value == "succeeded"
+    assert tool.calls == 2
+    assert "Resolve the governed entity before metric analysis" in tool.requests[0].question
+    assert tool.requests[1].resolved_entities[0]["canonical_identifier"] == "NRF1002"
+    assert tool.requests[1].resolved_entities[0]["canonical_name"] == "North Ridge Fund"
+    assert tool.requests[1].resolved_entities[0]["matched_row"]["inception_date"] == "2021-04-01"
+    assert result.diagnostics["entity_resolution"]["status"] == "resolved"
+    assert result.diagnostics["entity_resolution"]["canonical_identifier"] == "NRF1002"
+    assert result.diagnostics["governed_attempt_count"] == 1
+
+
+def test_analyst_entity_resolution_trusts_identifier_when_name_mismatches() -> None:
+    tool = _SequentialSqlTool(
+        name="semantic-orders",
+        asset_type="semantic_model",
+        query_scope=SqlQueryScope.semantic,
+        responses=[_entity_resolution_response(product_name="North Ridge Fund"), _semantic_success_response()],
+    )
+    agent = AnalystAgent(
+        llm_provider=_FakeLLMProvider(),
+        config=AnalystAgentConfig.model_validate(
+            {
+                "name": "commerce",
+                "analyst_scope": {
+                    "semantic_models": ["commerce"],
+                    "datasets": ["orders"],
+                    "query_policy": "semantic_preferred",
+                },
+            }
+        ),
+        sql_analysis_tools=[tool],
+    )
+
+    result = _run(
+        agent.execute(
+            AgentTask(
+                task_id="analyst-entity-name-mismatch",
+                task_kind=AgentTaskKind.analyst,
+                question="What's the Alpha and Beta for North Ridge Growth (NRF1002) since inception?",
+                input={"mode": "sql"},
+            )
+        )
+    )
+
+    assert result.status.value == "succeeded"
+    assert tool.calls == 2
+    entity_resolution = result.diagnostics["entity_resolution"]
+    assert entity_resolution["status"] == "resolved"
+    assert entity_resolution["reference"]["supplied_name"] == "North Ridge Growth"
+    assert entity_resolution["canonical_name"] == "North Ridge Fund"
+    assert entity_resolution["name_mismatch"] is True
+    assert tool.requests[1].resolved_entities[0]["canonical_identifier"] == "NRF1002"
+
+
+def test_analyst_entity_resolution_accepts_multiple_rows_for_same_identifier() -> None:
+    tool = _SequentialSqlTool(
+        name="semantic-orders",
+        asset_type="semantic_model",
+        query_scope=SqlQueryScope.semantic,
+        responses=[
+            _entity_resolution_response(
+                rows=[
+                    ("NRF1002", "North Ridge Fund", "2020-01-01", "active"),
+                    ("NRF1002", "North Ridge Fund", "2020-01-01", "active"),
+                ]
+            ),
+            _semantic_success_response(),
+        ],
+    )
+    agent = AnalystAgent(
+        llm_provider=_FakeLLMProvider(),
+        config=AnalystAgentConfig.model_validate(
+            {
+                "name": "commerce",
+                "analyst_scope": {
+                    "semantic_models": ["commerce"],
+                    "datasets": ["orders"],
+                    "query_policy": "semantic_preferred",
+                },
+            }
+        ),
+        sql_analysis_tools=[tool],
+    )
+
+    result = _run(
+        agent.execute(
+            AgentTask(
+                task_id="analyst-entity-multi-row",
+                task_kind=AgentTaskKind.analyst,
+                question="What's the Alpha and Beta for North Ridge Fund (NRF1002) since inception?",
+                input={"mode": "sql"},
+            )
+        )
+    )
+
+    assert result.status.value == "succeeded"
+    assert tool.calls == 2
+    entity_resolution = result.diagnostics["entity_resolution"]
+    assert entity_resolution["status"] == "resolved"
+    assert entity_resolution["canonical_identifier"] == "NRF1002"
+    assert len(entity_resolution["matched_rows_sample"]) == 2
+    assert "across 2 governed rows" in entity_resolution["message"]
+    assert tool.requests[1].resolved_entities[0]["canonical_identifier"] == "NRF1002"
+
+
+def test_analyst_entity_resolution_follow_up_all_retries_prior_ambiguity() -> None:
+    tool = _SequentialSqlTool(
+        name="semantic-orders",
+        asset_type="semantic_model",
+        query_scope=SqlQueryScope.semantic,
+        responses=[
+            _entity_resolution_response(
+                rows=[
+                    ("NRF1002", "North Ridge Fund", "2020-01-01", "active"),
+                    ("NRF1002", "North Ridge Fund", "2020-01-01", "active"),
+                ]
+            ),
+            _semantic_success_response(),
+        ],
+    )
+    agent = AnalystAgent(
+        llm_provider=_FakeLLMProvider(),
+        config=AnalystAgentConfig.model_validate(
+            {
+                "name": "commerce",
+                "analyst_scope": {
+                    "semantic_models": ["commerce"],
+                    "datasets": ["orders"],
+                    "query_policy": "semantic_preferred",
+                },
+            }
+        ),
+        sql_analysis_tools=[tool],
+    )
+
+    result = _run(
+        agent.execute(
+            AgentTask(
+                task_id="analyst-entity-follow-up-all",
+                task_kind=AgentTaskKind.analyst,
+                question="just all of them",
+                input={"mode": "sql"},
+                context={
+                    "entity_resolution": {
+                        "status": "ambiguous",
+                        "reference": {
+                            "identifier": "NRF1002",
+                            "supplied_name": "North Ridge Fund",
+                            "original_text": "North Ridge Fund (NRF1002)",
+                            "source": "parenthesized_identifier",
+                        },
+                        "message": "The identifier NRF1002 matched multiple governed rows.",
+                    }
+                },
+            )
+        )
+    )
+
+    assert result.status.value == "succeeded"
+    assert tool.calls == 2
+    assert result.diagnostics["entity_resolution"]["status"] == "resolved"
+    assert result.diagnostics["entity_resolution"]["canonical_identifier"] == "NRF1002"
+
+
+def test_analyst_entity_resolution_clarifies_unknown_identifier() -> None:
+    tool = _SequentialSqlTool(
+        name="semantic-orders",
+        asset_type="semantic_model",
+        query_scope=SqlQueryScope.semantic,
+        responses=[_entity_resolution_response(rows=[])],
+    )
+    agent = AnalystAgent(
+        llm_provider=_FakeLLMProvider(),
+        config=AnalystAgentConfig.model_validate(
+            {
+                "name": "commerce",
+                "analyst_scope": {
+                    "semantic_models": ["commerce"],
+                    "datasets": ["orders"],
+                    "query_policy": "semantic_preferred",
+                },
+            }
+        ),
+        sql_analysis_tools=[tool],
+    )
+
+    result = _run(
+        agent.execute(
+            AgentTask(
+                task_id="analyst-entity-unknown",
+                task_kind=AgentTaskKind.analyst,
+                question="What's the Alpha and Beta for North Ridge Fund (NRF1002) since inception?",
+                input={"mode": "sql"},
+            )
+        )
+    )
+
+    assert result.status.value == "needs_clarification"
+    assert tool.calls == 1
+    assert result.diagnostics["entity_resolution"]["status"] == "not_found"
+    assert "NRF1002" in result.error
+
+
+def test_analyst_research_reuses_resolved_entity_for_governed_round() -> None:
+    tool = _SequentialSqlTool(
+        name="semantic-orders",
+        asset_type="semantic_model",
+        query_scope=SqlQueryScope.semantic,
+        responses=[_entity_resolution_response(), _semantic_success_response()],
+    )
+    agent = AnalystAgent(
+        llm_provider=_EntityResearchLLMProvider(),
+        config=AnalystAgentConfig.model_validate(
+            {
+                "name": "commerce",
+                "analyst_scope": {
+                    "semantic_models": ["commerce"],
+                    "datasets": ["orders"],
+                    "query_policy": "semantic_preferred",
+                },
+                "research_scope": {"enabled": True},
+            }
+        ),
+        sql_analysis_tools=[tool],
+    )
+
+    result = _run(
+        agent.execute(
+            AgentTask(
+                task_id="analyst-entity-research",
+                task_kind=AgentTaskKind.analyst,
+                question="What's the Alpha and Beta for North Ridge Fund (NRF1002) since inception?",
+                input={"mode": "research"},
+            )
+        )
+    )
+
+    assert result.status.value == "succeeded"
+    assert tool.calls == 2
+    assert "Resolve the governed entity before metric analysis" in tool.requests[0].question
+    assert tool.requests[1].resolved_entities[0]["canonical_identifier"] == "NRF1002"
+    assert result.diagnostics["entity_resolution"]["status"] == "resolved"
+    assert result.diagnostics["governed_attempt_count"] == 1
 
 
 def test_analyst_sql_retries_with_alternative_governed_tool_before_clarifying() -> None:

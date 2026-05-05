@@ -98,14 +98,14 @@ class _FakeLLMProvider:
         if "Compose the final Langbridge response" in prompt:
             if "Recovered answer." in prompt:
                 return (
-                    '{"summary":"Recovered answer.",'
-                    '"result":{},"visualization":null,"research":{},'
-                    '"answer":"Recovered answer.","diagnostics":{"mode":"test"}}'
+                    '{"answer_markdown":"Recovered answer.",'
+                    '"artifact_ids":[],"diagnostics":{"mode":"test"},'
+                    '"metadata":{}}'
                 )
             return (
-                '{"summary":"Profile runtime answer.",'
-                '"result":{"columns":[],"rows":[]},"visualization":null,'
-                '"research":{},"answer":"Profile runtime answer.","diagnostics":{"mode":"test"}}'
+                '{"answer_markdown":"Profile runtime answer.",'
+                '"artifact_ids":[],"diagnostics":{"mode":"test"},'
+                '"metadata":{}}'
             )
         if "Analyze verified Langbridge result data" in prompt:
             return '{"analysis":"Scoped analyst answer.","result":{"columns":[],"rows":[]}}'
@@ -210,7 +210,7 @@ def test_ai_factory_builds_meta_controller_without_runtime_wiring() -> None:
     assert run.execution_mode == "planned"
     assert run.status == "completed"
     assert run.step_results[0]["agent_name"] == "analyst.factory_analyst"
-    assert run.final_result["summary"] == "Profile runtime answer."
+    assert run.final_result["answer_markdown"] == "Profile runtime answer.\n\n{{artifact:primary_result}}"
 
 
 def test_ai_profile_parses_alias_shape() -> None:
@@ -442,4 +442,4 @@ def test_retry_success_reviews_latest_record() -> None:
         PlanReviewAction.retry_step,
         PlanReviewAction.finalize,
     ]
-    assert run.final_result["answer"] == "Recovered answer."
+    assert run.final_result["answer_markdown"] == "Recovered answer."

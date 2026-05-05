@@ -8,6 +8,10 @@ from langbridge.federation.planner import FederatedPlanner
 from langbridge.federation.planner.parser import parse_sql
 
 
+def _sql_capabilities() -> SourceCapabilities:
+    return SourceCapabilities(pushdown_full_query=True, pushdown_join=True)
+
+
 def _workflow() -> FederationWorkflow:
     workspace = str(uuid.uuid4())
     return FederationWorkflow(
@@ -110,6 +114,7 @@ def test_optimizer_pushes_full_query_for_synthetic_catalog_bindings_after_rewrit
         dialect="tsql",
         workflow=workflow,
         source_dialects={"source_orders": "postgres"},
+        source_capabilities={"source_orders": _sql_capabilities()},
     )
 
     assert output.physical_plan.pushdown_full_query is True
@@ -155,7 +160,7 @@ def test_optimizer_unquotes_lowercase_filters_for_snowflake_physical_sql_scans()
             'SELECT aligned_returns.product_id, aligned_returns.product_name, aligned_returns.strike_date '
             'FROM aligned_returns '
             'WHERE LOWER(aligned_returns."product_id") LIKE LOWER(\'I5052724\') '
-            'AND LOWER(aligned_returns."product_name") LIKE LOWER(\'140 Summer\') '
+            'AND LOWER(aligned_returns."product_name") LIKE LOWER(\'North Ridge Fund\') '
             'AND aligned_returns."strike_date" <= \'2025-12-31\''
         ),
         dialect="snowflake",
@@ -171,7 +176,7 @@ def test_optimizer_unquotes_lowercase_filters_for_snowflake_physical_sql_scans()
     assert scan_stage.subplan is not None
     assert scan_stage.subplan.pushdown.filter.pushed is True
     assert 'LOWER(aligned_returns.product_id) LIKE LOWER(\'I5052724\')' in scan_stage.subplan.sql
-    assert 'LOWER(aligned_returns.product_name) LIKE LOWER(\'140 Summer\')' in scan_stage.subplan.sql
+    assert 'LOWER(aligned_returns.product_name) LIKE LOWER(\'North Ridge Fund\')' in scan_stage.subplan.sql
     assert "aligned_returns.strike_date <= '2025-12-31'" in scan_stage.subplan.sql
     assert '"product_id"' not in scan_stage.subplan.sql
     assert '"product_name"' not in scan_stage.subplan.sql
@@ -221,7 +226,7 @@ def test_optimizer_reports_pushdown_reason_when_single_source_cannot_push_join()
     )
 
     assert output.physical_plan.pushdown_full_query is False
-    assert any("join pushdown is unavailable" in reason for reason in output.physical_plan.pushdown_reasons)
+    assert any("full-query SQL pushdown is unavailable" in reason for reason in output.physical_plan.pushdown_reasons)
     scan_stage = next(
         stage
         for stage in output.physical_plan.stages
@@ -258,6 +263,7 @@ def test_optimizer_pushes_single_source_full_query_across_dialects() -> None:
         dialect="tsql",
         workflow=workflow,
         source_dialects={"source_orders": "postgres"},
+        source_capabilities={"source_orders": _sql_capabilities()},
     )
 
     assert output.physical_plan.pushdown_full_query is True
@@ -328,6 +334,7 @@ def test_optimizer_rewrites_fully_qualified_columns_for_synthetic_catalog_bindin
         dialect="postgres",
         workflow=workflow,
         source_dialects={"source_orders": "postgres"},
+        source_capabilities={"source_orders": _sql_capabilities()},
     )
 
     remote_stages = [
@@ -530,6 +537,7 @@ def test_optimizer_pushes_full_query_down_when_logical_alias_differs_from_physic
         dialect="postgres",
         workflow=workflow,
         source_dialects={"source_orders": "postgres"},
+        source_capabilities={"source_orders": _sql_capabilities()},
     )
 
     stage_ids = {stage.stage_id for stage in output.physical_plan.stages}
@@ -573,6 +581,7 @@ def test_optimizer_pushes_limit_in_remote_full_query_when_alias_rewrite_is_suppo
         dialect="snowflake",
         workflow=workflow,
         source_dialects={"source_products": "snowflake"},
+        source_capabilities={"source_products": _sql_capabilities()},
     )
 
     assert output.physical_plan.pushdown_full_query is True
@@ -618,6 +627,7 @@ def test_optimizer_pushes_ordered_limit_in_remote_full_query_when_alias_rewrite_
         dialect="snowflake",
         workflow=workflow,
         source_dialects={"source_products": "snowflake"},
+        source_capabilities={"source_products": _sql_capabilities()},
     )
 
     scan_stage = next(
@@ -725,6 +735,7 @@ def test_optimizer_renders_tsql_top_using_duckdb_limit_for_local_stage() -> None
         dialect="tsql",
         workflow=workflow,
         source_dialects={"source_orders": "sqlite"},
+        source_capabilities={"source_orders": _sql_capabilities()},
     )
 
     assert output.physical_plan.pushdown_full_query is True

@@ -35,12 +35,14 @@ from langbridge.runtime.application.errors import ApplicationError, BusinessVali
 from langbridge.runtime.models.jobs import (
     CreateDatasetPreviewJobRequest,
 )
-from langbridge.runtime.models.streaming import RuntimeRunStreamEvent
+from langbridge.runtime.models.streaming import RuntimeJobStreamEvent
 from langbridge.runtime.services.errors import ExecutionValidationError
 from langbridge.runtime.services.runtime_host import RuntimeHost
 from langbridge.runtime.hosting.api_models import (
     RuntimeAgentAskRequest,
     RuntimeAgentAskResponse,
+    RuntimeAgentRunRequest,
+    RuntimeAgentRunResponse,
     RuntimeActorCreateRequest,
     RuntimeActorListResponse,
     RuntimeActorResetPasswordRequest,
@@ -62,6 +64,10 @@ from langbridge.runtime.hosting.api_models import (
     RuntimeConnectorUpdateRequest,
     RuntimeDatasetUpdateRequest,
     RuntimeInfoResponse,
+    RuntimeJobCancelBody,
+    RuntimeJobCreateRequest,
+    RuntimeJobListResponse,
+    RuntimeJobResponse,
     RuntimeSemanticModelCreateRequest,
     RuntimeSemanticModelListResponse,
     RuntimeSemanticModelUpdateRequest,
@@ -72,6 +78,7 @@ from langbridge.runtime.hosting.api_models import (
     RuntimeSyncStateListResponse,
     RuntimeThreadCreateRequest,
     RuntimeThreadUpdateRequest,
+    RuntimeSqlQueryJobResponse,
     RuntimeSqlQueryRequest,
     RuntimeSqlQueryResponse,
 )
@@ -81,6 +88,8 @@ _FEATURES_ENV = "LANGBRIDGE_RUNTIME_FEATURES"
 _DEBUG_ENV = "LANGBRIDGE_RUNTIME_DEBUG"
 _ODBC_HOST_ENV = "LANGBRIDGE_RUNTIME_ODBC_HOST"
 _ODBC_PORT_ENV = "LANGBRIDGE_RUNTIME_ODBC_PORT"
+_WORKERS_ENV = "LANGBRIDGE_RUNTIME_WORKERS"
+_BACKGROUND_TASKS_ENV = "LANGBRIDGE_RUNTIME_BACKGROUND_TASKS"
 _SEMANTIC_VECTOR_REFRESH_TASK_NAME = "semantic-vector-refresh"
 _RUNTIME_CLEANUP_TASK_NAME = "runtime-cleanup"
 _RUNTIME_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
@@ -96,6 +105,9 @@ def create_runtime_api_app(
     debug: bool = False,
     odbc_host: str | None = None,
     odbc_port: int | None = None,
+    workers: int = 1,
+    background_tasks_enabled: bool | None = None,
+    mcp_stateless_http: bool | None = None,
     default_background_tasks: Iterable[RuntimeBackgroundTaskDefinition] | None = None,
     background_tasks: Iterable[RuntimeBackgroundTaskDefinition] | None = None,
     background_task_manager: RuntimeBackgroundTaskManager | None = None,
@@ -110,6 +122,13 @@ def create_runtime_api_app(
     mcp_enabled = "mcp" in enabled_features
     ui_enabled = "ui" in enabled_features
     odbc_enabled = "odbc" in enabled_features
+    runtime_workers = max(1, int(workers or 1))
+    run_background_tasks = (
+        runtime_workers == 1
+        if background_tasks_enabled is None
+        else bool(background_tasks_enabled)
+    )
+    stateless_mcp = runtime_workers > 1 if mcp_stateless_http is None else bool(mcp_stateless_http)
     auth_resolver = RuntimeAuthResolver(
         config=auth_config
         or RuntimeAuthConfig.from_env(
@@ -132,6 +151,7 @@ def create_runtime_api_app(
             auth_resolver=auth_resolver,
             mount_path=DEFAULT_MCP_MOUNT_PATH,
             debug=debug,
+            stateless_http=stateless_mcp,
         )
     if odbc_enabled:
         odbc_server = RuntimeOdbcEndpoint(
@@ -145,21 +165,25 @@ def create_runtime_api_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        start_job_processor = getattr(host, "start_job_processor", None)
+        if callable(start_job_processor):
+            start_job_processor()
         if odbc_server is not None:
             await odbc_server.start()
-        await _register_runtime_dataset_background_tasks(
-            task_manager=task_manager,
-            runtime_host=host,
-        )
-        await _register_runtime_semantic_vector_refresh_task(
-            task_manager=task_manager,
-            runtime_host=host,
-        )
-        await _register_runtime_cleanup_task(
-            task_manager=task_manager,
-            runtime_host=host,
-        )
-        await task_manager.start()
+        if run_background_tasks:
+            await _register_runtime_dataset_background_tasks(
+                task_manager=task_manager,
+                runtime_host=host,
+            )
+            await _register_runtime_semantic_vector_refresh_task(
+                task_manager=task_manager,
+                runtime_host=host,
+            )
+            await _register_runtime_cleanup_task(
+                task_manager=task_manager,
+                runtime_host=host,
+            )
+            await task_manager.start()
         try:
             if mcp_server is None:
                 yield
@@ -172,7 +196,13 @@ def create_runtime_api_app(
             async with mcp_server.session_manager.run():
                 yield
         finally:
-            await task_manager.stop()
+            stop_job_processor = getattr(host, "stop_job_processor", None)
+            if callable(stop_job_processor):
+                stop_result = stop_job_processor()
+                if inspect.isawaitable(stop_result):
+                    await stop_result
+            if run_background_tasks:
+                await task_manager.stop()
             if odbc_server is not None:
                 await odbc_server.close()
             await _close_runtime_host(host)
@@ -188,8 +218,11 @@ def create_runtime_api_app(
     app.state.runtime_features = enabled_features
     app.state.runtime_auth = auth_resolver
     app.state.runtime_background_tasks = task_manager
+    app.state.runtime_background_tasks_enabled = run_background_tasks
     app.state.runtime_debug = bool(debug)
     app.state.runtime_odbc = odbc_server
+    app.state.runtime_workers = runtime_workers
+    app.state.runtime_mcp_stateless_http = stateless_mcp
 
     if mcp_enabled:
         @app.middleware("http")
@@ -406,9 +439,16 @@ def create_runtime_api_app(
             "semantic_models.delete",
             "semantic.query",
             "sql.query",
+            "sql.query.jobs",
             "agents.list",
             "agents.get",
+            "agents.run",
             "agents.ask",
+            "jobs.create",
+            "jobs.get",
+            "jobs.list",
+            "jobs.cancel",
+            "jobs.stream",
             "threads.create",
             "threads.list",
             "threads.get",
@@ -574,6 +614,7 @@ def create_runtime_api_app(
     @app.post(
         "/api/runtime/v1/datasets/{dataset_ref}/sync",
         response_model=RuntimeSyncResponse,
+        status_code=202,
     )
     async def sync_dataset(
         request: Request,
@@ -582,7 +623,7 @@ def create_runtime_api_app(
     ) -> RuntimeSyncResponse:
         configured_host = await _resolve_request_host(request)
         try:
-            payload = await configured_host.sync_dataset(
+            payload = await configured_host.create_dataset_sync_job(
                 dataset_ref=dataset_ref,
                 sync_mode=body.sync_mode,
                 force_full_refresh=bool(body.force_full_refresh),
@@ -709,6 +750,111 @@ def create_runtime_api_app(
                 detail=detail,
             ) from exc
 
+    @app.post(
+        "/api/runtime/v1/sql/query/jobs",
+        response_model=RuntimeSqlQueryJobResponse,
+        status_code=202,
+    )
+    async def create_sql_query_job(
+        request: Request,
+        body: RuntimeSqlQueryRequest,
+    ) -> RuntimeSqlQueryJobResponse:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return RuntimeSqlQueryJobResponse.model_validate(
+                await configured_host.create_sql_query_job(request=body)
+            )
+        except HTTPException:
+            raise
+        except (ValueError, ApplicationError, ExecutionValidationError) as exc:
+            detail = str(exc)
+            raise HTTPException(
+                status_code=_runtime_query_status_code(detail),
+                detail=detail,
+            ) from exc
+
+    @app.post("/api/runtime/v1/jobs", response_model=RuntimeJobResponse, status_code=202)
+    async def create_runtime_job(
+        request: Request,
+        body: RuntimeJobCreateRequest,
+    ) -> RuntimeJobResponse:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return RuntimeJobResponse.model_validate(
+                await configured_host.create_job(request=body)
+            )
+        except HTTPException:
+            raise
+        except (ValueError, ApplicationError, ExecutionValidationError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            _raise_runtime_internal_server_error("create runtime job", exc)
+
+    @app.get("/api/runtime/v1/jobs", response_model=RuntimeJobListResponse)
+    async def list_runtime_jobs(
+        request: Request,
+        job_type: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> RuntimeJobListResponse:
+        configured_host = await _resolve_request_host(request)
+        return RuntimeJobListResponse.model_validate(
+            await configured_host.list_jobs(
+                job_type=job_type,
+                status=status,
+                limit=limit,
+            )
+        )
+
+    @app.get("/api/runtime/v1/jobs/{job_id}", response_model=RuntimeJobResponse)
+    async def get_runtime_job(
+        request: Request,
+        job_id: uuid.UUID,
+    ) -> RuntimeJobResponse:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return RuntimeJobResponse.model_validate(await configured_host.get_job(job_id=job_id))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Job '{job_id}' was not found.") from exc
+
+    @app.post("/api/runtime/v1/jobs/{job_id}/cancel", response_model=RuntimeJobResponse)
+    async def cancel_runtime_job(
+        request: Request,
+        job_id: uuid.UUID,
+        body: RuntimeJobCancelBody | None = None,
+    ) -> RuntimeJobResponse:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return RuntimeJobResponse.model_validate(
+                await configured_host.cancel_job(
+                    job_id=job_id,
+                    request=body or RuntimeJobCancelBody(),
+                )
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Job '{job_id}' was not found.") from exc
+
+    @app.get("/api/runtime/v1/jobs/{job_id}/stream")
+    async def stream_runtime_job(
+        request: Request,
+        job_id: uuid.UUID,
+        after_sequence: int = 0,
+    ) -> StreamingResponse:
+        configured_host = await _resolve_request_host(request)
+        try:
+            events = await configured_host.stream_job(
+                job_id=job_id,
+                after_sequence=after_sequence,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Job '{job_id}' was not found.") from exc
+        return _build_runtime_sse_response(
+            _stream_runtime_job_events(
+                request=request,
+                events=events,
+            )
+        )
+
     @app.get("/api/runtime/v1/agents")
     async def list_agents(request: Request) -> dict[str, Any]:
         configured_host = await _resolve_request_host(request)
@@ -722,6 +868,39 @@ def create_runtime_api_app(
             return await configured_host.get_agent(agent_ref=agent_ref)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post(
+        "/api/runtime/v1/agents/run",
+        response_model=RuntimeAgentRunResponse,
+        status_code=202,
+    )
+    async def run_agent(
+        request: Request,
+        body: RuntimeAgentRunRequest,
+    ) -> RuntimeAgentRunResponse:
+        configured_host = await _resolve_request_host(request)
+        agent_name = _resolve_agent_name(
+            configured_host,
+            agent_id=body.agent_id,
+            agent_name=body.agent_name,
+        )
+        try:
+            run_kwargs = {
+                "prompt": body.message,
+                "agent_name": agent_name,
+                "thread_id": body.thread_id,
+                "title": body.title,
+            }
+            if body.agent_mode is not None:
+                run_kwargs["agent_mode"] = body.agent_mode
+            if body.metadata_json is not None:
+                run_kwargs["metadata_json"] = body.metadata_json
+            result = await configured_host.create_agent_run_job(**run_kwargs)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _raise_runtime_internal_server_error("agent run", exc)
+        return RuntimeAgentRunResponse.model_validate(result)
 
     @app.post("/api/runtime/v1/agents/ask", response_model=RuntimeAgentAskResponse)
     async def ask_agent(
@@ -755,16 +934,16 @@ def create_runtime_api_app(
         return RuntimeAgentAskResponse(
             thread_id=uuid.UUID(str(payload_thread_id)) if payload_thread_id is not None else body.thread_id,
             status="succeeded",
-            run_id=uuid.UUID(str(payload_job_id)) if payload_job_id is not None else None,
             job_id=uuid.UUID(str(payload_job_id)) if payload_job_id is not None else None,
             message_id=(
                 uuid.UUID(str(result.get("message_id")))
                 if result.get("message_id") is not None
                 else None
             ),
-            summary=result.get("summary"),
-            result=result.get("result"),
-            visualization=result.get("visualization"),
+            answer_markdown=str(result.get("answer_markdown") or ""),
+            artifacts=list(result.get("artifacts") or []),
+            diagnostics=dict(result.get("diagnostics") or {}),
+            metadata=dict(result.get("metadata") or {}),
             error=result.get("error"),
             events=list(result.get("events", [])),
         )
@@ -792,30 +971,9 @@ def create_runtime_api_app(
         if body.metadata_json is not None:
             stream_kwargs["metadata_json"] = body.metadata_json
         return _build_runtime_sse_response(
-            _stream_runtime_run_events(
+            _stream_runtime_job_events(
                 request=request,
                 events=configured_host.ask_agent_stream(**stream_kwargs),
-            )
-        )
-
-    @app.get("/api/runtime/v1/runs/{run_id}/stream")
-    async def stream_run(
-        request: Request,
-        run_id: uuid.UUID,
-        after_sequence: int = 0,
-    ) -> StreamingResponse:
-        configured_host = await _resolve_request_host(request)
-        try:
-            events = await configured_host.stream_run(
-                run_id=run_id,
-                after_sequence=after_sequence,
-            )
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=f"Run '{run_id}' was not found.") from exc
-        return _build_runtime_sse_response(
-            _stream_runtime_run_events(
-                request=request,
-                events=events,
             )
         )
 
@@ -1042,12 +1200,15 @@ def create_runtime_api_app_from_env() -> FastAPI:
     config_path = os.getenv(_CONFIG_PATH_ENV)
     if not config_path:
         raise RuntimeError(f"{_CONFIG_PATH_ENV} must be set before starting the runtime host.")
+    workers = _parse_runtime_workers_env(os.getenv(_WORKERS_ENV))
     return create_runtime_api_app(
         config_path=config_path,
         features=_parse_runtime_features_env(os.getenv(_FEATURES_ENV)),
         debug=_parse_runtime_debug_env(os.getenv(_DEBUG_ENV)),
         odbc_host=os.getenv(_ODBC_HOST_ENV),
         odbc_port=_parse_runtime_port_env(os.getenv(_ODBC_PORT_ENV)),
+        workers=workers,
+        background_tasks_enabled=_parse_runtime_background_tasks_env(os.getenv(_BACKGROUND_TASKS_ENV)),
     )
 
 
@@ -1088,9 +1249,9 @@ def _resolve_agent_name(
     raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' was not found.")
 
 
-def _encode_sse_payload(*, event_name: str, payload: RuntimeRunStreamEvent) -> str:
+def _encode_sse_payload(*, event_name: str, payload: RuntimeJobStreamEvent) -> str:
     serialized = json.dumps(payload.model_dump(mode="json"))
-    stream_id = payload.run_id or payload.job_id
+    stream_id = payload.job_id
     event_id = (
         f"{stream_id}:{payload.sequence}"
         if stream_id is not None
@@ -1119,10 +1280,10 @@ def _build_runtime_sse_response(event_stream: AsyncIterator[str]) -> StreamingRe
     )
 
 
-async def _stream_runtime_run_events(
+async def _stream_runtime_job_events(
     *,
     request: Request,
-    events: AsyncIterator[RuntimeRunStreamEvent | None],
+    events: AsyncIterator[RuntimeJobStreamEvent | None],
 ) -> AsyncIterator[str]:
     yield _encode_sse_comment("stream-open", padding=2048)
     async for event in events:
@@ -1212,6 +1373,26 @@ def _raise_runtime_internal_server_error(operation: str, exc: Exception) -> None
 
 def _parse_runtime_debug_env(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "debug"}
+
+
+def _parse_runtime_workers_env(value: str | None) -> int:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return 1
+    return max(1, int(normalized))
+
+
+def _parse_runtime_background_tasks_env(value: str | None) -> bool | None:
+    normalized = str(value or "").strip().lower()
+    if not normalized or normalized == "auto":
+        return None
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return False
+    raise ValueError(
+        f"{_BACKGROUND_TASKS_ENV} must be one of auto, true, or false; got {value!r}."
+    )
 
 
 def _parse_runtime_port_env(value: str | None) -> int | None:

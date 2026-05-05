@@ -175,10 +175,10 @@ export function ChatIndexPage() {
         <div className="chat-home-assistant-center">
           <div className="chat-home-copy chat-home-copy--assistant">
             <span className="chat-home-kicker">Langbridge Runtime</span>
-            <h2>What can I help you analyze?</h2>
-            <p className="chat-home-copy-text">
+            <h2>What can I help you analyse?</h2>
+            {/* <p className="chat-home-copy-text">
               Ask a business question, request a chart, or investigate a deeper analytical pattern.
-            </p>
+            </p> */}
           </div>
 
           <form className="chat-home-assistant-composer" onSubmit={handleAsk}>

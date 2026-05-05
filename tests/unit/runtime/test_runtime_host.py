@@ -3,6 +3,7 @@ import uuid
 
 import pytest
 
+from langbridge.federation.executor import ArtifactCleanupResult
 from langbridge.runtime import RuntimeContext
 from langbridge.runtime.services.runtime_host import (
     RuntimeHost,
@@ -42,6 +43,16 @@ class _AgentExecutionService:
 class _SemanticQueryService:
     async def execute_standard_query(self, **kwargs):
         return {"kind": "semantic", **kwargs}
+
+
+class _CleanupService:
+    def __init__(self) -> None:
+        self.called = False
+
+    async def cleanup_resources(self):
+        self.called = True
+
+        return ArtifactCleanupResult(scanned_manifests=2, deleted_manifests=1)
 
 
 def test_runtime_context_build_is_workspace_scoped() -> None:
@@ -136,3 +147,39 @@ async def test_runtime_host_uses_active_agent_execution_service() -> None:
     result = await host.create_agent(prompt="hello")
 
     assert result["kind"] == "agent"
+
+
+@pytest.mark.anyio
+async def test_runtime_host_delegates_cleanup_resources() -> None:
+    cleanup = _CleanupService()
+    host = RuntimeHost(
+        context=RuntimeContext.build(
+            workspace_id=uuid.uuid4(),
+            actor_id=uuid.uuid4(),
+            roles=["admin"],
+        ),
+        providers=RuntimeProviders(
+            dataset_metadata=object(),
+            connector_metadata=object(),
+            semantic_models=object(),
+            semantic_vector_indexes=object(),
+            sync_state=object(),
+            credentials=object(),
+        ),
+        services=RuntimeServices(
+            federated_query_tool=object(),
+            dataset_query=_DatasetQueryService(),
+            sql_query=_SqlQueryService(),
+            dataset_sync=_DatasetSyncService(),
+            agent_execution=_AgentExecutionService(),
+            semantic_query=_SemanticQueryService(),
+            semantic_vector_search=object(),
+            cleanup=cleanup,  # type: ignore[arg-type]
+        ),
+    )
+
+    result = await host.cleanup_resources()
+
+    assert cleanup.called is True
+    assert result["scanned_manifests"] == 2
+    assert result["deleted_manifests"] == 1

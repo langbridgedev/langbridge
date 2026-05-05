@@ -5,16 +5,17 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from langbridge.runtime.application.job_handlers.agent_run import AGENT_RUN_JOB_TYPE
 from langbridge.runtime.events import (
-    AgentEventVisibility,
     CollectingAgentEventEmitter,
     QueueingAgentStreamEmitter,
 )
 from langbridge.runtime.models import (
     CreateAgentJobRequest,
+    CreateRuntimeJobRequest,
     JobType,
+    RuntimeJobStreamEvent,
     RuntimeMessageRole,
-    RuntimeRunStreamEvent,
     RuntimeThread,
     RuntimeThreadMessage,
     RuntimeThreadState,
@@ -74,6 +75,8 @@ class AgentApplication:
             title=title,
             agent_mode=agent_mode,
             metadata_json=metadata_json,
+            mcp=mcp,
+            queue_name="inline",
         )
         collector = CollectingAgentEventEmitter()
         try:
@@ -82,17 +85,43 @@ class AgentApplication:
                 event_emitter=collector,
                 agent_mode=agent_mode,
             )
-        except Exception:
+        except Exception as exc:
             await self._reset_thread_after_failure(
                 thread_id=prepared.thread.id,
                 delete_thread=prepared.created_thread,
             )
+            await self._host.services.jobs.fail_job(
+                job_id=prepared.job_id,
+                exc=exc,
+                event_type="run.failed",
+                stage="failed",
+                message=str(exc) or "Agent run failed.",
+                event_details=self._build_failure_terminal_details(
+                    prepared=prepared,
+                    exc=exc,
+                ),
+            )
             raise
-        return self._build_agent_response_payload(
+        payload = self._build_agent_response_payload(
             prepared=prepared,
             execution=execution,
             events=collector.events,
         )
+        terminal = self._build_agent_terminal_event(
+            prepared=prepared,
+            execution=execution,
+            payload=payload,
+        )
+        await self._host.services.jobs.complete_job(
+            job_id=prepared.job_id,
+            result=payload,
+            message=terminal["message"],
+            event_type=terminal["event_type"],
+            event_status=terminal["status"],
+            stage=terminal["stage"],
+            event_details=terminal["details"],
+        )
+        return payload
 
     async def ask_agent_stream(
         self,
@@ -103,7 +132,7 @@ class AgentApplication:
         title: str | None = None,
         agent_mode: str | None = None,
         metadata_json: dict[str, Any] | None = None,
-    ) -> AsyncIterator[RuntimeRunStreamEvent | None]:
+    ) -> AsyncIterator[RuntimeJobStreamEvent | None]:
         prepared = await self._prepare_agent_run(
             prompt=prompt,
             agent_name=agent_name,
@@ -111,87 +140,58 @@ class AgentApplication:
             title=title,
             agent_mode=agent_mode,
             metadata_json=metadata_json,
-        )
-        sequence = 1
-        await self._host._run_streams.open_run(
-            run_id=prepared.job_id,
-            run_type="agent",
-            thread_id=prepared.thread.id,
-        )
-        await self._host._run_streams.publish(
-            RuntimeRunStreamEvent(
-                sequence=sequence,
-                event="run.started",
-                status="in_progress",
-                stage="planning",
-                message="Run queued. Starting execution.",
-                timestamp=datetime.now(timezone.utc),
-                run_type="agent",
-                run_id=prepared.job_id,
-                thread_id=prepared.thread.id,
-                job_id=prepared.job_id,
-                message_id=prepared.user_message.id,
-                visibility=AgentEventVisibility.public.value,
-                terminal=False,
-                source="runtime",
-                details={
-                    "agent_name": getattr(prepared.agent.config, "name", None),
-                    "user_message_id": str(prepared.user_message.id),
-                },
-            )
+            queue_name="inline",
         )
         emitter = QueueingAgentStreamEmitter(
             thread_id=prepared.thread.id,
             job_id=prepared.job_id,
             message_id=prepared.user_message.id,
-            enqueue=self._host._run_streams.publish,
-            initial_sequence=sequence,
+            enqueue=self._publish_agent_stream_event,
+            initial_sequence=0,
         )
 
         async def run_execution() -> None:
             try:
                 execution = await self._execute_prepared_agent_run(
-                prepared=prepared,
-                event_emitter=emitter,
-                agent_mode=agent_mode,
-            )
+                    prepared=prepared,
+                    event_emitter=emitter,
+                    agent_mode=agent_mode,
+                )
                 payload = self._build_agent_response_payload(prepared=prepared, execution=execution)
-                final_event = self._build_terminal_stream_event(
-                    sequence=emitter.sequence + 1,
-                    event="run.completed",
+                terminal = self._build_agent_terminal_event(
                     prepared=prepared,
                     execution=execution,
                     payload=payload,
                 )
-                await self._host._run_streams.publish(final_event)
+                await self._host.services.jobs.complete_job(
+                    job_id=prepared.job_id,
+                    result=payload,
+                    message=terminal["message"],
+                    event_type=terminal["event_type"],
+                    event_status=terminal["status"],
+                    stage=terminal["stage"],
+                    event_details=terminal["details"],
+                )
             except Exception as exc:
                 await self._reset_thread_after_failure(
                     thread_id=prepared.thread.id,
                     delete_thread=prepared.created_thread,
                 )
-                await self._host._run_streams.publish(
-                    RuntimeRunStreamEvent(
-                        sequence=emitter.sequence + 1,
-                        event="run.failed",
-                        status="failed",
-                        stage="failed",
-                        message=str(exc),
-                        timestamp=datetime.now(timezone.utc),
-                        run_type="agent",
-                        run_id=prepared.job_id,
-                        thread_id=prepared.thread.id,
-                        job_id=prepared.job_id,
-                        message_id=prepared.user_message.id,
-                        visibility=AgentEventVisibility.public.value,
-                        terminal=True,
-                        source="runtime",
-                        details={"error": str(exc)},
-                    )
+                await self._host.services.jobs.fail_job(
+                    job_id=prepared.job_id,
+                    exc=exc,
+                    event_type="run.failed",
+                    stage="failed",
+                    message=str(exc) or "Agent run failed.",
+                    event_details=self._build_failure_terminal_details(
+                        prepared=prepared,
+                        exc=exc,
+                    ),
                 )
         task = asyncio.create_task(run_execution())
         task.add_done_callback(_consume_detached_task_exception)
         try:
-            stream = await self.stream_run(run_id=prepared.job_id)
+            stream = await self.stream_job(job_id=prepared.job_id)
             async for event in stream:
                 yield event
         finally:
@@ -201,18 +201,96 @@ class AgentApplication:
                 except Exception:
                     return
 
-    async def stream_run(
+    async def create_agent_run_job(
         self,
         *,
-        run_id: uuid.UUID,
+        prompt: str,
+        agent_name: str | None = None,
+        thread_id: uuid.UUID | None = None,
+        title: str | None = None,
+        agent_mode: str | None = None,
+        metadata_json: dict[str, Any] | None = None,
+        mcp: bool = False,
+    ) -> dict[str, Any]:
+        prepared = await self._prepare_agent_run(
+            prompt=prompt,
+            agent_name=agent_name,
+            thread_id=thread_id,
+            title=title,
+            agent_mode=agent_mode,
+            metadata_json=metadata_json,
+            mcp=mcp,
+            queue_name="default",
+        )
+        self._host.wake_job_processor()
+        return {
+            "status": "queued",
+            "job_id": prepared.job_id,
+            "job_type": AGENT_RUN_JOB_TYPE,
+            "thread_id": prepared.thread.id,
+            "message_id": prepared.user_message.id,
+            "agent_name": getattr(prepared.agent.config, "name", None),
+            "stream_path": f"/api/runtime/v1/jobs/{prepared.job_id}/stream",
+        }
+
+    async def execute_agent_run(
+        self,
+        *,
+        job_id: uuid.UUID,
+        payload: dict[str, Any],
+        event_emitter,
+    ) -> dict[str, Any]:
+        prepared = await self._load_prepared_agent_run(job_id=job_id, payload=payload)
+        try:
+            execution = await self._execute_prepared_agent_run(
+                prepared=prepared,
+                event_emitter=event_emitter,
+                agent_mode=str(payload.get("agent_mode") or "auto").strip() or "auto",
+                mcp=bool(payload.get("mcp")),
+                record_start_event=False,
+            )
+        except Exception:
+            await self._reset_thread_after_failure(
+                thread_id=prepared.thread.id,
+                delete_thread=prepared.created_thread,
+            )
+            raise
+        return self._build_agent_response_payload(prepared=prepared, execution=execution)
+
+    async def stream_job(
+        self,
+        *,
+        job_id: uuid.UUID,
         after_sequence: int = 0,
         heartbeat_interval: float = 10.0,
-    ) -> AsyncIterator[RuntimeRunStreamEvent | None]:
-        return await self._host._run_streams.subscribe(
-            run_id=run_id,
+    ) -> AsyncIterator[RuntimeJobStreamEvent | None]:
+        return await self._host.services.jobs.stream_events(
+            job_id=job_id,
             after_sequence=after_sequence,
             heartbeat_interval=heartbeat_interval,
         )
+
+    async def _publish_agent_stream_event(self, event: RuntimeJobStreamEvent) -> None:
+        if event.job_id is None:
+            raise ValueError("Agent stream events must include a job_id.")
+        await self._host.services.jobs.append_event(
+            job_id=event.job_id,
+            task_id=None,
+            event_type=event.event,
+            status=event.status,
+            stage=event.stage,
+            message=event.message,
+            visibility=event.visibility,
+            terminal=event.terminal,
+            source=event.source,
+            raw_event_type=event.raw_event_type,
+            details={
+                **dict(event.details or {}),
+                "thread_id": str(event.thread_id) if event.thread_id is not None else None,
+                "message_id": str(event.message_id) if event.message_id is not None else None,
+            },
+        )
+        await self._commit_current_unit_of_work()
 
     async def list_agents(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -258,6 +336,8 @@ class AgentApplication:
         title: str | None,
         agent_mode: str | None,
         metadata_json: dict[str, Any] | None = None,
+        mcp: bool = False,
+        queue_name: str = "default",
     ) -> PreparedAgentRun:
         agent = self._host._resolve_agent(agent_name)
         actor_id = self._host._resolve_actor_id()
@@ -281,8 +361,8 @@ class AgentApplication:
                     state=RuntimeThreadState.processing,
                     metadata={
                         "runtime_mode": "local_config",
-                        "active_run_id": str(job_id),
-                        "active_run_type": "agent",
+                        "active_job_id": str(job_id),
+                        "active_job_type": AGENT_RUN_JOB_TYPE,
                     },
                     created_at=timestamp,
                     updated_at=timestamp,
@@ -293,8 +373,8 @@ class AgentApplication:
                 thread.state = RuntimeThreadState.processing
                 thread.updated_at = timestamp
                 metadata = dict(thread.metadata or {})
-                metadata["active_run_id"] = str(job_id)
-                metadata["active_run_type"] = "agent"
+                metadata["active_job_id"] = str(job_id)
+                metadata["active_job_type"] = AGENT_RUN_JOB_TYPE
                 thread.metadata = metadata
                 if str(title or "").strip():
                     thread.title = str(title).strip()
@@ -320,6 +400,25 @@ class AgentApplication:
             user_message = self._host._thread_message_repository.add(user_message)
             thread.last_message_id = user_message.id
             await self._host._thread_repository.save(thread)
+            await self._host.services.jobs.create_job(
+                workspace_id=self._host.context.workspace_id,
+                actor_id=actor_id,
+                job_id=job_id,
+                request=CreateRuntimeJobRequest(
+                    job_type=AGENT_RUN_JOB_TYPE,
+                    queue_name=queue_name,
+                    subject_type="thread",
+                    subject_id=thread.id,
+                    payload={
+                        "agent_definition_id": str(agent.id),
+                        "agent_name": getattr(agent.config, "name", None),
+                        "thread_id": str(thread.id),
+                        "user_message_id": str(user_message.id),
+                        "agent_mode": str(agent_mode or "auto").strip() or "auto",
+                        "mcp": bool(mcp),
+                    },
+                ),
+            )
             if uow is not None:
                 await uow.commit()
 
@@ -332,6 +431,51 @@ class AgentApplication:
             created_thread=existing_thread is None,
         )
 
+    async def _load_prepared_agent_run(
+        self,
+        *,
+        job_id: uuid.UUID,
+        payload: dict[str, Any],
+    ) -> PreparedAgentRun:
+        agent_ref = str(payload.get("agent_definition_id") or payload.get("agent_name") or "").strip()
+        agent = (
+            self._host._resolve_agent_record(agent_ref)
+            if agent_ref
+            else self._host._resolve_agent(None)
+        )
+        thread_id = uuid.UUID(str(payload.get("thread_id")))
+        raw_user_message_id = payload.get("user_message_id")
+        user_message_id = uuid.UUID(str(raw_user_message_id)) if raw_user_message_id else None
+        async with self._host._runtime_operation_scope():
+            thread = await self._host._thread_repository.get_by_id(thread_id)
+            if thread is None:
+                raise ValueError(f"Thread '{thread_id}' was not found.")
+            if thread.workspace_id != self._host.context.workspace_id:
+                raise ValueError("Thread does not belong to the current runtime workspace.")
+            messages = await self._host._thread_message_repository.list_for_thread(thread.id)
+
+        user_message = None
+        if user_message_id is not None:
+            user_message = next((message for message in messages if message.id == user_message_id), None)
+        if user_message is None:
+            user_messages = [
+                message
+                for message in messages
+                if str(getattr(message.role, "value", message.role)) == RuntimeMessageRole.user.value
+            ]
+            user_message = user_messages[-1] if user_messages else None
+        if user_message is None:
+            raise ValueError(f"Thread '{thread_id}' does not contain a user message for agent execution.")
+
+        return PreparedAgentRun(
+            agent=agent,
+            actor_id=self._host._resolve_actor_id(),
+            thread=thread,
+            user_message=user_message,
+            job_id=job_id,
+            created_thread=False,
+        )
+
     async def _execute_prepared_agent_run(
         self,
         *,
@@ -339,7 +483,23 @@ class AgentApplication:
         event_emitter,
         agent_mode: str | None = None,
         mcp: bool = False,
+        record_start_event: bool = True,
     ) -> Any:
+        if record_start_event:
+            await self._host.services.jobs.start_job(
+                job_id=prepared.job_id,
+                worker_id="agent-inline",
+                event_type="run.started",
+                event_status="in_progress",
+                stage="planning",
+                message="Agent run started.",
+                event_details={
+                    "job_type": AGENT_RUN_JOB_TYPE,
+                    "thread_id": str(prepared.thread.id),
+                    "message_id": str(prepared.user_message.id),
+                    "worker_id": "agent-inline",
+                },
+            )
         async with self._host._runtime_operation_scope() as uow:
             execution = await self._host._runtime_host.create_agent(
                 job_id=prepared.job_id,
@@ -357,6 +517,14 @@ class AgentApplication:
             if uow is not None:
                 await uow.commit()
             return execution
+
+    async def _commit_current_unit_of_work(self) -> None:
+        controller = self._host.persistence_controller
+        if controller is None:
+            return
+        uow = controller.current_uow()
+        if uow is not None:
+            await uow.commit()
 
     async def _reset_thread_after_failure(self, *, thread_id: uuid.UUID, delete_thread: bool = False) -> None:
         async with self._host._runtime_operation_scope() as uow:
@@ -384,147 +552,151 @@ class AgentApplication:
         assistant_message = getattr(execution, "assistant_message", None)
         return {
             "thread_id": prepared.thread.id,
-            "run_id": prepared.job_id,
             "job_id": prepared.job_id,
             "message_id": getattr(assistant_message, "id", None),
-            "summary": response.get("summary"),
-            "answer": response.get("answer"),
-            "result": response.get("result"),
-            "visualization": response.get("visualization"),
-            "error": response.get("error"),
+            "answer_markdown": response.get("answer_markdown"),
+            "artifacts": response.get("artifacts"),
             "diagnostics": response.get("diagnostics"),
+            "metadata": response.get("metadata"),
+            "error": response.get("error"),
             "events": list(events or []),
         }
 
-    def _build_terminal_stream_event(
+    def _build_agent_terminal_event(
         self,
         *,
-        sequence: int,
-        event: str,
         prepared: PreparedAgentRun,
         execution: Any,
         payload: dict[str, Any],
-    ) -> RuntimeRunStreamEvent:
+    ) -> dict[str, Any]:
         response = getattr(execution, "response", {}) or {}
         diagnostics = response.get("diagnostics") if isinstance(response, dict) else None
         analyst_outcome = diagnostics.get("analyst_outcome") if isinstance(diagnostics, dict) else None
-        clarification_question = self._extract_clarifying_question(
-            payload=payload,
-            response=response,
-        )
         outcome_status = (
             str(analyst_outcome.get("status")).strip().lower()
             if isinstance(analyst_outcome, dict) and analyst_outcome.get("status")
             else ""
         )
+        clarification_question = self._extract_clarifying_question(
+            payload=payload,
+            response=response,
+        )
         if clarification_question:
+            event_type = "run.completed"
             status = "completed"
             stage = "clarification"
-            event_name = event
         elif outcome_status in {"access_denied", "invalid_request", "query_error", "execution_error"}:
+            event_type = "run.failed"
             status = "failed"
             stage = outcome_status
-            event_name = "run.failed"
         elif outcome_status == "empty_result":
+            event_type = "run.completed"
             status = "completed"
             stage = "empty_result"
-            event_name = event
         else:
+            event_type = "run.completed"
             status = "completed"
             stage = "completed"
-            event_name = event
-        return RuntimeRunStreamEvent(
-            sequence=sequence,
-            event=event_name,
-            status=status,
-            stage=stage,
-            message=self._terminal_message(payload=payload, response=response),
-            timestamp=datetime.now(timezone.utc),
-            run_type="agent",
-            run_id=prepared.job_id,
-            thread_id=prepared.thread.id,
-            job_id=prepared.job_id,
-            message_id=payload.get("message_id"),
-            visibility=AgentEventVisibility.public.value,
-            terminal=True,
-            source="runtime",
-            details={
+
+        return {
+            "event_type": event_type,
+            "status": status,
+            "stage": stage,
+            "message": self._terminal_message(payload=payload, response=response),
+            "details": {
+                "job_type": AGENT_RUN_JOB_TYPE,
+                "thread_id": str(prepared.thread.id),
+                "message_id": str(payload.get("message_id")) if payload.get("message_id") else None,
                 "outcome_status": outcome_status or None,
-                "result_available": payload.get("result") is not None,
-                "visualization_available": payload.get("visualization") is not None,
+                "artifact_count": self._artifact_count(payload),
+                "table_available": self._has_artifact_type(payload, "table"),
+                "chart_available": self._has_artifact_type(payload, "chart"),
                 "error": payload.get("error"),
-                "summary": payload.get("summary"),
-                "answer": payload.get("answer"),
                 "diagnostics": payload.get("diagnostics"),
                 "clarifying_question": clarification_question,
             },
-        )
+        }
 
-    @staticmethod
-    def _terminal_message(*, payload: dict[str, Any], response: dict[str, Any]) -> str:
-        clarifying_question = AgentApplication._extract_clarifying_question(
+    def _build_failure_terminal_details(
+        self,
+        *,
+        prepared: PreparedAgentRun,
+        exc: BaseException,
+    ) -> dict[str, Any]:
+        return {
+            "job_type": AGENT_RUN_JOB_TYPE,
+            "thread_id": str(prepared.thread.id),
+            "message_id": str(prepared.user_message.id),
+            "error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            },
+        }
+
+    def _terminal_message(self, *, payload: dict[str, Any], response: dict[str, Any]) -> str:
+        clarifying_question = self._extract_clarifying_question(
             payload=payload,
             response=response,
         )
         if clarifying_question:
             return clarifying_question
-        answer = payload.get("answer")
-        if isinstance(answer, str) and answer.strip():
-            return answer.strip()
-        summary = payload.get("summary")
-        if isinstance(summary, str) and summary.strip():
-            return summary.strip()
+        answer_markdown = payload.get("answer_markdown")
+        if isinstance(answer_markdown, str) and answer_markdown.strip():
+            return answer_markdown.strip()
         return "Run completed."
 
-    @staticmethod
-    def _extract_clarifying_question(*, payload: dict[str, Any], response: dict[str, Any]) -> str | None:
+    def _extract_clarifying_question(self, *, payload: dict[str, Any], response: dict[str, Any]) -> str | None:
         diagnostics = payload.get("diagnostics")
         if isinstance(diagnostics, dict):
-                question = diagnostics.get("clarifying_question")
-                if isinstance(question, str) and question.strip():
-                    return question.strip()
-                ai_run = diagnostics.get("ai_run")
-                if isinstance(ai_run, dict):
-                    status = str(ai_run.get("status") or "").strip().lower()
-                    route = str(ai_run.get("route") or "").strip().lower()
-                    ai_run_diagnostics = ai_run.get("diagnostics")
-                    stop_reason = (
-                        str(ai_run_diagnostics.get("stop_reason") or "").strip().lower()
-                        if isinstance(ai_run_diagnostics, dict)
-                        else ""
-                    )
-                    if (
-                        status == "clarification_needed"
-                        or stop_reason == "clarification"
-                        or "clarification" in route
-                    ):
-                        answer = payload.get("answer")
-                        if isinstance(answer, str) and answer.strip():
-                            return answer.strip()
-        answer = response.get("answer")
-        if isinstance(answer, str) and answer.strip():
+            question = diagnostics.get("clarifying_question")
+            if isinstance(question, str) and question.strip():
+                return question.strip()
+            ai_run = diagnostics.get("ai_run")
+            if self._is_clarification_ai_run(ai_run):
+                answer_markdown = payload.get("answer_markdown")
+                if isinstance(answer_markdown, str) and answer_markdown.strip():
+                    return answer_markdown.strip()
+
+        answer_markdown = response.get("answer_markdown")
+        if isinstance(answer_markdown, str) and answer_markdown.strip():
             response_diagnostics = response.get("diagnostics")
             if isinstance(response_diagnostics, dict):
                 question = response_diagnostics.get("clarifying_question")
                 if isinstance(question, str) and question.strip():
                     return question.strip()
-                ai_run = response_diagnostics.get("ai_run")
-                if isinstance(ai_run, dict):
-                    status = str(ai_run.get("status") or "").strip().lower()
-                    route = str(ai_run.get("route") or "").strip().lower()
-                    ai_run_diagnostics = ai_run.get("diagnostics")
-                    stop_reason = (
-                        str(ai_run_diagnostics.get("stop_reason") or "").strip().lower()
-                        if isinstance(ai_run_diagnostics, dict)
-                        else ""
-                    )
-                    if (
-                        status == "clarification_needed"
-                        or stop_reason == "clarification"
-                        or "clarification" in route
-                    ):
-                        return answer.strip()
+                if self._is_clarification_ai_run(response_diagnostics.get("ai_run")):
+                    return answer_markdown.strip()
         return None
+
+    @staticmethod
+    def _artifact_count(payload: dict[str, Any]) -> int:
+        artifacts = payload.get("artifacts")
+        return len(artifacts) if isinstance(artifacts, list) else 0
+
+    @staticmethod
+    def _has_artifact_type(payload: dict[str, Any], artifact_type: str) -> bool:
+        artifacts = payload.get("artifacts")
+        if not isinstance(artifacts, list):
+            return False
+        expected = artifact_type.strip().lower()
+        return any(
+            isinstance(artifact, dict)
+            and str(artifact.get("type") or "").strip().lower() == expected
+            for artifact in artifacts
+        )
+
+    def _is_clarification_ai_run(self, value: Any) -> bool:
+        if not isinstance(value, dict):
+            return False
+        status = str(value.get("status") or "").strip().lower()
+        route = str(value.get("route") or "").strip().lower()
+        diagnostics = value.get("diagnostics")
+        stop_reason = (
+            str(diagnostics.get("stop_reason") or "").strip().lower()
+            if isinstance(diagnostics, dict)
+            else ""
+        )
+        return status == "clarification_needed" or stop_reason == "clarification" or "clarification" in route
 
     @staticmethod
     def _agent_llm_connection(config: Any) -> str | None:

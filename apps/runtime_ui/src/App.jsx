@@ -33,7 +33,7 @@ function RuntimeRoutes({ authStatus, session, onLogout }) {
         <Route path="/datasets/:id" element={<DatasetsPage />} />
         <Route path="/semantic-models" element={<SemanticModelsPage />} />
         <Route path="/semantic-models/:id" element={<SemanticModelsPage />} />
-        <Route path="/runs" element={<RunsPage />} />
+        <Route path="/jobs" element={<RunsPage />} />
         <Route path="/query-workspace" element={<SqlPage />} />
         <Route path="/sql" element={<Navigate to="/query-workspace" replace />} />
         <Route path="/agents" element={<AgentsPage />} />

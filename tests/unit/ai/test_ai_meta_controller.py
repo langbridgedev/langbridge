@@ -135,30 +135,33 @@ class _FakeLLMProvider:
             )
         if "Compose the final Langbridge response" in prompt:
             if "Mode: clarification" in prompt:
+                if "I found 'retail' in multiple fields: order channel and segment" in prompt:
+                    return (
+                        '{"answer_markdown":"I found \'retail\' in multiple fields: order channel and segment. Which field should I use?",'
+                        '"artifact_ids":[],"diagnostics":{"mode":"clarification"},'
+                        '"metadata":{}}'
+                    )
                 if "Which revenue metric should I use?" in prompt:
                     return (
-                        '{"summary":"Clarification needed.",'
-                        '"result":{},"visualization":null,"research":{},'
-                        '"answer":"Which revenue metric should I use?",'
-                        '"diagnostics":{"mode":"clarification"}}'
+                        '{"answer_markdown":"Which revenue metric should I use?",'
+                        '"artifact_ids":[],"diagnostics":{"mode":"clarification"},'
+                        '"metadata":{}}'
                     )
                 return (
-                    '{"summary":"Clarification needed.",'
-                    '"result":{},"visualization":null,"research":{},'
-                    '"answer":"Which metric and dataset should I use?",'
-                    '"diagnostics":{"mode":"clarification"}}'
+                    '{"answer_markdown":"Which metric and dataset should I use?",'
+                    '"artifact_ids":[],"diagnostics":{"mode":"clarification"},'
+                    '"metadata":{}}'
                 )
             if "Analyst recovered answer." in prompt:
                 return (
-                    '{"summary":"Analyst recovered answer.",'
-                    '"result":{},"visualization":null,"research":{},'
-                    '"answer":"Analyst recovered answer.","diagnostics":{"mode":"test"}}'
+                    '{"answer_markdown":"Analyst recovered answer.",'
+                    '"artifact_ids":[],"diagnostics":{"mode":"test"},'
+                    '"metadata":{}}'
                 )
             return (
-                '{"summary":"Final answer from verified outputs.",'
-                '"result":{},"visualization":null,'
-                '"research":{"synthesis":"Source-backed synthesis for Langbridge."},'
-                '"answer":"Final answer from verified outputs.","diagnostics":{"mode":"test"}}'
+                '{"answer_markdown":"Final answer from verified outputs.",'
+                '"artifact_ids":[],"diagnostics":{"mode":"test"},'
+                '"metadata":{}}'
             )
         if "Analyze verified Langbridge result data" in prompt:
             return '{"analysis":"Analyzed verified result data.","result":{"columns":[],"rows":[]}}'
@@ -187,6 +190,17 @@ class _PrematureClarificationRouteLLMProvider(_FakeLLMProvider):
                 '"agent_name":null,"task_kind":null,"input":{},'
                 '"clarification_question":"Which marketing efficiency metric and time period should I use?",'
                 '"plan_guidance":null}'
+            )
+        return await super().acomplete(prompt, **kwargs)
+
+
+class _EmptyRouteFieldLLMProvider(_FakeLLMProvider):
+    async def acomplete(self, prompt: str, **kwargs):
+        if "Decide Langbridge agent route" in prompt:
+            return (
+                '{"action":"direct","rationale":"Empty optional fields should normalize before strict validation.",'
+                '"agent_name":"analyst","task_kind":"","input":{},'
+                '"clarification_question":"","plan_guidance":""}'
             )
         return await super().acomplete(prompt, **kwargs)
 
@@ -278,9 +292,9 @@ class _ReviseThenApproveLLMProvider(_FakeLLMProvider):
             )
         if "Compose the final Langbridge response" in prompt and "Presentation revision request:" in prompt:
             return (
-                '{"summary":"Revised answer.",'
-                '"result":{},"visualization":null,"research":{},'
-                '"answer":"Revised answer.","diagnostics":{"mode":"test"}}'
+                '{"answer_markdown":"Revised answer.",'
+                '"artifact_ids":[],"diagnostics":{"mode":"test"},'
+                '"metadata":{}}'
             )
         return await super().acomplete(prompt, **kwargs)
 
@@ -294,7 +308,7 @@ class _ChartReviseThenApproveLLMProvider(_ChartFollowUpShouldNotRouteLLMProvider
         self.prompts.append(prompt)
         if "Review the final Langbridge answer package" in prompt:
             self.final_review_calls += 1
-            if '"visualization"' in prompt and '"chart_type": "pie"' in prompt:
+            if '"primary_visualization"' in prompt and '"chart_type": "pie"' in prompt:
                 return (
                     '{"action":"approve","reason_code":"grounded_complete",'
                     '"rationale":"Chart-ready response now directly fulfills the request.",'
@@ -309,12 +323,9 @@ class _ChartReviseThenApproveLLMProvider(_ChartFollowUpShouldNotRouteLLMProvider
             )
         if "Compose the final Langbridge response" in prompt and "Presentation revision request:" in prompt:
             return (
-                '{"summary":"Pie chart ready for net revenue by order channel.",'
-                '"result":{"columns":["order_channel","net_revenue","gross_margin"],'
-                '"rows":[["Online",125000,42000],["Retail",98000,31500]]},'
-                '"visualization":null,"research":{},'
-                '"answer":"Here is a pie-chart-ready split for net revenue by order channel. A pie chart should show one metric at a time, so this version uses net revenue.",'
-                '"diagnostics":{"mode":"test"}}'
+                '{"answer_markdown":"Here is a pie-chart-ready split for net revenue by order channel. A pie chart should show one metric at a time, so this version uses net revenue.",'
+                '"artifact_ids":["primary_result"],'
+                '"diagnostics":{"mode":"test"},"metadata":{}}'
             )
         return await super().acomplete(prompt, **kwargs)
 
@@ -337,6 +348,83 @@ def _controller() -> MetaControllerAgent:
     return MetaControllerAgent(registry=registry, llm_provider=llm, presentation_agent=_presentation(llm))
 
 
+class _GuidedAnalystAgent(BaseAgent):
+    @property
+    def specification(self) -> AgentSpecification:
+        return AgentSpecification(
+            name="analyst",
+            description="Analyst with profile presentation guidance.",
+            task_kinds=[AgentTaskKind.analyst],
+            routing=AgentRoutingSpec(keywords=["revenue"], direct_threshold=1),
+            output_contract=AgentIOContract(required_keys=["answer"]),
+        )
+
+    @property
+    def presentation_guidance(self) -> dict[str, object]:
+        return {
+            "profile_name": "growth_analyst",
+            "agent_name": "analyst",
+            "instructions": "Please add the currency symbol (which is £) to all revenue and spend figures.",
+            "formatting": {
+                "currency": {"code": "GBP", "symbol": "£"},
+                "number": {"use_grouping": True, "maximum_fraction_digits": 2},
+            },
+        }
+
+    async def execute(self, task: AgentTask):
+        return self.build_result(
+            task=task,
+            status=AgentResultStatus.succeeded,
+            output={"answer": "Revenue by region is available."},
+        )
+
+
+class _RecordingPresentationAgent(BaseAgent):
+    def __init__(self) -> None:
+        self.contexts: list[dict[str, object]] = []
+
+    @property
+    def specification(self) -> AgentSpecification:
+        return AgentSpecification(
+            name="presentation",
+            description="Records presentation contexts.",
+            task_kinds=[AgentTaskKind.presentation],
+            output_contract=AgentIOContract(required_keys=["response"]),
+        )
+
+    async def execute(self, task: AgentTask):
+        self.contexts.append(dict(task.context))
+        return self.build_result(
+            task=task,
+            status=AgentResultStatus.succeeded,
+            output={
+                "response": {
+                    "answer_markdown": "Presented answer.",
+                    "artifacts": [],
+                    "diagnostics": {"mode": "test"},
+                    "metadata": {"contract_version": "markdown_artifacts.v1"},
+                }
+            },
+        )
+
+
+def test_meta_controller_passes_agent_presentation_guidance_to_presentation() -> None:
+    presentation = _RecordingPresentationAgent()
+    controller = MetaControllerAgent(
+        registry=AgentRegistry([_GuidedAnalystAgent()]),
+        llm_provider=_FakeLLMProvider(),
+        presentation_agent=presentation,
+    )
+
+    run = _run(controller.handle(question="Show revenue by region"))
+
+    assert run.status == "completed"
+    assert presentation.contexts
+    guidance = presentation.contexts[-1]["presentation_guidance"]
+    assert guidance["agent_name"] == "analyst"
+    assert guidance["formatting"]["currency"]["symbol"] == "£"
+
+
 def test_meta_controller_routes_simple_analyst_question_directly() -> None:
     run = _run(
         _controller().handle(
@@ -356,8 +444,30 @@ def test_meta_controller_routes_simple_analyst_question_directly() -> None:
     assert run.review_decisions[-1].reason_code == PlanReviewReasonCode.all_steps_completed
     assert run.final_review["action"] == FinalReviewAction.approve.value
     assert run.final_review["reason_code"] == FinalReviewReasonCode.grounded_complete.value
-    assert run.final_result["summary"] == "Final answer from verified outputs."
-    assert run.final_result["visualization"] is None
+    assert run.final_result["answer_markdown"] == "Final answer from verified outputs.\n\n{{artifact:primary_result}}"
+    assert "summary" not in run.final_result
+    assert "visualization" not in run.final_result
+
+
+def test_meta_controller_normalizes_empty_optional_route_fields_before_validation() -> None:
+    llm = _EmptyRouteFieldLLMProvider()
+    controller = MetaControllerAgent(
+        registry=AgentRegistry([AnalystAgent(llm_provider=llm, config=_analyst_config())]),
+        llm_provider=llm,
+        presentation_agent=_presentation(llm),
+    )
+
+    run = _run(
+        controller.handle(
+            question="Show revenue by region",
+            context={"result": {"columns": [], "rows": []}},
+        )
+    )
+
+    assert run.execution_mode == "direct"
+    assert run.status == "completed"
+    assert run.diagnostics["route_decision"]["task_kind"] is None
+    assert run.diagnostics["route_decision"]["clarification_question"] is None
 
 
 def test_meta_controller_routes_single_analyst_web_research_directly() -> None:
@@ -391,7 +501,7 @@ def test_meta_controller_routes_single_analyst_web_research_directly() -> None:
     assert run.review_decisions[-1].reason_code == PlanReviewReasonCode.all_steps_completed
     assert analyst.calls == 1
     assert analyst.inputs[0]["agent_mode"] == "research"
-    assert run.final_result["summary"] == "Final answer from verified outputs."
+    assert run.final_result["answer_markdown"] == "Final answer from verified outputs."
 
 
 def test_meta_controller_redirects_premature_metric_timeframe_clarification_to_research() -> None:
@@ -482,7 +592,7 @@ def test_meta_controller_can_ask_clarification_before_execution() -> None:
     assert run.status == "clarification_needed"
     assert run.plan.route == "clarification"
     assert run.verification == []
-    assert run.final_result["answer"] == "Which metric and dataset should I use?"
+    assert run.final_result["answer_markdown"] == "Which metric and dataset should I use?"
     assert run.diagnostics["stop_reason"] == "clarification"
 
 
@@ -501,7 +611,7 @@ def test_final_review_can_request_clarification_before_presentation() -> None:
     assert run.final_review["action"] == FinalReviewAction.ask_clarification.value
     assert run.final_review["reason_code"] == FinalReviewReasonCode.ambiguous_question.value
     assert run.final_review["clarification_question"] == "Which revenue metric should I use?"
-    assert run.final_result["answer"] == "Which revenue metric should I use?"
+    assert run.final_result["answer_markdown"] == "Which revenue metric should I use?"
     assert run.diagnostics["stop_reason"] == "final_review_clarification"
 
 
@@ -524,7 +634,7 @@ def test_final_review_revise_answer_revises_presentation_without_planner_replan(
     assert llm.final_review_calls == 2
     assert run.final_review["action"] == FinalReviewAction.approve.value
     assert run.final_review["reason_code"] == FinalReviewReasonCode.grounded_complete.value
-    assert run.final_result["answer"] == "Revised answer."
+    assert run.final_result["answer_markdown"] == "Revised answer."
     assert run.diagnostics["replan_count"] == 0
     assert run.diagnostics["stop_reason"] == "final_review_presentation_revision"
 
@@ -558,7 +668,7 @@ def test_planner_can_return_clarification_instead_of_empty_plan_failure() -> Non
     assert run.execution_mode == "planned"
     assert run.status == "clarification_needed"
     assert run.plan.route == "planned:clarification"
-    assert run.final_result["answer"] == "Which metric and dataset should I use?"
+    assert run.final_result["answer_markdown"] == "Which metric and dataset should I use?"
     assert run.diagnostics["clarification_source"] == "planner"
 
 
@@ -747,22 +857,13 @@ class _ArtifactContractPresentationAgent(BaseAgent):
         self.calls += 1
         if task.context.get("presentation_revision_request"):
             response = {
-                "summary": "Revised artifact-safe answer.",
-                "result": {},
-                "visualization": None,
-                "research": {},
-                "answer": "Revised artifact-safe answer.",
                 "answer_markdown": "Revised artifact-safe answer.",
                 "artifacts": [],
                 "diagnostics": {"mode": "test"},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             }
         else:
             response = {
-                "summary": "Broken artifact answer.",
-                "result": {},
-                "visualization": None,
-                "research": {},
-                "answer": "Broken artifact answer.\n\n{{artifact:bad_table}}",
                 "answer_markdown": "Broken artifact answer.\n\n{{artifact:bad_table}}",
                 "artifacts": [
                     {
@@ -771,9 +872,11 @@ class _ArtifactContractPresentationAgent(BaseAgent):
                         "role": "primary_result",
                         "title": "Broken table",
                         "payload": {"columns": ["region", "revenue"]},
+                        "provenance": {"source": "test"},
                     }
                 ],
                 "diagnostics": {"mode": "test"},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             }
         return self.build_result(
             task=task,
@@ -1018,7 +1121,7 @@ def test_pev_replans_after_missing_required_output_key() -> None:
     assert run.review_decisions[0].reason_code == PlanReviewReasonCode.deterministic_verification_failed
     assert run.review_decisions[-1].action == PlanReviewAction.finalize
     assert run.diagnostics["replan_count"] == 1
-    assert run.final_result["answer"] == "Analyst recovered answer."
+    assert run.final_result["answer_markdown"] == "Analyst recovered answer."
 
 
 def test_meta_controller_preserves_requested_agent_mode_for_direct_analyst() -> None:
@@ -1055,7 +1158,7 @@ def test_meta_controller_normalizes_fresh_context_analysis_choice_to_auto() -> N
     assert run.execution_mode == "direct"
     assert run.status == "completed"
     assert "agent_mode" not in run.plan.steps[0].input
-    assert run.final_result["summary"] == "Final answer from verified outputs."
+    assert run.final_result["answer_markdown"] == "Final answer from verified outputs.\n\n{{artifact:primary_result}}"
 
 
 def test_meta_controller_normalizes_legacy_answer_mode_alias() -> None:
@@ -1076,7 +1179,7 @@ def test_meta_controller_normalizes_legacy_answer_mode_alias() -> None:
     assert run.execution_mode == "direct"
     assert run.status == "completed"
     assert "agent_mode" not in run.plan.steps[0].input
-    assert run.final_result["summary"] == "Final answer from verified outputs."
+    assert run.final_result["answer_markdown"] == "Final answer from verified outputs.\n\n{{artifact:primary_result}}"
 
 
 def test_meta_controller_reuses_continuation_state_for_chart_follow_up_without_route_llm() -> None:
@@ -1111,7 +1214,10 @@ def test_meta_controller_reuses_continuation_state_for_chart_follow_up_without_r
     assert run.plan.steps[0].input["reuse_last_result"] is True
     assert run.plan.steps[0].input["follow_up_intent"] == "visualize_prior_result"
     assert run.diagnostics["route_decision"]["agent_name"] == "analyst"
-    assert run.final_result["visualization"]["chart_type"] == "pie"
+    chart_artifact = next(
+        artifact for artifact in run.final_result["artifacts"] if artifact["id"] == "primary_visualization"
+    )
+    assert chart_artifact["payload"]["chart_type"] == "pie"
     assert all("Decide Langbridge agent route" not in prompt for prompt in llm.prompts)
 
 
@@ -1152,7 +1258,10 @@ def test_meta_controller_carries_requested_chart_type_from_follow_up_resolution(
     assert run.plan.steps[0].input["agent_mode"] == "context_analysis"
     assert run.plan.steps[0].input["follow_up_intent"] == "visualize_prior_result"
     assert run.plan.steps[0].input["follow_up_chart_type"] == "bar"
-    assert run.final_result["visualization"]["chart_type"] == "bar"
+    chart_artifact = next(
+        artifact for artifact in run.final_result["artifacts"] if artifact["id"] == "primary_visualization"
+    )
+    assert chart_artifact["payload"]["chart_type"] == "bar"
     assert all("Decide Langbridge agent route" not in prompt for prompt in llm.prompts)
 
 
@@ -1188,8 +1297,11 @@ def test_chart_follow_up_can_complete_after_final_review_requests_presentation_r
     assert run.final_review["action"] == FinalReviewAction.approve.value
     assert run.diagnostics["stop_reason"] == "final_review_presentation_revision"
     assert run.diagnostics["replan_count"] == 0
-    assert run.final_result["visualization"]["chart_type"] == "pie"
-    assert "pie-chart-ready split" in run.final_result["answer"]
+    chart_artifact = next(
+        artifact for artifact in run.final_result["artifacts"] if artifact["id"] == "primary_visualization"
+    )
+    assert chart_artifact["payload"]["chart_type"] == "pie"
+    assert "pie-chart-ready split" in run.final_result["answer_markdown"]
 
 
 def test_meta_controller_requeries_for_chart_follow_up_with_structured_multi_filters() -> None:
@@ -1381,7 +1493,7 @@ def test_meta_controller_clarifies_ambiguous_filter_follow_up() -> None:
 
     assert run.status == "clarification_needed"
     assert run.plan.route == "clarification"
-    assert run.final_result["answer"] == (
+    assert run.final_result["answer_markdown"] == (
         "I found 'retail' in multiple fields: order channel and segment. Which field should I use?"
     )
     assert all("Decide Langbridge agent route" not in prompt for prompt in llm.prompts)
@@ -1761,8 +1873,10 @@ def test_presentation_agent_returns_chart_when_tabular_data_is_chartable() -> No
     )
 
     response = result.output["response"]
-    assert response["visualization"] is not None
-    assert response["visualization"]["chart_type"] == "bar"
+    chart_artifact = next(
+        artifact for artifact in response["artifacts"] if artifact["id"] == "primary_visualization"
+    )
+    assert chart_artifact["payload"]["chart_type"] == "bar"
 
 
 def test_analyst_deep_research_mode_exposes_structured_sources_and_findings() -> None:

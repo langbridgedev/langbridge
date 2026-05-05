@@ -1,6 +1,7 @@
 """LLM-backed SQL analyst tool for Langbridge AI."""
 import asyncio
 import inspect
+import json
 import logging
 import re
 import time
@@ -237,6 +238,7 @@ class SqlAnalysisTool(AIEventSource):
         search_text = ""
         if request.semantic_search_result_prompts:
             search_text = "Search hints:\n" + "\n".join(request.semantic_search_result_prompts) + "\n"
+        resolved_entity_text = self._render_resolved_entities(request.resolved_entities)
         filters_text = ""
         if request.filters:
             filters_text = "Filters:\n" + "\n".join(
@@ -254,6 +256,7 @@ class SqlAnalysisTool(AIEventSource):
             f"{render_analysis_context(self.context, self.semantic_model)}\n"
             f"{orchestration_text}"
             f"{search_text}"
+            f"{resolved_entity_text}"
             f"{filters_text}"
             f"{conversation_text}"
             f"{limit_text}"
@@ -265,6 +268,57 @@ class SqlAnalysisTool(AIEventSource):
                 relation_name=self._semantic_relation_name(),
             )
         return DATASET_SQL_ORCHESTRATION_INSTRUCTION.format(shared_sections=shared_sections)
+
+    @staticmethod
+    def _render_resolved_entities(resolved_entities: list[dict[str, Any]] | None) -> str:
+        if not resolved_entities:
+            return ""
+        lines = [
+            "Resolved entity context:",
+            "- Use this governed context as authoritative for entity filters.",
+            "- Prefer the canonical identifier over the supplied display name when both are available.",
+            "- For 'since inception', use the resolved inception/start/launch date when present.",
+        ]
+        for item in resolved_entities:
+            if not isinstance(item, dict):
+                continue
+            reference = item.get("reference") if isinstance(item.get("reference"), dict) else {}
+            canonical_identifier = str(item.get("canonical_identifier") or reference.get("identifier") or "").strip()
+            canonical_name = str(item.get("canonical_name") or reference.get("supplied_name") or "").strip()
+            supplied_name = str(reference.get("supplied_name") or "").strip()
+            lines.append(
+                "  - "
+                + ", ".join(
+                    part
+                    for part in (
+                        f"canonical_identifier={canonical_identifier}" if canonical_identifier else "",
+                        f"canonical_name={canonical_name}" if canonical_name else "",
+                        f"supplied_name={supplied_name}" if supplied_name else "",
+                        f"query_scope={item.get('query_scope')}" if item.get("query_scope") else "",
+                        f"source_tool={item.get('source_tool')}" if item.get("source_tool") else "",
+                    )
+                    if part
+                )
+            )
+            matched_row = item.get("matched_row")
+            if isinstance(matched_row, dict) and matched_row:
+                compact_row = {
+                    str(key): value
+                    for key, value in matched_row.items()
+                    if value not in (None, "")
+                }
+                lines.append(f"    matched_row={json.dumps(compact_row, default=str)}")
+            matched_rows_sample = item.get("matched_rows_sample")
+            if isinstance(matched_rows_sample, list) and len(matched_rows_sample) > 1:
+                compact_rows = [
+                    {str(key): value for key, value in row.items() if value not in (None, "")}
+                    for row in matched_rows_sample
+                    if isinstance(row, dict)
+                ]
+                lines.append(f"    matched_rows_sample={json.dumps(compact_rows[:5], default=str)}")
+            if item.get("name_mismatch"):
+                lines.append("    note=supplied name differed from the governed resolved name; keep the identifier authoritative.")
+        return "\n".join(lines) + "\n"
 
     def _semantic_relation_name(self) -> str:
         relation_name = str(self.context.asset_name or "").strip()

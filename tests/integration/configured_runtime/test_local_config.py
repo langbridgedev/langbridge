@@ -121,9 +121,10 @@ def test_configured_local_runtime_ask_agent_uses_agent_execution() -> None:
         captured["request"] = request
         return SimpleNamespace(
             response={
-                "summary": "Handled by agent execution",
-                "result": {"rows": [{"value": 1}]},
-                "visualization": None,
+                "answer_markdown": "Handled by agent execution",
+                "artifacts": [],
+                "diagnostics": {},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             }
         )
 
@@ -139,7 +140,7 @@ def test_configured_local_runtime_ask_agent_uses_agent_execution() -> None:
         )
 
         request = captured["request"]
-        assert payload["summary"] == "Handled by agent execution"
+        assert payload["answer_markdown"] == "Handled by agent execution"
         assert payload["thread_id"] == request.thread_id
         assert request.agent_definition_id == next(iter(runtime._agents.values())).id
         assert request.agent_mode == "sql"
@@ -1019,7 +1020,14 @@ def test_configured_runtime_sqlite_metadata_persists_threads_across_rebuilds(tmp
     runtime = build_configured_local_runtime(config_path=config_path)
 
     async def fake_execute(*, job_id, request, event_emitter=None):
-        return SimpleNamespace(response={"summary": "persisted", "result": None, "visualization": None})
+        return SimpleNamespace(
+            response={
+                "answer_markdown": "persisted",
+                "artifacts": [],
+                "diagnostics": {},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
+            }
+        )
 
     runtime.services.agent_execution = SimpleNamespace(execute=fake_execute)
     payload = asyncio.run(runtime.ask_agent(prompt="Persist this thread"))
@@ -1063,16 +1071,17 @@ def test_configured_runtime_sqlite_flushes_thread_messages_before_agent_executio
         )
         return SimpleNamespace(
             response={
-                "summary": "visible within same operation",
-                "result": None,
-                "visualization": None,
+                "answer_markdown": "visible within same operation",
+                "artifacts": [],
+                "diagnostics": {},
+                "metadata": {"contract_version": "markdown_artifacts.v1"},
             }
         )
 
     runtime.services.agent_execution = SimpleNamespace(execute=fake_execute)
     payload = asyncio.run(runtime.ask_agent(prompt="Verify flush visibility"))
 
-    assert payload["summary"] == "visible within same operation"
+    assert payload["answer_markdown"] == "visible within same operation"
     thread = captured["thread"]
     messages = captured["messages"]
     assert thread is not None
@@ -1271,6 +1280,81 @@ ai:
         assert llm_connection is not None
         assert llm_connection.api_key == "test-key"
         assert llm_connection.workspace_id == runtime.context.workspace_id
+
+
+def test_configured_local_runtime_preserves_structured_output_llm_configuration() -> None:
+    with TemporaryDirectory() as temp_dir:
+        config_path = Path(temp_dir) / "langbridge_config.yml"
+        config_path.write_text(
+            """
+version: 1
+
+connectors:
+  - name: local_demo
+    type: sqlite
+    connection:
+      location: ./example.db
+
+datasets:
+  - name: orders
+    connector: local_demo
+    materialization_mode: live
+    semantic_model: commerce
+    source:
+      table: orders
+
+semantic_models:
+  - name: commerce
+    default: true
+    model:
+      version: "1"
+      name: commerce
+      datasets:
+        orders:
+          relation_name: orders
+          dimensions:
+            - name: country
+              expression: country
+              type: string
+          measures:
+            - name: revenue
+              expression: revenue
+              type: number
+              aggregation: sum
+
+llm_connections:
+  - name: local_openai
+    provider: openai
+    model: gpt-4o-mini
+    api_key: test-key
+    default: true
+    configuration:
+      structured_outputs: native
+      timeout: 30
+
+ai:
+  profiles:
+    - name: analyst
+      default: true
+      scope:
+        semantic_models: [commerce]
+        query_policy: semantic_only
+      llm:
+        llm_connection: local_openai
+""".strip(),
+            encoding="utf-8",
+        )
+        runtime = build_configured_local_runtime(config_path=config_path)
+
+        agent_record = runtime._resolve_agent(None)
+        llm_connection = asyncio.run(
+            runtime.services.agent_execution._definitions.get_llm_connection(  # type: ignore[union-attr]
+                agent_record.agent_definition.llm_connection_id
+            )
+        )
+
+        assert llm_connection.configuration["structured_outputs"] == "native"
+        assert llm_connection.configuration["timeout"] == 30
 
 
 def test_configured_local_runtime_normalizes_canonical_agent_tools() -> None:
@@ -1873,38 +1957,38 @@ semantic_models:
 
 
 @pytest.mark.parametrize(
-    ("example_name", "connector_name", "env_vars", "expected_resources", "expected_fields"),
+    ("example_path", "connector_name", "env_vars", "expected_resources", "expected_fields"),
     [
-            (
-                "shopify_sync",
-                "shopify_demo",
-                {
-                    "SHOPIFY_SHOP_DOMAIN": "acme.myshopify.com",
-                    "SHOPIFY_ACCESS_TOKEN": "shpat_test_token",
-                },
-                ["orders", "customers", "products"],
-                {
-                    "shop_domain": "acme.myshopify.com",
-                    "access_token": "shpat_test_token",
-                },
-            ),
         (
-            "hubspot_sync",
-                "hubspot_demo",
-                {
-                    "HUBSPOT_ACCESS_TOKEN": "pat_test_token",
-                },
-                ["contacts", "companies", "deals", "tickets"],
-                {
-                    "access_token": "pat_test_token",
-                },
-            ),
+            ("connectors", "shopify_sync"),
+            "shopify_demo",
+            {
+                "SHOPIFY_SHOP_DOMAIN": "acme.myshopify.com",
+                "SHOPIFY_ACCESS_TOKEN": "shpat_test_token",
+            },
+            ["orders", "customers", "products"],
+            {
+                "shop_domain": "acme.myshopify.com",
+                "access_token": "shpat_test_token",
+            },
+        ),
+        (
+            ("connectors", "hubspot_sync"),
+            "hubspot_demo",
+            {
+                "HUBSPOT_ACCESS_TOKEN": "pat_test_token",
+            },
+            ["contacts", "companies", "deals", "tickets"],
+            {
+                "access_token": "pat_test_token",
+            },
+        ),
     ],
 )
 def test_saas_connector_example_configs_build_runtime_connectors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    example_name: str,
+    example_path: tuple[str, ...],
     connector_name: str,
     env_vars: dict[str, str],
     expected_resources: list[str],
@@ -1914,8 +1998,8 @@ def test_saas_connector_example_configs_build_runtime_connectors(
         monkeypatch.setenv(key, value)
 
     repo_root = Path(__file__).resolve().parents[3]
-    source_config_path = repo_root / "examples" / example_name / "langbridge_config.yml"
-    config_dir = tmp_path / example_name
+    source_config_path = repo_root / "examples" / Path(*example_path) / "langbridge_config.yml"
+    config_dir = tmp_path / Path(*example_path)
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "langbridge_config.yml"
     config_path.write_text(source_config_path.read_text(encoding="utf-8"), encoding="utf-8")

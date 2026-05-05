@@ -1,7 +1,9 @@
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from langbridge.runtime.application.job_handlers import SQL_QUERY_JOB_TYPE
 from langbridge.runtime.models import (
+    CreateRuntimeJobRequest,
     CreateSqlJobRequest,
     SqlQueryRequest,
     SqlQueryScope,
@@ -17,6 +19,34 @@ class SqlApplication:
         self._host = host
 
     async def query_sql(self, *, request: SqlQueryRequest) -> dict[str, Any]:
+        return await self.execute_sql_query(request=request)
+
+    async def create_sql_query_job(self, *, request: SqlQueryRequest) -> dict[str, Any]:
+        payload = request.model_dump(mode="json")
+        async with self._host._runtime_operation_scope() as uow:
+            job = await self._host.services.jobs.create_job(
+                workspace_id=self._host.context.workspace_id,
+                actor_id=self._host.context.actor_id,
+                request=CreateRuntimeJobRequest(
+                    job_type=SQL_QUERY_JOB_TYPE,
+                    subject_type="sql_query",
+                    required_capabilities=self._required_capabilities(request=request),
+                    payload=payload,
+                ),
+            )
+            if uow is not None:
+                await uow.commit()
+
+        self._host.wake_job_processor()
+        return {
+            "status": "queued",
+            "job_id": job.id,
+            "job_type": SQL_QUERY_JOB_TYPE,
+            "query_scope": request.query_scope.value,
+            "stream_path": f"/api/runtime/v1/jobs/{job.id}/stream",
+        }
+
+    async def execute_sql_query(self, *, request: SqlQueryRequest) -> dict[str, Any]:
         if request.query_scope == SqlQueryScope.semantic:
             payload = await self._host._applications.semantic.query_semantic_sql(request=request)
             normalized = dict(payload or {})
@@ -63,6 +93,14 @@ class SqlApplication:
         )
         payload.setdefault("generated_sql", None)
         return payload
+
+    def _required_capabilities(self, *, request: SqlQueryRequest) -> list[str]:
+        capabilities = ["sql.query", f"sql.query:{request.query_scope.value}"]
+        if request.connection_name:
+            capabilities.append(f"connector:{request.connection_name}")
+        if request.connection_id is not None:
+            capabilities.append(f"connector:{request.connection_id}")
+        return capabilities
 
     def _build_job_request(self, *, request: SqlQueryRequest) -> CreateSqlJobRequest:
         connector_id = None

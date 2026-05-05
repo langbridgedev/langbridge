@@ -167,7 +167,7 @@ class AgentExecutionService:
                 user_query=user_query,
                 ai_run=ai_run,
             )
-            self._thread_state.clear_active_run_metadata(thread)
+            self._thread_state.clear_active_job_metadata(thread)
 
             assistant_message = self._thread_state.record_assistant_message(
                 thread=thread,
@@ -194,8 +194,7 @@ class AgentExecutionService:
                     "job_id": str(job_id),
                     "execution_mode": ai_run.execution_mode,
                     "route": ai_run.plan.route,
-                    "summary": response.get("summary"),
-                    "answer": response.get("answer"),
+                    "answer_markdown": response.get("answer_markdown"),
                     "clarifying_question": self._response_builder.clarifying_question(response),
                 },
             )

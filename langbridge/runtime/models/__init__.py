@@ -10,8 +10,6 @@ from langbridge.runtime.models.agent_runtime import (
 from langbridge.runtime.models.catalog import (
     DatasetRevision,
     LineageEdge,
-    RuntimeJob,
-    RuntimeJobStatus,
 )
 from langbridge.runtime.models.federation_diagnostics import (
     FederationCacheStageSurface,
@@ -69,12 +67,21 @@ from langbridge.runtime.models.jobs import (
     CreateDatasetCsvIngestJobRequest,
     CreateDatasetPreviewJobRequest,
     CreateDatasetProfileJobRequest,
+    CreateRuntimeJobRequest,
     CreateSemanticQueryJobRequest,
     CreateSqlJobRequest,
     DatasetPolicyDefaultsRequest,
     DatasetSelectionColumnRequest,
     DatasetSelectionRequest,
     JobType,
+    RuntimeJob,
+    RuntimeJobArtifact,
+    RuntimeJobCancelRequest,
+    RuntimeJobEvent,
+    RuntimeJobEventVisibility,
+    RuntimeJobPriority,
+    RuntimeJobStatus,
+    RuntimeJobTask,
     SqlQueryRequest,
     SqlQueryScope,
     SqlSelectedDataset,
@@ -104,7 +111,7 @@ from langbridge.runtime.models.state import (
     SqlJob,
     SqlJobResultArtifact,
 )
-from langbridge.runtime.models.streaming import RuntimeAgentRunStreamEvent, RuntimeRunStreamEvent
+from langbridge.runtime.models.streaming import RuntimeJobStreamEvent
 
 __all__ = [
     "ConnectionMetadata",
@@ -139,6 +146,7 @@ __all__ = [
     "CreateDatasetCsvIngestJobRequest",
     "CreateDatasetPreviewJobRequest",
     "CreateDatasetProfileJobRequest",
+    "CreateRuntimeJobRequest",
     "CreateSemanticQueryJobRequest",
     "CreateSqlJobRequest",
     "DatasetColumnMetadata",
@@ -168,10 +176,15 @@ __all__ = [
     "RuntimeConversationMemoryItem",
     "RuntimeFederationDiagnostics",
     "RuntimeAgentDefinition",
-    "RuntimeAgentRunStreamEvent",
-    "RuntimeRunStreamEvent",
+    "RuntimeJobStreamEvent",
     "RuntimeJob",
+    "RuntimeJobArtifact",
+    "RuntimeJobCancelRequest",
+    "RuntimeJobEvent",
+    "RuntimeJobEventVisibility",
+    "RuntimeJobPriority",
     "RuntimeJobStatus",
+    "RuntimeJobTask",
     "RuntimeMessageRole",
     "SemanticGraphMetricRequest",
     "SemanticGraphQueryResponse",

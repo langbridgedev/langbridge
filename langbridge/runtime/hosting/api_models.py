@@ -2,7 +2,7 @@ from datetime import datetime
 import uuid
 from typing import Any
 
-from pydantic import Field, field_serializer, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_serializer, field_validator, model_validator
 
 from langbridge.connectors.base.config import (
     ConnectorFamily,
@@ -27,7 +27,13 @@ from langbridge.runtime.models.metadata import (
     DatasetType,
     ManagementMode,
 )
-from langbridge.runtime.models.jobs import SqlQueryRequest, SqlQueryScope
+from langbridge.runtime.models.jobs import (
+    CreateRuntimeJobRequest,
+    RuntimeJob,
+    RuntimeJobCancelRequest,
+    SqlQueryRequest,
+    SqlQueryScope,
+)
 from langbridge.runtime.models.state import ConnectorSyncMode, ConnectorSyncStatus
 
 
@@ -143,6 +149,7 @@ class RuntimeSemanticModelSummary(RuntimeModel):
     dataset_names: list[str] = Field(default_factory=list)
     dimension_count: int = 0
     measure_count: int = 0
+    metric_count: int = 0
     management_mode: ManagementMode
     managed: bool = False
 
@@ -430,7 +437,15 @@ class RuntimeSqlQueryResponse(RuntimeModel):
     federation_diagnostics: RuntimeFederationDiagnostics | None = None
 
 
-class RuntimeAgentAskRequest(RuntimeRequestModel):
+class RuntimeSqlQueryJobResponse(RuntimeModel):
+    status: str
+    job_id: uuid.UUID
+    job_type: str
+    query_scope: SqlQueryScope
+    stream_path: str
+
+
+class RuntimeAgentRunRequest(RuntimeRequestModel):
     message: str = Field(..., min_length=1)
     agent_id: uuid.UUID | None = None
     agent_name: str | None = None
@@ -440,17 +455,50 @@ class RuntimeAgentAskRequest(RuntimeRequestModel):
     metadata_json: dict[str, Any] | None = None
 
 
+class RuntimeAgentRunResponse(RuntimeModel):
+    thread_id: uuid.UUID
+    status: str
+    job_id: uuid.UUID
+    job_type: str
+    message_id: uuid.UUID
+    agent_name: str | None = None
+    stream_path: str
+
+
+class RuntimeAgentAskRequest(RuntimeAgentRunRequest):
+    pass
+
+
 class RuntimeAgentAskResponse(RuntimeModel):
+    model_config = ConfigDict(extra="forbid")
+
     thread_id: uuid.UUID | None = None
     status: str
-    run_id: uuid.UUID | None = None
     job_id: uuid.UUID | None = None
     message_id: uuid.UUID | None = None
-    summary: str | None = None
-    result: Any | None = None
-    visualization: Any | None = None
+    answer_markdown: str
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     error: dict[str, Any] | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RuntimeJobCreateRequest(CreateRuntimeJobRequest):
+    pass
+
+
+class RuntimeJobCancelBody(RuntimeJobCancelRequest):
+    pass
+
+
+class RuntimeJobResponse(RuntimeJob):
+    pass
+
+
+class RuntimeJobListResponse(RuntimeModel):
+    items: list[RuntimeJobResponse] = Field(default_factory=list)
+    total: int = 0
 
 
 class RuntimeThreadCreateRequest(RuntimeRequestModel):
@@ -568,6 +616,8 @@ class RuntimeSyncExecutionResult(RuntimeModel):
 
 class RuntimeSyncResponse(RuntimeModel):
     status: str
+    job_id: uuid.UUID | None = None
+    job_type: str | None = None
     dataset_id: uuid.UUID | None = None
     dataset_name: str | None = None
     connector_id: uuid.UUID | None = None
@@ -575,6 +625,7 @@ class RuntimeSyncResponse(RuntimeModel):
     sync_mode: ConnectorSyncMode | None = None
     resources: list[RuntimeSyncExecutionResult] = Field(default_factory=list)
     summary: str | None = None
+    stream_path: str | None = None
     error: str | None = None
 
 

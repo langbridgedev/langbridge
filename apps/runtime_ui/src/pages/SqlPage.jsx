@@ -12,7 +12,7 @@ import {
   fetchDatasets,
   fetchSemanticModel,
   fetchSemanticModels,
-  querySql,
+  runSqlQuery,
 } from "../lib/runtimeApi";
 import {
   formatDateTime,
@@ -438,6 +438,18 @@ function buildQueryCardLabel(queryScope, connectionName = "") {
   return buildScopeLabel(queryScope);
 }
 
+function buildSqlJobProgress(event, fallbackJobId = "") {
+  const status = String(event?.status || "").trim() || "running";
+  const stage = String(event?.stage || event?.event || "").trim();
+  return {
+    jobId: String(event?.job_id || fallbackJobId || "").trim(),
+    event: String(event?.event || "").trim(),
+    status,
+    stage,
+    message: String(event?.message || "").trim() || "SQL query job is running.",
+  };
+}
+
 function buildSemanticStarterQuery(modelName = "<semantic_model>") {
   return `SELECT *
 FROM ${modelName}
@@ -471,6 +483,7 @@ export function SqlPage() {
   const [result, setResult] = useState(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
+  const [jobProgress, setJobProgress] = useState(null);
   const [workspaceNotice, setWorkspaceNotice] = useState("");
   const [selectedSavedId, setSelectedSavedId] = useState("");
   const [savedName, setSavedName] = useState("");
@@ -886,6 +899,7 @@ LIMIT 25`
     setRunning(true);
     setError("");
     setWorkspaceNotice("");
+    setJobProgress(null);
     closeAutocomplete();
     try {
       const payload = {
@@ -897,10 +911,28 @@ LIMIT 25`
       if (form.queryScope === "source") {
         payload.connection_name = form.connectionName;
       }
-      const response = await querySql(payload);
+      const response = await runSqlQuery(payload, {
+        onQueued: (queued) => {
+          setJobProgress({
+            jobId: String(queued?.job_id || "").trim(),
+            event: "job.created",
+            status: "queued",
+            stage: "queued",
+            message: "SQL query job queued.",
+          });
+        },
+        onEvent: (eventPayload) => {
+          setJobProgress(buildSqlJobProgress(eventPayload));
+        },
+      });
       setResult(response);
       setActiveTab("results");
       setResultView("rows");
+      setWorkspaceNotice(
+        response?.job_id
+          ? `SQL query completed through job ${response.job_id}.`
+          : "SQL query completed.",
+      );
       setHistoryItems((current) =>
         [
           {
@@ -910,6 +942,7 @@ LIMIT 25`
             connectionName: form.connectionName,
             requestedLimit: form.requestedLimit,
             query: form.query,
+            jobId: response?.job_id || "",
             rowCount: response?.rowCount || response?.row_count_preview || 0,
             durationMs: response?.duration_ms || null,
             status: response?.status || "succeeded",
@@ -923,6 +956,16 @@ LIMIT 25`
       setResult(null);
       const errorMessage = getErrorMessage(caughtError);
       setError(errorMessage);
+      setJobProgress((current) =>
+        current
+          ? {
+              ...current,
+              status: "failed",
+              stage: "failed",
+              message: errorMessage,
+            }
+          : null,
+      );
       setHistoryItems((current) =>
         [
           {
@@ -932,6 +975,7 @@ LIMIT 25`
             connectionName: form.connectionName,
             requestedLimit: form.requestedLimit,
             query: form.query,
+            jobId: caughtError?.payload?.id || caughtError?.payload?.job_id || "",
             rowCount: 0,
             durationMs: null,
             status: "failed",
@@ -955,6 +999,8 @@ LIMIT 25`
       requestedLimit: "200",
     });
     setWorkspaceNotice("Query Workspace reset to the semantic-first default path.");
+    setJobProgress(null);
+    setError("");
     setSelectedSavedId("");
     setSavedName("");
     setSavedTags("");
@@ -1389,6 +1435,20 @@ LIMIT 25`
               </div>
             ) : null}
 
+            {jobProgress ? (
+              <div className="sql-warning-strip" aria-live="polite">
+                <span className="sql-warning-label">Job</span>
+                {jobProgress.jobId ? (
+                  <span className="sql-warning-pill">{jobProgress.jobId}</span>
+                ) : null}
+                <span className="sql-warning-pill">{jobProgress.status}</span>
+                {jobProgress.stage ? (
+                  <span className="sql-warning-pill">{jobProgress.stage}</span>
+                ) : null}
+                <span>{jobProgress.message}</span>
+              </div>
+            ) : null}
+
             {error ? <div className="error-banner">{error}</div> : null}
           </form>
         </Panel>
@@ -1409,6 +1469,8 @@ LIMIT 25`
               <div className="sql-result-viewer">
                 <div className="inline-notes sql-results-metrics">
                   <span>Rows: {formatValue(result.rowCount || result.row_count_preview)}</span>
+                  <span>Scope: {formatValue(result.query_scope || form.queryScope)}</span>
+                  {result.job_id ? <span>Job: {result.job_id}</span> : null}
                   <span>Duration: {formatValue(result.duration_ms)}</span>
                   <span>Redaction: {formatValue(result.redaction_applied)}</span>
                 </div>
@@ -1477,7 +1539,12 @@ LIMIT 25`
                     <div key={item.id} className="list-card static">
                       <strong>{buildQueryCardLabel(queryScope, item.connectionName)}</strong>
                       <span>
-                        {[formatDateTime(item.createdAt), item.status, `${item.rowCount || 0} rows`]
+                        {[
+                          formatDateTime(item.createdAt),
+                          item.status,
+                          item.jobId ? `job ${item.jobId}` : null,
+                          `${item.rowCount || 0} rows`,
+                        ]
                           .filter(Boolean)
                           .join(" | ")}
                       </span>

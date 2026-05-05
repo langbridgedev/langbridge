@@ -274,7 +274,7 @@ From this repo:
 
 ```bash
 python examples/sdk/semantic_query/setup.py
-langbridge serve --config examples/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
+langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --host 127.0.0.1 --port 8000
 ```
 
 Or with Docker:
@@ -285,7 +285,7 @@ docker compose --profile host up --build runtime-host
 
 For runnable walkthroughs, use:
 
-- `examples/runtime_host/`
-- `examples/runtime_host_sync/`
-- `examples/shopify_sync/`
-- `examples/hubspot_sync/`
+- `examples/deployment/runtime_host/`
+- `examples/deployment/runtime_host_sync/`
+- `examples/connectors/shopify_sync/`
+- `examples/connectors/hubspot_sync/`

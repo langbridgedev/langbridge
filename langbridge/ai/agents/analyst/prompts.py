@@ -130,6 +130,9 @@ Question:
 Conversation memory:
 {memory_context}
 
+Resolved entity context:
+{resolved_entity_context}
+
 Available SQL tools:
 {sql_tools}
 
@@ -199,6 +202,9 @@ Original question:
 Conversation memory:
 {memory_context}
 
+Resolved entity context:
+{resolved_entity_context}
+
 Available SQL tools:
 {sql_tools}
 
@@ -240,6 +246,9 @@ Question:
 
 Conversation memory:
 {memory_context}
+
+Resolved entity context:
+{resolved_entity_context}
 
 Detail expectation:
 {detail_expectation}
@@ -355,6 +364,9 @@ Question:
 Conversation memory:
 {memory_context}
 
+Resolved entity context:
+{resolved_entity_context}
+
 Web augmentation available:
 {web_augmentation_available}
 
@@ -404,6 +416,9 @@ Question:
 
 Conversation memory:
 {memory_context}
+
+Resolved entity context:
+{resolved_entity_context}
 
 Detail expectation:
 {detail_expectation}
@@ -462,6 +477,9 @@ Question:
 
 Conversation memory:
 {memory_context}
+
+Resolved entity context:
+{resolved_entity_context}
 
 Detail expectation:
 {detail_expectation}

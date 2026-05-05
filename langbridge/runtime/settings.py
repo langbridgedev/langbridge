@@ -58,7 +58,10 @@ class RuntimeSettings:
         "FEDERATION_BLOCKING_MAX_WORKERS",
         _default_federation_blocking_workers(),
     )
-    FEDERATION_DEFAULT_TTL_SECONDS: int = _read_int("FEDERATION_DEFAULT_TTL_SECONDS", 10)
+    FEDERATION_DEFAULT_TTL_SECONDS: int = _read_int(
+        "FEDERATION_DEFAULT_TTL_SECONDS",
+        24 * 60 * 60,
+    )
     FEDERATION_DEFAULT_RETRY: int = _read_int("FEDERATION_DEFAULT_RETRY", 2)
 
 

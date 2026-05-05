@@ -1,7 +1,10 @@
 from typing import Any
 
+from pydantic import BaseModel
+
 from ..base import LLMMessage, LLMProvider, LLMProviderName, LLMResponse, ProviderConfigurationError, response_text
 from ..factory import register_provider
+from ..structured import StructuredOutputUnsupportedError, validate_structured_payload
 
 try:  # pragma: no cover - optional dependency
     from openai import AsyncAzureOpenAI, AzureOpenAI
@@ -147,6 +150,38 @@ class AzureOpenAIProvider(LLMProvider):
             max_tokens=max_tokens,
         )
         return _to_dict(response)
+
+    async def _ainvoke_structured_native(
+        self,
+        messages: list[LLMMessage],
+        *,
+        response_model: type[BaseModel],
+        temperature: float,
+        max_tokens: int | None,
+    ) -> BaseModel:
+        client = self.create_async_client()
+        completions = getattr(getattr(client, "chat", None), "completions", None)
+        parse = getattr(completions, "parse", None)
+        if not callable(parse):
+            raise StructuredOutputUnsupportedError("Azure OpenAI client does not expose chat.completions.parse.")
+        response = await parse(
+            **self._clean_kwargs(
+                {
+                    "model": self._deployment(),
+                    "messages": messages,
+                    "response_format": response_model,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+            )
+        )
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            raise StructuredOutputUnsupportedError("Azure OpenAI structured response did not include choices.")
+        parsed = getattr(getattr(choices[0], "message", None), "parsed", None)
+        if parsed is None:
+            raise StructuredOutputUnsupportedError("Azure OpenAI structured response did not include message.parsed.")
+        return validate_structured_payload(parsed, response_model=response_model)
 
     async def create_embeddings(
         self,

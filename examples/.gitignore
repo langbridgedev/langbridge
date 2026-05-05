@@ -1,0 +1,7 @@
+**/.langbridge/
+**/.cache/
+**/__pycache__/
+**/.venv/
+**/venv/
+**/.env
+!**/.env.example

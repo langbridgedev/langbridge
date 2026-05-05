@@ -29,10 +29,10 @@ export const NAV_SECTIONS = [
         description: "Question-first analysis with integrated threads and agent execution context.",
       },
       {
-        to: "/runs",
-        label: "Runs",
+        to: "/jobs",
+        label: "Jobs",
         icon: Activity,
-        description: "Recent runtime executions across threads, queries, and dashboard widgets.",
+        description: "Recent runtime jobs across threads, queries, and dashboard widgets.",
       },
     ],
   },

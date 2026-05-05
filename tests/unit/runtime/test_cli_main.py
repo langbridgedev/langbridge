@@ -1,9 +1,11 @@
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 
 from langbridge.cli.main import main
+from langbridge.runtime.hosting import server as runtime_server
 from tests.unit._runtime_host_sync_helpers import (
     mock_stripe_api,
     runtime_storage_dirs,
@@ -124,13 +126,14 @@ def test_cli_serve_delegates_to_runtime_api(tmp_path: Path, monkeypatch) -> None
     config_path = _write_config(tmp_path)
     captured: dict[str, object] = {}
 
-    def fake_run_runtime_api(*, config_path, host, port, features, debug, reload, odbc_host, odbc_port):
+    def fake_run_runtime_api(*, config_path, host, port, features, debug, reload, workers, odbc_host, odbc_port):
         captured["config_path"] = config_path
         captured["host"] = host
         captured["port"] = port
         captured["features"] = features
         captured["debug"] = debug
         captured["reload"] = reload
+        captured["workers"] = workers
         captured["odbc_host"] = odbc_host
         captured["odbc_port"] = odbc_port
 
@@ -164,9 +167,140 @@ def test_cli_serve_delegates_to_runtime_api(tmp_path: Path, monkeypatch) -> None
         "features": ["ui", "mcp", "odbc"],
         "debug": True,
         "reload": True,
+        "workers": 1,
         "odbc_host": "0.0.0.0",
         "odbc_port": 15432,
     }
+
+
+def test_cli_serve_forwards_worker_count(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_run_runtime_api(*, config_path, host, port, features, debug, reload, workers, odbc_host, odbc_port):
+        captured["config_path"] = config_path
+        captured["host"] = host
+        captured["port"] = port
+        captured["features"] = features
+        captured["debug"] = debug
+        captured["reload"] = reload
+        captured["workers"] = workers
+        captured["odbc_host"] = odbc_host
+        captured["odbc_port"] = odbc_port
+
+    monkeypatch.setattr("langbridge.cli.main.run_runtime_api", fake_run_runtime_api)
+
+    exit_code = main(
+        [
+            "serve",
+            "--config",
+            str(config_path),
+            "--workers",
+            "4",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured == {
+        "config_path": str(config_path),
+        "host": "127.0.0.1",
+        "port": 8000,
+        "features": [],
+        "debug": False,
+        "reload": False,
+        "workers": 4,
+        "odbc_host": None,
+        "odbc_port": None,
+    }
+
+
+def test_cli_serve_rejects_reload_with_multiple_workers(tmp_path: Path, capsys) -> None:
+    config_path = _write_config(tmp_path)
+
+    exit_code = main(
+        [
+            "serve",
+            "--config",
+            str(config_path),
+            "--reload",
+            "--workers",
+            "2",
+        ]
+    )
+
+    assert exit_code == 1
+    assert "--reload cannot be combined with --workers greater than 1." in capsys.readouterr().err
+
+
+def test_cli_serve_rejects_non_positive_workers(tmp_path: Path, capsys) -> None:
+    config_path = _write_config(tmp_path)
+
+    exit_code = main(
+        [
+            "serve",
+            "--config",
+            str(config_path),
+            "--workers",
+            "0",
+        ]
+    )
+
+    assert exit_code == 1
+    assert "workers must be greater than or equal to 1." in capsys.readouterr().err
+
+
+def test_cli_serve_rejects_odbc_with_multiple_workers(tmp_path: Path, capsys) -> None:
+    config_path = _write_config(tmp_path)
+
+    exit_code = main(
+        [
+            "serve",
+            "--config",
+            str(config_path),
+            "--features",
+            "odbc",
+            "--workers",
+            "2",
+        ]
+    )
+
+    assert exit_code == 1
+    assert "--workers greater than 1 cannot be combined with the odbc feature." in capsys.readouterr().err
+
+
+def test_runtime_api_uses_factory_import_for_multi_worker_serve(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_uvicorn_run(app, **kwargs):
+        captured["app"] = app
+        captured.update(kwargs)
+
+    monkeypatch.setattr(runtime_server.uvicorn, "run", fake_uvicorn_run)
+
+    runtime_server.run_runtime_api(
+        config_path=config_path,
+        host="0.0.0.0",
+        port=9100,
+        features=["ui"],
+        debug=True,
+        workers=3,
+        odbc_host="0.0.0.0",
+        odbc_port=15432,
+    )
+
+    assert captured["app"] == "langbridge.runtime.hosting.app:create_runtime_api_app_from_env"
+    assert captured["factory"] is True
+    assert captured["workers"] == 3
+    assert captured["reload"] is False
+    assert captured["log_level"] == "debug"
+    assert os.environ["LANGBRIDGE_RUNTIME_CONFIG_PATH"] == str(config_path.resolve())
+    assert os.environ["LANGBRIDGE_RUNTIME_FEATURES"] == "ui"
+    assert os.environ["LANGBRIDGE_RUNTIME_DEBUG"] == "true"
+    assert os.environ["LANGBRIDGE_RUNTIME_WORKERS"] == "3"
+    assert os.environ["LANGBRIDGE_RUNTIME_BACKGROUND_TASKS"] == "auto"
+    assert os.environ["LANGBRIDGE_RUNTIME_ODBC_HOST"] == "0.0.0.0"
+    assert os.environ["LANGBRIDGE_RUNTIME_ODBC_PORT"] == "15432"
 
 
 def test_cli_serve_rejects_unknown_feature(tmp_path: Path, capsys) -> None:

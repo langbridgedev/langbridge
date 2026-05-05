@@ -152,8 +152,8 @@ export function OverviewPage() {
       icon: Table2,
     },
     {
-      to: "/runs",
-      label: "Review runs",
+      to: "/jobs",
+      label: "Review jobs",
       description: "Pick up recent executions and failures.",
       icon: Activity,
     },
@@ -212,8 +212,8 @@ export function OverviewPage() {
             <Link className="primary-button" to="/chat">
               Ask runtime
             </Link>
-            <Link className="ghost-button" to="/runs">
-              View runs
+            <Link className="ghost-button" to="/jobs">
+              View jobs
             </Link>
             <button className="ghost-button" type="button" onClick={reload} disabled={loading}>
               {loading ? "Refreshing..." : "Refresh"}
@@ -235,7 +235,7 @@ export function OverviewPage() {
         />
         <MetricCard
           icon={Table2}
-          label="Local runs"
+          label="Local jobs"
           value={formatValue(sqlHistory.length + boards.length)}
           detail="Saved query and dashboard work."
         />
@@ -301,10 +301,10 @@ export function OverviewPage() {
           emptyMessage="Recent runtime changes will appear here."
         />
         <ActivityPanel
-          title="Recent runs"
+          title="Recent jobs"
           eyebrow="Execution"
           items={recentExecutionItems}
-          emptyTitle="No recent run"
+          emptyTitle="No recent job"
           emptyMessage="Recent runtime execution will appear here."
         />
       </section>

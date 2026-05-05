@@ -56,7 +56,7 @@ class AgentThreadStateManager:
     async def reset_after_failure(self, *, thread_id: uuid.UUID) -> RuntimeThread | None:
         thread = await self._thread_repository.get_by_id(thread_id)
         if thread is not None:
-            self.clear_active_run_metadata(thread)
+            self.clear_active_job_metadata(thread)
             self.set_awaiting_user_input(thread)
             thread.updated_at = datetime.now(timezone.utc)
             await self._thread_repository.save(thread)
@@ -102,18 +102,15 @@ class AgentThreadStateManager:
         continuation_state: dict[str, Any] | None,
     ) -> RuntimeThreadMessage:
         assistant_message_id = uuid.uuid4()
-        content = {
-            "summary": response.get("summary"),
-            "answer": response.get("answer"),
-            "answer_markdown": response.get("answer_markdown"),
-            "artifacts": response.get("artifacts"),
-            "result": response.get("result"),
-            "visualization": response.get("visualization"),
-            "research": response.get("research"),
-            "diagnostics": response.get("diagnostics"),
-        }
+        metadata = dict(response.get("metadata") if isinstance(response.get("metadata"), dict) else {})
         if isinstance(continuation_state, dict) and continuation_state:
-            content["continuation_state"] = continuation_state
+            metadata["continuation_state"] = continuation_state
+        content = {
+            "answer_markdown": response.get("answer_markdown"),
+            "artifacts": response.get("artifacts") if isinstance(response.get("artifacts"), list) else [],
+            "diagnostics": response.get("diagnostics"),
+            "metadata": metadata,
+        }
         assistant_message = RuntimeThreadMessage(
             id=assistant_message_id,
             thread_id=thread.id,
@@ -135,10 +132,10 @@ class AgentThreadStateManager:
         thread.updated_at = datetime.now(timezone.utc)
         return assistant_message
 
-    def clear_active_run_metadata(self, thread: RuntimeThread) -> None:
+    def clear_active_job_metadata(self, thread: RuntimeThread) -> None:
         metadata = dict(thread.metadata or {})
-        metadata.pop("active_run_id", None)
-        metadata.pop("active_run_type", None)
+        metadata.pop("active_job_id", None)
+        metadata.pop("active_job_type", None)
         thread.metadata = metadata
 
     def set_awaiting_user_input(self, thread: RuntimeThread) -> None:

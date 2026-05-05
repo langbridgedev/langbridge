@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from langbridge.ai.events import AIEventEmitter, AIEventSource
 from langbridge.ai.llm.base import LLMProvider
+from langbridge.ai.llm.structured import acomplete_structured
 
 
 class ChartSpec(BaseModel):
@@ -51,9 +52,16 @@ class ChartingTool(AIEventSource):
             title=title,
             user_intent=user_intent,
         )
-        raw = await self._llm.acomplete(prompt, temperature=0.0, max_tokens=700)
         chart = self._normalize_chart_spec(
-            self._parse_json_object(raw),
+            (
+                await acomplete_structured(
+                    self._llm,
+                    prompt,
+                    response_model=ChartSpec,
+                    temperature=0.2,
+                    max_tokens=700,
+                )
+            ).model_dump(mode="json"),
             columns=[str(column) for column in columns],
             rows=rows[:20],
             question=question,
@@ -334,15 +342,6 @@ class ChartingTool(AIEventSource):
             .replace(".", " ")
             .split()
         )
-
-    @staticmethod
-    def _parse_json_object(raw: str) -> dict[str, Any]:
-        text = raw.strip()
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end < start:
-            raise ValueError("Charting LLM response did not contain a JSON object.")
-        return json.loads(text[start : end + 1])
 
 
 __all__ = ["ChartSpec", "ChartingTool"]

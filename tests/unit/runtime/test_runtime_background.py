@@ -52,9 +52,9 @@ class RecordingDatasetSyncHost:
             roles=["runtime:operator"],
         )
 
-    async def sync_dataset(self, **kwargs):
+    async def create_dataset_sync_job(self, **kwargs):
         self.calls.append(dict(kwargs))
-        return {"ok": True}
+        return {"status": "queued"}
 
 
 def _build_runtime_host(
@@ -206,6 +206,36 @@ def test_runtime_api_app_starts_registered_default_background_tasks() -> None:
     assert app.state.runtime_background_tasks.started is False
 
 
+def test_runtime_api_app_disables_background_scheduler_for_multi_worker_hosts() -> None:
+    runtime_host = _build_runtime_host()
+    observed: list[tuple[str, str]] = []
+
+    async def _record(context):
+        observed.append((context.task_name, context.kind))
+
+    app = _create_runtime_app(
+        runtime_host=runtime_host,  # type: ignore[arg-type]
+        workers=4,
+        default_background_tasks=[
+            RuntimeBackgroundTaskDefinition.default(
+                name="semantic-refresh",
+                handler=_record,
+                run_on_startup=True,
+            )
+        ],
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/runtime/v1/health")
+        assert response.status_code == 200
+        manager = client.app.state.runtime_background_tasks
+        assert manager.started is False
+        assert client.app.state.runtime_background_tasks_enabled is False
+        assert client.app.state.runtime_workers == 4
+
+    assert observed == []
+
+
 def test_runtime_api_app_registers_semantic_vector_refresh_task_when_service_exists() -> None:
     runtime_host = _build_runtime_host(
         semantic_vector_search=RecordingSemanticVectorSearchService(),
@@ -260,7 +290,7 @@ def test_dataset_sync_cadence_rejects_invalid_values() -> None:
 
 
 @pytest.mark.anyio
-async def test_dataset_sync_default_task_uses_runtime_host_dataset_sync() -> None:
+async def test_dataset_sync_default_task_queues_runtime_host_dataset_sync_job() -> None:
     runtime_host = RecordingDatasetSyncHost()
     manager = RuntimeBackgroundTaskManager(runtime_host=runtime_host)  # type: ignore[arg-type]
     manager.register_default_task(
