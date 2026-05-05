@@ -44,6 +44,7 @@ class SqlConnectorRemoteSource(RemoteSource):
 
     def capabilities(self) -> SourceCapabilities:
         return SourceCapabilities(
+            pushdown_full_query=True,
             pushdown_filter=True,
             pushdown_projection=True,
             pushdown_aggregation=True,

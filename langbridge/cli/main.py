@@ -13,6 +13,7 @@ import httpx
 from langbridge.client import LangbridgeClient
 from langbridge.runtime.persistence.migrations import migrate_runtime_metadata_for_config
 from langbridge.runtime import run_runtime_api
+from langbridge import __version__
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -38,6 +39,9 @@ def main(argv: list[str] | None = None) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Langbridge runtime CLI")
     subparsers = parser.add_subparsers(dest="command")
+    
+    version = subparsers.add_parser("version", help="Show version information.")
+    version.set_defaults(handler=lambda args: print(__version__))
 
     serve = subparsers.add_parser("serve", help="Run the runtime host HTTP server.")
     serve.add_argument("--config", required=True, help="Path to langbridge_config.yml")
@@ -52,6 +56,12 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--odbc-port", type=int, default=None, help="Optional bind port for the ODBC endpoint.")
     serve.add_argument("--debug", action="store_true", help="Enable verbose runtime and MCP debug logging")
     serve.add_argument("--reload", action="store_true", help="Enable auto reload")
+    serve.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of Uvicorn worker processes to run. Defaults to 1.",
+    )
     serve.set_defaults(handler=_handle_serve)
 
     migrate = subparsers.add_parser("migrate", help="Apply runtime metadata database migrations.")
@@ -172,6 +182,7 @@ def _handle_serve(args: argparse.Namespace) -> int:
         features=_parse_feature_flags(args.features),
         debug=bool(args.debug),
         reload=bool(args.reload),
+        workers=int(args.workers),
         odbc_host=args.odbc_host,
         odbc_port=args.odbc_port,
     )

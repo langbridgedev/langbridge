@@ -1,9 +1,9 @@
-# Langbridge Runtime UI Next
+# Langbridge Runtime UI
 
-Side-by-side candidate for the next chat-first Langbridge runtime UI.
+Chat-first Langbridge runtime UI.
 
-This app is not the packaged production UI yet. The current production UI remains
-`langbridge/apps/runtime_ui`.
+This app is the packaged production runtime UI source. The legacy UI source remains in
+`langbridge/apps/runtime_ui` for rollback/reference during migration.
 
 ## Run Locally
 
@@ -20,4 +20,5 @@ The dev server runs on port `5177` and proxies `/api` to `http://127.0.0.1:8000`
 npm run build
 ```
 
-The build output stays in `dist` during the side-by-side migration phase.
+The build output is written to `../../langbridge/ui/static`, which the Python runtime host serves
+under `/ui` when the `ui` feature is enabled.

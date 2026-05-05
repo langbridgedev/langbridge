@@ -1,7 +1,6 @@
-import { chatProjects } from "../mocks/chat.mock.js";
-import { dashboardProjects, dashboardRecents } from "../mocks/dashboard.mock.js";
-import { queryProjects, queryRecents } from "../mocks/query.mock.js";
-import { listChatThreads } from "./chatService.js";
+import { listChatProjects, listChatThreads } from "./chatService.js";
+import { listDashboardProjects, listDashboardRecents } from "./dashboardService.js";
+import { listQueryProjects, listQueryRecents } from "./queryService.js";
 
 export function getEmptyNavigationState() {
   return { recents: null, projects: null };
@@ -9,21 +8,23 @@ export function getEmptyNavigationState() {
 
 export async function getNavigationState(workspace) {
   if (workspace === "query") {
+    const [recents, projects] = await Promise.all([listQueryRecents(), listQueryProjects()]);
     return {
-      recents: { label: "Queries", items: queryRecents.map((item) => ({ ...item, path: "/query-workspace" })) },
-      projects: { label: "Query Projects", items: queryProjects.map((item) => ({ ...item, path: "/query-workspace" })) },
+      recents: { label: "Queries", items: recents.map((item) => ({ ...item, path: "/query-workspace" })) },
+      projects: { label: "Query Projects", items: projects.map((item) => ({ ...item, path: "/query-workspace" })) },
     };
   }
 
   if (workspace === "dashboards") {
+    const [recents, projects] = await Promise.all([listDashboardRecents(), listDashboardProjects()]);
     return {
       recents: {
         label: "Dashboards",
-        items: dashboardRecents.map((item) => ({ ...item, path: `/dashboards/${item.id}` })),
+        items: recents.map((item) => ({ ...item, path: item.path || `/dashboards/${item.id}` })),
       },
       projects: {
         label: "Dashboard Projects",
-        items: dashboardProjects.map((item) => ({ ...item, path: "/dashboards" })),
+        items: projects.map((item) => ({ ...item, path: item.path || "/dashboards" })),
       },
     };
   }
@@ -32,14 +33,28 @@ export async function getNavigationState(workspace) {
     return { recents: null, projects: null };
   }
 
+  const [threads, projects] = await Promise.all([
+    safeNavigationItems(listChatThreads),
+    safeNavigationItems(listChatProjects),
+  ]);
+
   return {
     recents: {
       label: "Chats",
-      items: await listChatThreads(),
+      items: threads,
     },
-    projects: {
+    projects: projects.length > 0 ? {
       label: "Chat Projects",
-      items: chatProjects.map((item) => ({ ...item, path: "/chat" })),
-    },
+      items: projects.map((item) => ({ ...item, path: item.path || "/chat" })),
+    } : null,
   };
+}
+
+async function safeNavigationItems(loader) {
+  try {
+    const items = await loader();
+    return Array.isArray(items) ? items : [];
+  } catch {
+    return [];
+  }
 }

@@ -646,6 +646,26 @@ class _InMemoryJobRepository:
         job.updated_at = now
         return self._hydrate_job(job)
 
+    async def heartbeat_job(
+        self,
+        *,
+        job_id: uuid.UUID,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> bool:
+        job = self._jobs.get(job_id)
+        if job is None:
+            return False
+        if self._status_value(getattr(job, "status", "")) != "running":
+            return False
+        if getattr(job, "lock_owner", None) != worker_id:
+            return False
+        now = datetime.now(timezone.utc)
+        job.locked_until = now + self._lease_delta(lease_seconds)
+        job.heartbeat_at = now
+        job.updated_at = now
+        return True
+
     async def append_event(
         self,
         *,

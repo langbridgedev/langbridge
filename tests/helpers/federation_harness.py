@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 import pyarrow as pa
 
+from langbridge.federation.connectors import SourceCapabilities
 from langbridge.federation.executor import ArtifactStore
 from langbridge.federation.models import (
     FederationWorkflow,
@@ -98,6 +99,7 @@ class FederationHarness:
             dialect=dialect,
             workflow=workflow,
             source_dialects=dict(source_dialects),
+            source_capabilities=self._sql_capabilities_for_sources(source_dialects),
         )
 
     def plan_sql(
@@ -114,7 +116,17 @@ class FederationHarness:
             dialect=dialect,
             workflow=workflow,
             source_dialects=dict(source_dialects),
+            source_capabilities=self._sql_capabilities_for_sources(source_dialects),
         )
+
+    def _sql_capabilities_for_sources(
+        self,
+        source_dialects: Mapping[str, str],
+    ) -> dict[str, SourceCapabilities]:
+        return {
+            source_id: SourceCapabilities(pushdown_full_query=True, pushdown_join=True)
+            for source_id in source_dialects
+        }
 
     async def execute_sql(
         self,

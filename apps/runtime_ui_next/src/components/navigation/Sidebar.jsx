@@ -12,7 +12,7 @@ const primaryNav = [
 
 export function Sidebar({ activeRoute, navigate, session, authStatus, onLogout, collapsed, setCollapsed, theme, setTheme }) {
   const [navigation, setNavigation] = useState(getEmptyNavigationState);
-  const canSignOut = Boolean(authStatus?.demo || authStatus?.auth_enabled);
+  const canSignOut = Boolean(authStatus?.auth_enabled);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,7 +59,7 @@ export function Sidebar({ activeRoute, navigate, session, authStatus, onLogout, 
       </nav>
 
       <nav className="rail-section rail-history" aria-label="Workspace history">
-        {navigation.projects ? (
+        {/* {navigation.projects ? (
           <div className="rail-history-section rail-projects">
             <p>Projects</p>
             {navigation.projects.items.map((item) => (
@@ -71,7 +71,7 @@ export function Sidebar({ activeRoute, navigate, session, authStatus, onLogout, 
               </button>
             ))}
           </div>
-        ) : null}
+        ) : null} */}
 
         {navigation.recents ? (
           <div className="rail-history-section rail-recents">
@@ -89,7 +89,7 @@ export function Sidebar({ activeRoute, navigate, session, authStatus, onLogout, 
         {session && canSignOut ? (
           <div className="session-pill rail-label">
             <strong>{session.display_name || session.username || "Operator"}</strong>
-            <span>{authStatus?.demo ? "Demo mode" : "Runtime session"}</span>
+            <span>Runtime session</span>
           </div>
         ) : null}
         <button
@@ -114,7 +114,7 @@ export function Sidebar({ activeRoute, navigate, session, authStatus, onLogout, 
             <span className="rail-label">Sign out</span>
           </button>
         ) : null}
-        <span className="runtime-pill rail-label">{authStatus?.demo ? "Demo data" : "Langbridge API"}</span>
+        <span className="runtime-pill rail-label">Langbridge API</span>
       </div>
     </aside>
   );

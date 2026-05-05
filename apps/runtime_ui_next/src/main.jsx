@@ -5,8 +5,8 @@ import { BrowserRouter } from "react-router-dom";
 import { App } from "./App.jsx";
 import "./styles/index.css";
 
-if (window.location.pathname === "/ui-next" || window.location.pathname.startsWith("/ui-next/")) {
-  const nextPath = window.location.pathname.slice(8) || "/";
+if (window.location.pathname === "/ui" || window.location.pathname.startsWith("/ui/")) {
+  const nextPath = window.location.pathname.slice(3) || "/";
   window.history.replaceState(window.history.state, "", `${nextPath}${window.location.search}${window.location.hash}`);
 }
 

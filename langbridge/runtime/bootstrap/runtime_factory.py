@@ -3,6 +3,7 @@ import logging
 
 from .configured_runtime import build_configured_local_runtime
 
+from langbridge.federation.executor import ArtifactStore
 from langbridge.runtime.context import RuntimeContext
 from langbridge.runtime.execution import FederatedQueryTool
 from langbridge.runtime.persistence import (
@@ -83,6 +84,7 @@ from langbridge.runtime.services.agents import (
 from langbridge.runtime.services.dataset_query import DatasetQueryService
 from langbridge.runtime.services.dataset_sync import ConnectorSyncRuntime
 from langbridge.runtime.services.jobs import RuntimeJobService
+from langbridge.runtime.services.maintenance import RuntimeCleanupService
 from langbridge.runtime.services.runtime_host import (
     RuntimeHost,
     RuntimeProviders,
@@ -96,6 +98,7 @@ from langbridge.runtime.services.semantic_vector_search import (
     SemanticVectorSearchService,
 )
 from langbridge.runtime.services.sql_query import SqlQueryService
+from langbridge.runtime.settings import runtime_settings as settings
 
 
 def build_local_runtime(
@@ -302,6 +305,13 @@ def build_local_runtime(
     )
     job_service = RuntimeJobService(repository=job_repository) if job_repository is not None else None
     semantic_sql_query_service = SemanticSqlQueryService()
+    cleanup_service = RuntimeCleanupService(
+        federation_artifact_store=ArtifactStore(
+            base_dir=settings.FEDERATION_ARTIFACT_DIR,
+        ),
+        federation_ttl_seconds=settings.FEDERATION_DEFAULT_TTL_SECONDS,
+        logger=logger or logging.getLogger("langbridge.runtime.cleanup"),
+    )
     agent_execution_service = (
         AgentExecutionService(
             agent_definition_repository=agent_definition_store,
@@ -345,6 +355,7 @@ def build_local_runtime(
             agent_execution=agent_execution_service,
             jobs=job_service,
             semantic_sql_query=semantic_sql_query_service,
+            cleanup=cleanup_service,
         ),
     )
 

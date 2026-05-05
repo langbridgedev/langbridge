@@ -88,6 +88,8 @@ _FEATURES_ENV = "LANGBRIDGE_RUNTIME_FEATURES"
 _DEBUG_ENV = "LANGBRIDGE_RUNTIME_DEBUG"
 _ODBC_HOST_ENV = "LANGBRIDGE_RUNTIME_ODBC_HOST"
 _ODBC_PORT_ENV = "LANGBRIDGE_RUNTIME_ODBC_PORT"
+_WORKERS_ENV = "LANGBRIDGE_RUNTIME_WORKERS"
+_BACKGROUND_TASKS_ENV = "LANGBRIDGE_RUNTIME_BACKGROUND_TASKS"
 _SEMANTIC_VECTOR_REFRESH_TASK_NAME = "semantic-vector-refresh"
 _RUNTIME_CLEANUP_TASK_NAME = "runtime-cleanup"
 _RUNTIME_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
@@ -103,6 +105,9 @@ def create_runtime_api_app(
     debug: bool = False,
     odbc_host: str | None = None,
     odbc_port: int | None = None,
+    workers: int = 1,
+    background_tasks_enabled: bool | None = None,
+    mcp_stateless_http: bool | None = None,
     default_background_tasks: Iterable[RuntimeBackgroundTaskDefinition] | None = None,
     background_tasks: Iterable[RuntimeBackgroundTaskDefinition] | None = None,
     background_task_manager: RuntimeBackgroundTaskManager | None = None,
@@ -117,6 +122,13 @@ def create_runtime_api_app(
     mcp_enabled = "mcp" in enabled_features
     ui_enabled = "ui" in enabled_features
     odbc_enabled = "odbc" in enabled_features
+    runtime_workers = max(1, int(workers or 1))
+    run_background_tasks = (
+        runtime_workers == 1
+        if background_tasks_enabled is None
+        else bool(background_tasks_enabled)
+    )
+    stateless_mcp = runtime_workers > 1 if mcp_stateless_http is None else bool(mcp_stateless_http)
     auth_resolver = RuntimeAuthResolver(
         config=auth_config
         or RuntimeAuthConfig.from_env(
@@ -139,6 +151,7 @@ def create_runtime_api_app(
             auth_resolver=auth_resolver,
             mount_path=DEFAULT_MCP_MOUNT_PATH,
             debug=debug,
+            stateless_http=stateless_mcp,
         )
     if odbc_enabled:
         odbc_server = RuntimeOdbcEndpoint(
@@ -157,19 +170,20 @@ def create_runtime_api_app(
             start_job_processor()
         if odbc_server is not None:
             await odbc_server.start()
-        await _register_runtime_dataset_background_tasks(
-            task_manager=task_manager,
-            runtime_host=host,
-        )
-        await _register_runtime_semantic_vector_refresh_task(
-            task_manager=task_manager,
-            runtime_host=host,
-        )
-        await _register_runtime_cleanup_task(
-            task_manager=task_manager,
-            runtime_host=host,
-        )
-        await task_manager.start()
+        if run_background_tasks:
+            await _register_runtime_dataset_background_tasks(
+                task_manager=task_manager,
+                runtime_host=host,
+            )
+            await _register_runtime_semantic_vector_refresh_task(
+                task_manager=task_manager,
+                runtime_host=host,
+            )
+            await _register_runtime_cleanup_task(
+                task_manager=task_manager,
+                runtime_host=host,
+            )
+            await task_manager.start()
         try:
             if mcp_server is None:
                 yield
@@ -187,7 +201,8 @@ def create_runtime_api_app(
                 stop_result = stop_job_processor()
                 if inspect.isawaitable(stop_result):
                     await stop_result
-            await task_manager.stop()
+            if run_background_tasks:
+                await task_manager.stop()
             if odbc_server is not None:
                 await odbc_server.close()
             await _close_runtime_host(host)
@@ -203,8 +218,11 @@ def create_runtime_api_app(
     app.state.runtime_features = enabled_features
     app.state.runtime_auth = auth_resolver
     app.state.runtime_background_tasks = task_manager
+    app.state.runtime_background_tasks_enabled = run_background_tasks
     app.state.runtime_debug = bool(debug)
     app.state.runtime_odbc = odbc_server
+    app.state.runtime_workers = runtime_workers
+    app.state.runtime_mcp_stateless_http = stateless_mcp
 
     if mcp_enabled:
         @app.middleware("http")
@@ -1182,12 +1200,15 @@ def create_runtime_api_app_from_env() -> FastAPI:
     config_path = os.getenv(_CONFIG_PATH_ENV)
     if not config_path:
         raise RuntimeError(f"{_CONFIG_PATH_ENV} must be set before starting the runtime host.")
+    workers = _parse_runtime_workers_env(os.getenv(_WORKERS_ENV))
     return create_runtime_api_app(
         config_path=config_path,
         features=_parse_runtime_features_env(os.getenv(_FEATURES_ENV)),
         debug=_parse_runtime_debug_env(os.getenv(_DEBUG_ENV)),
         odbc_host=os.getenv(_ODBC_HOST_ENV),
         odbc_port=_parse_runtime_port_env(os.getenv(_ODBC_PORT_ENV)),
+        workers=workers,
+        background_tasks_enabled=_parse_runtime_background_tasks_env(os.getenv(_BACKGROUND_TASKS_ENV)),
     )
 
 
@@ -1352,6 +1373,26 @@ def _raise_runtime_internal_server_error(operation: str, exc: Exception) -> None
 
 def _parse_runtime_debug_env(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "debug"}
+
+
+def _parse_runtime_workers_env(value: str | None) -> int:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return 1
+    return max(1, int(normalized))
+
+
+def _parse_runtime_background_tasks_env(value: str | None) -> bool | None:
+    normalized = str(value or "").strip().lower()
+    if not normalized or normalized == "auto":
+        return None
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return False
+    raise ValueError(
+        f"{_BACKGROUND_TASKS_ENV} must be one of auto, true, or false; got {value!r}."
+    )
 
 
 def _parse_runtime_port_env(value: str | None) -> int | None:

@@ -1,9 +1,16 @@
+import json
+import os
+import time
 import uuid
 
 import pyarrow as pa
 import pytest
 
-from langbridge.federation.connectors.base import RemoteExecutionResult, RemoteSource, SourceCapabilities
+from langbridge.federation.connectors.base import (
+    RemoteExecutionResult,
+    RemoteSource,
+    SourceCapabilities,
+)
 from langbridge.federation.executor import (
     ArtifactStore,
     StageCacheDescriptor,
@@ -44,6 +51,7 @@ class CountingRemoteSource(RemoteSource):
 
     def capabilities(self) -> SourceCapabilities:
         return SourceCapabilities(
+            pushdown_full_query=True,
             pushdown_filter=True,
             pushdown_projection=True,
             pushdown_aggregation=True,
@@ -62,7 +70,11 @@ class CountingRemoteSource(RemoteSource):
 
         projected = table
         if subplan.projected_columns:
-            columns = [column for column in subplan.projected_columns if column in projected.column_names]
+            columns = [
+                column
+                for column in subplan.projected_columns
+                if column in projected.column_names
+            ]
             if columns:
                 projected = projected.select(columns)
 
@@ -86,6 +98,30 @@ def _stage_metrics_by_id(handle) -> dict[str, object]:
         metric.stage_id: metric
         for metric in handle.execution.stage_metrics
     }
+
+
+def _cache_descriptor() -> StageCacheDescriptor:
+    dataset_id = uuid.uuid4()
+    revision_id = uuid.uuid4()
+    return StageCacheDescriptor.from_inputs(
+        inputs=[
+            StageCacheInput(
+                kind=StageCacheInputKind.DATASET,
+                cache_policy=StageCacheInputPolicy.REVISION,
+                source_id="file_orders",
+                table_key="orders",
+                dataset_id=dataset_id,
+                canonical_reference=f"dataset:{dataset_id}",
+                materialization_mode="synced",
+                freshness_key=f"dataset-revision:{revision_id}",
+                revision_id=revision_id,
+            )
+        ]
+    )
+
+
+def _artifact_path(base_dir, artifact_key: str):
+    return base_dir.joinpath(*artifact_key.split("/"))
 
 
 def _binding(
@@ -525,3 +561,112 @@ def test_artifact_manifest_persists_cache_context_and_rejects_mismatched_fingerp
         stage_id=stage_id,
         expected_cache=cache_two,
     ) is None
+
+
+def test_artifact_cleanup_removes_expired_manifest_and_old_orphaned_artifact(tmp_path) -> None:
+    workspace_id = str(uuid.uuid4())
+    plan_id = "plan-cache-test"
+    stage_id = "scan_orders"
+    base_dir = tmp_path / "artifacts"
+    artifact_store = ArtifactStore(base_dir=str(base_dir))
+    manifest = artifact_store.write_stage_output(
+        workspace_id=workspace_id,
+        plan_id=plan_id,
+        stage_id=stage_id,
+        table=pa.table({"id": [1]}),
+        cache=_cache_descriptor(),
+    )
+    manifest_path = base_dir / workspace_id / "plans" / plan_id / f"{stage_id}.json"
+    artifact_path = _artifact_path(base_dir, manifest.artifact_key)
+    old_timestamp = time.time() - 7200
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["ttl"]["created_at"] = old_timestamp
+    payload["ttl"]["seconds"] = 1
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    os.utime(artifact_path, (old_timestamp, old_timestamp))
+
+    result = artifact_store.cleanup_expired_artifacts(ttl_seconds=3600, now=time.time())
+
+    assert result.deleted_manifests == 1
+    assert result.deleted_artifacts == 1
+    assert result.bytes_deleted > 0
+    assert not manifest_path.exists()
+    assert not artifact_path.exists()
+
+
+def test_artifact_cleanup_retains_unexpired_manifest_and_referenced_artifact(tmp_path) -> None:
+    workspace_id = str(uuid.uuid4())
+    base_dir = tmp_path / "artifacts"
+    artifact_store = ArtifactStore(base_dir=str(base_dir))
+    manifest = artifact_store.write_stage_output(
+        workspace_id=workspace_id,
+        plan_id="plan-cache-test",
+        stage_id="scan_orders",
+        table=pa.table({"id": [1]}),
+        cache=_cache_descriptor(),
+    )
+    manifest_path = base_dir / workspace_id / "plans" / "plan-cache-test" / "scan_orders.json"
+    artifact_path = _artifact_path(base_dir, manifest.artifact_key)
+
+    result = artifact_store.cleanup_expired_artifacts(ttl_seconds=3600, now=time.time())
+
+    assert result.deleted_manifests == 0
+    assert result.deleted_artifacts == 0
+    assert manifest_path.exists()
+    assert artifact_path.exists()
+
+
+def test_artifact_cleanup_removes_old_legacy_manifest_without_ttl(tmp_path) -> None:
+    workspace_id = str(uuid.uuid4())
+    base_dir = tmp_path / "artifacts"
+    artifact_store = ArtifactStore(base_dir=str(base_dir))
+    manifest = artifact_store.write_stage_output(
+        workspace_id=workspace_id,
+        plan_id="plan-cache-test",
+        stage_id="scan_orders",
+        table=pa.table({"id": [1]}),
+        cache=_cache_descriptor(),
+    )
+    manifest_path = base_dir / workspace_id / "plans" / "plan-cache-test" / "scan_orders.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload.pop("ttl", None)
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    old_timestamp = time.time() - 7200
+    os.utime(manifest_path, (old_timestamp, old_timestamp))
+    os.utime(_artifact_path(base_dir, manifest.artifact_key), (old_timestamp, old_timestamp))
+
+    result = artifact_store.cleanup_expired_artifacts(ttl_seconds=3600, now=time.time())
+
+    assert result.deleted_manifests == 1
+    assert result.deleted_artifacts == 1
+    assert not manifest_path.exists()
+
+
+def test_artifact_cleanup_retains_recent_orphaned_artifact(tmp_path) -> None:
+    workspace_id = str(uuid.uuid4())
+    orphan_dir = tmp_path / "artifacts" / workspace_id / "artifacts"
+    orphan_dir.mkdir(parents=True)
+    orphan_path = orphan_dir / "orphan.parquet"
+    orphan_path.write_bytes(b"orphan")
+    artifact_store = ArtifactStore(base_dir=str(tmp_path / "artifacts"))
+
+    result = artifact_store.cleanup_expired_artifacts(ttl_seconds=3600, now=time.time())
+
+    assert result.scanned_artifacts == 1
+    assert result.deleted_artifacts == 0
+    assert orphan_path.exists()
+
+
+def test_artifact_cleanup_records_invalid_manifest_errors(tmp_path) -> None:
+    workspace_id = str(uuid.uuid4())
+    manifest_path = tmp_path / "artifacts" / workspace_id / "plans" / "broken" / "stage.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text("{not-json", encoding="utf-8")
+    artifact_store = ArtifactStore(base_dir=str(tmp_path / "artifacts"))
+
+    result = artifact_store.cleanup_expired_artifacts(ttl_seconds=1, now=time.time() + 10)
+
+    assert result.scanned_manifests == 1
+    assert result.deleted_manifests == 0
+    assert result.errors
+    assert manifest_path.exists()

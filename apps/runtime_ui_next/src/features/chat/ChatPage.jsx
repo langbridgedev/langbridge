@@ -804,8 +804,8 @@ export function ChatPage() {
           <div className="thread-empty-state thread-empty-state--chat">
             <Sparkles className="thread-empty-icon" aria-hidden="true" />
             <div>
-              <strong>Start with a question</strong>
-              <p>Choose an agent, ask a question, and the runtime will answer here without extra workspace chrome.</p>
+              <strong>Ask about your data</strong>
+              <p>Select an agent, ask a question, and Langbridge will answer in this thread.</p>
             </div>
             <div className="thread-suggestion-strip thread-suggestion-strip--empty">
               {CHAT_STARTERS.map((starter) => (

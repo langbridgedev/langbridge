@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from langbridge.federation.connectors import SourceCapabilities
 from tests.helpers.federation_dialect_harness import FederationDialectHarness
 
 
@@ -60,6 +61,13 @@ SNAPSHOT_CASES: tuple[DialectSnapshotCase, ...] = (
 )
 
 
+def _sql_capabilities_for_sources(source_ids: Mapping[str, str]) -> dict[str, SourceCapabilities]:
+    return {
+        source_id: SourceCapabilities(pushdown_full_query=True, pushdown_join=True)
+        for source_id in set(source_ids.values())
+    }
+
+
 @pytest.mark.parametrize("case", SNAPSHOT_CASES, ids=[case.name for case in SNAPSHOT_CASES])
 def test_federation_dialect_plan_contract_snapshots(
     tmp_path: Path,
@@ -73,6 +81,7 @@ def test_federation_dialect_plan_contract_snapshots(
         workflow=workflow,
         input_dialect=case.input_dialect,
         source_dialects=case.source_dialects,
+        source_capabilities=_sql_capabilities_for_sources(case.source_by_table),
     )
 
     actual = harness.plan_contract(

@@ -128,6 +128,10 @@ class AnalystQueryRequest(BaseModel):
         default=None,
         description="Optional list of formatted semantic search results to include in the prompt.",
     )
+    resolved_entities: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Optional governed entity-resolution context to ground filters and timeframes.",
+    )
     error_retries: int = Field(default=0, ge=0, description="Number of times the agent should retry on error.")
     error_history: list[str] = Field(
         default_factory=list,
@@ -169,6 +173,7 @@ class AnalyticalContext(BaseModel):
     asset_id: str
     asset_name: str
     description: str | None = None
+    sql_instructions: str | None = None
     tags: list[str] = Field(default_factory=list)
     execution_mode: Literal["federated"] = "federated"
     dialect: str = "postgres"
@@ -353,4 +358,3 @@ class AnalyticalQueryExecutor(Protocol):
 
 
 SemanticModelLike = SemanticModel
-

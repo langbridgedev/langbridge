@@ -1,6 +1,4 @@
-import { resolveAsync } from "./runtimeService.js";
 import { langbridgeList } from "./langbridgeApiClient.js";
-import { chatProjects, chatThreads } from "../mocks/chat.mock.js";
 
 function normalizeThread(thread) {
   const id = String(thread.id || thread.thread_id || thread.key || thread.title || "thread");
@@ -21,25 +19,13 @@ function normalizeAgent(agent) {
 }
 
 export async function listChatThreads() {
-  try {
-    const items = (await langbridgeList("/api/runtime/v1/threads")).map(normalizeThread);
-    if (items.length > 0) {
-      return items;
-    }
-  } catch {}
-  return resolveAsync(chatThreads.map((item) => ({ ...item, path: `/chat/${item.id}` })));
+  return (await langbridgeList("/api/runtime/v1/threads")).map(normalizeThread);
 }
 
 export async function listAgents() {
-  try {
-    const items = (await langbridgeList("/api/runtime/v1/agents")).map(normalizeAgent);
-    if (items.length > 0) {
-      return items;
-    }
-  } catch {}
-  return resolveAsync([]);
+  return (await langbridgeList("/api/runtime/v1/agents")).map(normalizeAgent);
 }
 
 export function listChatProjects() {
-  return resolveAsync(chatProjects);
+  return Promise.resolve([]);
 }

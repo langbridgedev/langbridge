@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
 import pytest
 
+from langbridge.runtime.persistence.db import (
+    create_async_engine_for_url,
+    create_async_session_factory,
+    create_engine_for_url,
+    initialize_database,
+)
+from langbridge.runtime.persistence.db.workspace import Workspace
 from langbridge.runtime.application.job_handlers import (
     AGENT_RUN_JOB_TYPE,
     AgentRunJobHandler,
@@ -16,6 +24,7 @@ from langbridge.runtime.application.job_handlers import (
 from langbridge.runtime.context import RuntimeContext
 from langbridge.runtime.models import CreateRuntimeJobRequest, RuntimeJobStatus
 from langbridge.runtime.persistence.in_memory import _InMemoryJobRepository
+from langbridge.runtime.persistence.repositories.job_repository import JobRepository
 from langbridge.runtime.services.jobs import (
     RuntimeJobHandlerRegistry,
     RuntimeJobProcessor,
@@ -27,6 +36,24 @@ from langbridge.runtime.services.jobs.context import JobExecutionContext
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+async def _create_sqlite_job_service(tmp_path):
+    metadata_path = tmp_path / "metadata.db"
+    sync_engine = create_engine_for_url(f"sqlite:///{metadata_path}")
+    try:
+        initialize_database(sync_engine)
+    finally:
+        sync_engine.dispose()
+
+    async_engine = create_async_engine_for_url(f"sqlite+aiosqlite:///{metadata_path}")
+    session_factory = create_async_session_factory(async_engine)
+    workspace_id = uuid.uuid4()
+    actor_id = uuid.uuid4()
+    async with session_factory() as session:
+        session.add(Workspace(id=workspace_id, name="unit-test-workspace"))
+        await session.commit()
+    return async_engine, session_factory, workspace_id, actor_id
 
 
 class EchoJobHandler:
@@ -387,6 +414,146 @@ async def test_runtime_job_processor_claims_default_queue_only() -> None:
     assert still_inline.status == RuntimeJobStatus.queued.value
     assert completed_default.status == RuntimeJobStatus.succeeded.value
     assert completed_default.result == {"echo": "default"}
+
+
+@pytest.mark.anyio
+async def test_sqlite_job_claim_is_atomic_across_concurrent_workers(tmp_path) -> None:
+    async_engine, session_factory, workspace_id, actor_id = await _create_sqlite_job_service(tmp_path)
+    try:
+        async with session_factory() as session:
+            service = RuntimeJobService(repository=JobRepository(session))
+            job = await service.create_job(
+                workspace_id=workspace_id,
+                actor_id=actor_id,
+                request=CreateRuntimeJobRequest(job_type="test.echo"),
+            )
+            await session.commit()
+
+        async def claim(worker_id: str):
+            async with session_factory() as session:
+                service = RuntimeJobService(repository=JobRepository(session))
+                claimed = await service.claim_next(
+                    worker_id=worker_id,
+                    lease_seconds=300,
+                    job_types={"test.echo"},
+                    queue_name="default",
+                )
+                await session.commit()
+                return claimed
+
+        claims = await asyncio.gather(*(claim(f"worker-{index}") for index in range(8)))
+        claimed = [item for item in claims if item is not None]
+
+        async with session_factory() as session:
+            service = RuntimeJobService(repository=JobRepository(session))
+            reloaded = await service.get_job(job_id=job.id)
+
+        assert [item.id for item in claimed] == [job.id]
+        assert reloaded.status == RuntimeJobStatus.running.value
+        assert reloaded.attempt == 1
+        assert [event.event_type for event in reloaded.events] == ["job.created", "job.started"]
+    finally:
+        await async_engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_sqlite_job_heartbeat_renews_only_for_lock_owner(tmp_path) -> None:
+    async_engine, session_factory, workspace_id, actor_id = await _create_sqlite_job_service(tmp_path)
+    try:
+        async with session_factory() as session:
+            service = RuntimeJobService(repository=JobRepository(session))
+            job = await service.create_job(
+                workspace_id=workspace_id,
+                actor_id=actor_id,
+                request=CreateRuntimeJobRequest(job_type="test.echo"),
+            )
+            await session.commit()
+
+        async with session_factory() as session:
+            service = RuntimeJobService(repository=JobRepository(session))
+            claimed = await service.claim_next(
+                worker_id="worker-a",
+                lease_seconds=300,
+                job_types={"test.echo"},
+                queue_name="default",
+            )
+            assert claimed is not None
+            await session.commit()
+            original_locked_until = claimed.locked_until
+
+        async with session_factory() as session:
+            service = RuntimeJobService(repository=JobRepository(session))
+            wrong_owner_renewed = await service.heartbeat_job(
+                job_id=job.id,
+                worker_id="worker-b",
+                lease_seconds=600,
+            )
+            await session.commit()
+
+        async with session_factory() as session:
+            service = RuntimeJobService(repository=JobRepository(session))
+            renewed = await service.heartbeat_job(
+                job_id=job.id,
+                worker_id="worker-a",
+                lease_seconds=600,
+            )
+            await session.commit()
+
+        async with session_factory() as session:
+            service = RuntimeJobService(repository=JobRepository(session))
+            reloaded = await service.get_job(job_id=job.id)
+
+        assert wrong_owner_renewed is False
+        assert renewed is True
+        assert reloaded.lock_owner == "worker-a"
+        assert reloaded.heartbeat_at is not None
+        assert reloaded.locked_until is not None
+        assert original_locked_until is not None
+        assert reloaded.locked_until > original_locked_until
+    finally:
+        await async_engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_sqlite_job_event_sequences_are_atomic_across_concurrent_appenders(tmp_path) -> None:
+    async_engine, session_factory, workspace_id, actor_id = await _create_sqlite_job_service(tmp_path)
+    try:
+        async with session_factory() as session:
+            service = RuntimeJobService(repository=JobRepository(session))
+            job = await service.create_job(
+                workspace_id=workspace_id,
+                actor_id=actor_id,
+                request=CreateRuntimeJobRequest(job_type="test.echo"),
+            )
+            await session.commit()
+
+        async def append(index: int) -> int:
+            async with session_factory() as session:
+                service = RuntimeJobService(repository=JobRepository(session))
+                event = await service.append_event(
+                    job_id=job.id,
+                    task_id=None,
+                    event_type="test.concurrent",
+                    status="running",
+                    stage="event",
+                    message=f"Concurrent event {index}.",
+                    visibility="public",
+                    source="unit-test",
+                )
+                await session.commit()
+                return event.sequence
+
+        sequences = await asyncio.gather(*(append(index) for index in range(8)))
+
+        async with session_factory() as session:
+            service = RuntimeJobService(repository=JobRepository(session))
+            reloaded = await service.get_job(job_id=job.id)
+
+        assert sorted(sequences) == list(range(2, 10))
+        assert [event.sequence for event in reloaded.events] == list(range(1, 10))
+        assert reloaded.last_sequence == 9
+    finally:
+        await async_engine.dispose()
 
 
 @pytest.mark.anyio

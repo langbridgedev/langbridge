@@ -49,6 +49,9 @@ def _render_semantic_model_context(context: AnalyticalContext, semantic_model: O
     parts: list[str] = [f"Semantic model asset: {context.asset_name}"]
     if context.description:
         parts.append(f"Description: {context.description}")
+    if context.sql_instructions:
+        parts.append("SQL instructions:")
+        parts.append(context.sql_instructions)
     if context.tags:
         parts.append(f"Tags: {', '.join(context.tags)}")
     if context.datasets:

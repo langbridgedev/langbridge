@@ -1,11 +1,12 @@
-# Runtime UI
+# Legacy Runtime UI
 
-This app is the source for the runtime-owned UI shell.
+This app is the legacy runtime-owned UI shell. The packaged runtime UI is now built from
+`apps/runtime_ui_next`; keep this app available for rollback/reference during migration.
 
 ## Model
 
-- Source code lives in `apps/runtime_ui`
-- Production assets build into `langbridge/ui/static`
+- Legacy source code lives in `apps/runtime_ui`
+- Production assets are now built from `apps/runtime_ui_next` into `langbridge/ui/static`
 - The Python runtime host serves the built output from `langbridge.ui`
 - Routes are runtime-first and single-workspace scoped:
   - `/`
@@ -39,7 +40,7 @@ Run the Vite dev server against a local runtime host:
 
 ```bash
 langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features ui
-cd apps/runtime_ui
+cd apps/runtime_ui_next
 npm run dev
 ```
 
@@ -48,6 +49,6 @@ By default, Vite proxies `/api/*` to `http://127.0.0.1:8000`.
 Build the production assets into the Python package:
 
 ```bash
-cd apps/runtime_ui
+cd apps/runtime_ui_next
 npm run build
 ```

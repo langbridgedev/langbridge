@@ -123,7 +123,7 @@ class AgentRunJobHandler(RuntimeJobHandler):
             input=self._task_input(payload),
             state={"stage": "planning"},
         )
-        await context.emit(
+        started_event = await context.emit(
             event_type="run.started",
             message="Agent run started.",
             status="in_progress",
@@ -144,7 +144,7 @@ class AgentRunJobHandler(RuntimeJobHandler):
                 event=event,
                 public_progress_stages=public_progress_stages,
             ),
-            initial_sequence=int(context.job.last_sequence or 0),
+            initial_sequence=int(started_event.sequence or context.job.last_sequence or 0),
         )
 
         try:

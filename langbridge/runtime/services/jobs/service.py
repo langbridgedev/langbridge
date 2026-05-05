@@ -139,6 +139,24 @@ class RuntimeJobService:
         )
         return await self.get_job(job_id=job.id)
 
+    async def heartbeat_job(
+        self,
+        *,
+        job_id: uuid.UUID,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> bool:
+        heartbeat = getattr(self._repository, "heartbeat_job", None)
+        if heartbeat is None:
+            return False
+        return bool(
+            await heartbeat(
+                job_id=job_id,
+                worker_id=worker_id,
+                lease_seconds=lease_seconds,
+            )
+        )
+
     async def start_job(
         self,
         *,

@@ -1,5 +1,4 @@
 """Final response presentation agent for Langbridge AI."""
-import json
 from typing import Any
 
 from langbridge.ai.base import (
@@ -15,9 +14,11 @@ from langbridge.ai.base import (
 )
 from langbridge.ai.events import AIEventEmitter, AIEventSource
 from langbridge.ai.llm.base import LLMProvider
+from langbridge.ai.llm.structured import acomplete_structured
 from langbridge.ai.agents.presentation.artifacts import (
     build_available_artifacts,
 )
+from langbridge.ai.agents.presentation.contracts import PresentationLLMOutput
 from langbridge.ai.agents.presentation.prompts import build_presentation_prompt
 from langbridge.ai.agents.presentation.response import PresentationResponseAssembler
 from langbridge.ai.tools.charting import ChartSpec, ChartingTool
@@ -113,13 +114,15 @@ class PresentationAgent(AIEventSource, BaseAgent):
             available_artifacts=available_artifacts,
             presentation_guidance=presentation_guidance,
         )
-        parsed = self._parse_json_object(
-            await self._llm.acomplete(
+        parsed = (
+            await acomplete_structured(
+                self._llm,
                 prompt,
-                temperature=0.0,
+                response_model=PresentationLLMOutput,
+                temperature=0.2,
                 max_tokens=2400,
             )
-        )
+        ).model_dump(mode="json", exclude_none=True)
         response = self._response_assembler.assemble(
             question=question,
             mode=mode,
@@ -317,18 +320,6 @@ class PresentationAgent(AIEventSource, BaseAgent):
             if isinstance(rationale, str) and rationale.strip():
                 return rationale.strip()
         return None
-
-    @staticmethod
-    def _parse_json_object(raw: str) -> dict[str, Any]:
-        text = raw.strip()
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end < start:
-            raise ValueError("Presentation LLM response did not contain a JSON object.")
-        parsed = json.loads(text[start : end + 1])
-        if not isinstance(parsed, dict):
-            raise ValueError("Presentation LLM response JSON must be an object.")
-        return parsed
 
 
 __all__ = ["PresentationAgent"]

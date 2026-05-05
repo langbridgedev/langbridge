@@ -2,42 +2,7 @@ import { parseRuntimeDate, getRuntimeTimestamp } from "./format.js";
 
 export const SQL_HISTORY_STORAGE_KEY = "langbridge.runtime_ui.sql_history";
 export const SQL_SAVED_STORAGE_KEY = "langbridge.runtime_ui.sql_saved";
-export const DASHBOARD_BUILDER_STORAGE_KEY = "langbridge.runtime_ui.dashboard_builder";
-
-export const DEFAULT_SQL_QUERY = `SELECT country, SUM(net_revenue) AS net_sales
-FROM shopify_orders
-GROUP BY country
-ORDER BY net_sales DESC`;
-
-export const DEFAULT_CHAT_MESSAGE =
-  "What is the most important thing to investigate in this runtime right now?";
-
-export const SQL_TEMPLATES = [
-  {
-    label: "Revenue by country",
-    description: "Dataset SQL query against the default orders dataset.",
-    query: `SELECT country, SUM(net_revenue) AS net_sales
-FROM shopify_orders
-GROUP BY country
-ORDER BY net_sales DESC`,
-  },
-  {
-    label: "Latest orders",
-    description: "Quick operational spot-check for recent records.",
-    query: `SELECT order_id, order_date, country, net_revenue
-FROM shopify_orders
-ORDER BY order_date DESC
-LIMIT 25`,
-  },
-  {
-    label: "Source SQL",
-    description: "Starter pattern for source-scoped connector workbench queries.",
-    query: `SELECT country, SUM(net_revenue) AS net_sales
-FROM orders_enriched
-GROUP BY country
-ORDER BY net_sales DESC`,
-  },
-];
+export const DASHBOARD_BUILDER_STORAGE_KEY = "langbridge.runtime_ui_next.dashboard_builder";
 
 export const CHAT_STARTERS = [
   "What changed recently in this runtime, and where should I focus first?",

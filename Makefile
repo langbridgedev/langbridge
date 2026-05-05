@@ -19,7 +19,7 @@ install-dev:
 	$(PIP) install -e .
 
 ui-build:
-	cd apps/runtime_ui && $(NPM) install && $(NPM) run build
+	cd apps/runtime_ui_next && $(NPM) install && $(NPM) run build
 
 clean:
 	$(PYTHON) -c "import pathlib, shutil; [shutil.rmtree(path, ignore_errors=True) for path in map(pathlib.Path, ['build', 'dist', 'langbridge.egg-info', 'packages/sdk/build', 'packages/sdk/dist', 'packages/sdk/langbridge_sdk.egg-info'])]"

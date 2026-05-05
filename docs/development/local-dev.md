@@ -41,10 +41,10 @@ Run the runtime host with the UI feature enabled:
 langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features ui
 ```
 
-Then start the React app from `apps/runtime_ui`:
+Then start the React app from `apps/runtime_ui_next`:
 
 ```bash
-cd apps/runtime_ui
+cd apps/runtime_ui_next
 npm install
 npm run dev
 ```

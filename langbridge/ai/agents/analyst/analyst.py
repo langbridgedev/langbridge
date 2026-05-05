@@ -1,6 +1,7 @@
 """Specification-driven analyst agent for Langbridge AI."""
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -28,7 +29,19 @@ from langbridge.ai.agents.analyst.prompts import (
     ANALYST_SQL_SYNTHESIS_PROMPT,
     ANALYST_SQL_TOOL_SELECTION_PROMPT,
 )
-from langbridge.ai.agents.analyst.contracts import AnalystEvidencePlan, AnalystEvidencePlanStep
+from langbridge.ai.agents.analyst.contracts import (
+    AnalystContextAnalysisOutput,
+    AnalystEntityReference,
+    AnalystEvidencePlan,
+    AnalystEvidencePlanStep,
+    AnalystModeDecision,
+    AnalystResearchSynthesisOutput,
+    AnalystResolvedEntity,
+    AnalystSqlEvidenceReviewOutput,
+    AnalystSqlSummaryOutput,
+    AnalystSqlSynthesisOutput,
+    AnalystSqlToolSelection,
+)
 from langbridge.ai.agents.analyst.research_workflow import (
     EvidenceBundle,
     ResearchDecisionAction,
@@ -37,6 +50,7 @@ from langbridge.ai.agents.analyst.research_workflow import (
 )
 from langbridge.ai.agents.presentation.guidance import PresentationGuidance
 from langbridge.ai.llm.base import LLMProvider
+from langbridge.ai.llm.structured import acomplete_structured
 from langbridge.ai.modes import (
     AnalystAgentMode,
     analyst_output_contract_for_task_input,
@@ -75,6 +89,28 @@ _SEMANTIC_FALLBACK_MARKERS = (
     "must query the selected semantic model",
     "must match the selected semantic dimensions and time buckets",
 )
+
+_PARENTHESIZED_IDENTIFIER_RE = re.compile(r"\((?P<identifier>[A-Za-z][A-Za-z0-9_-]{2,})\)")
+_CODE_IDENTIFIER_RE = re.compile(r"\b[A-Z][A-Z0-9_-]{3,}\b")
+_ENTITY_NAME_SPLIT_RE = re.compile(
+    r"\b(?:for|of|about|called|named|entity|product|security|fund|portfolio|asset)\b",
+    re.IGNORECASE,
+)
+_ENTITY_IDENTIFIER_COLUMN_HINTS = (
+    "id",
+    "code",
+    "identifier",
+    "key",
+    "sku",
+    "isin",
+    "sedol",
+    "cusip",
+    "ticker",
+)
+_ENTITY_NAME_COLUMN_HINTS = ("name", "display", "title", "label", "description")
+_ENTITY_INCEPTION_COLUMN_HINTS = ("inception", "launch", "start", "created", "first")
+_ENTITY_STATUS_COLUMN_HINTS = ("status", "state", "active")
+_ENTITY_BENCHMARK_COLUMN_HINTS = ("benchmark", "index")
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,7 +309,18 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 diagnostics={"agent_mode": AnalystAgentMode.sql.value, "mode_decision": mode_decision},
             )
 
+        entity_resolution = await self._resolve_entity_context(task=task, tools=candidate_tools)
+        if entity_resolution is not None and not entity_resolution.resolved:
+            return self._entity_resolution_clarification_result(
+                task=task,
+                mode_decision=mode_decision,
+                entity_resolution=entity_resolution,
+                agent_mode=AnalystAgentMode.sql.value,
+            )
+
         request = self._sql_request(task)
+        if entity_resolution is not None:
+            request = self._request_with_entity_resolution(request=request, entity_resolution=entity_resolution)
         response: AnalystQueryResponse | None = None
         taxonomy: SqlFailureTaxonomy | None = None
         final_tool: SqlAnalysisTool | None = None
@@ -320,6 +367,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
                     task=task,
                     response=response,
                     memory_context=self._memory_context(task.context),
+                    entity_resolution=entity_resolution,
                 )
                 await self._emit_ai_event(
                     event_type="AnalystEvidenceReviewCompleted",
@@ -373,6 +421,8 @@ class AnalystAgent(AIEventSource, BaseAgent):
                         "governed_attempts": [attempt.to_dict() for attempt in governed_attempts],
                         "governed_tools_tried": self._governed_tools_tried(governed_attempts),
                     }
+                    if entity_resolution is not None:
+                        diagnostics["entity_resolution"] = entity_resolution.model_dump(mode="json", exclude_none=True)
                     if fallback_details is not None:
                         diagnostics["fallback"] = fallback_details
                     return self.build_result(
@@ -420,6 +470,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
             question=task.question,
             response=response,
             memory_context=self._memory_context(task.context),
+            entity_resolution=entity_resolution,
         )
         if allow_web_augmentation and self._should_augment_sql_with_web(task=task, response=response, review=review):
             web_result = await self._run_web_search_if_needed(task=task, existing_sources=[])
@@ -431,6 +482,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
                     response=response,
                     sources=sources,
                     memory_context=self._memory_context(task.context),
+                    entity_resolution=entity_resolution,
                 )
                 summary = synthesis["analysis"]
                 findings = synthesis.get("findings", [])
@@ -463,6 +515,8 @@ class AnalystAgent(AIEventSource, BaseAgent):
             "governed_attempts": [attempt.to_dict() for attempt in governed_attempts],
             "governed_tools_tried": self._governed_tools_tried(governed_attempts),
         }
+        if entity_resolution is not None:
+            diagnostics["entity_resolution"] = entity_resolution.model_dump(mode="json", exclude_none=True)
         if fallback_details is not None:
             diagnostics["fallback"] = fallback_details
         return self.build_result(
@@ -492,6 +546,16 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 error="Research mode is not enabled for this analyst profile.",
                 diagnostics={"agent_mode": AnalystAgentMode.research.value, "mode_decision": mode_decision},
             )
+        entity_resolution = await self._resolve_entity_context(task=task, tools=self._initial_sql_tools())
+        if entity_resolution is not None and not entity_resolution.resolved:
+            return self._entity_resolution_clarification_result(
+                task=task,
+                mode_decision=mode_decision,
+                entity_resolution=entity_resolution,
+                agent_mode=AnalystAgentMode.research.value,
+            )
+        if entity_resolution is not None:
+            task = self._task_with_entity_resolution(task=task, entity_resolution=entity_resolution)
         sources = self._dedupe_sources(self._collect_sources(task.context), limit=self._config.max_sources)
         evidence_plan = await self._create_research_evidence_plan(task=task, sources=sources)
         workflow_state = ResearchWorkflowState(original_question=task.question, evidence_plan=evidence_plan)
@@ -690,6 +754,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
             governed_outcome=governed_output.get("outcome") if isinstance(governed_output.get("outcome"), dict) else {},
             governed_rounds=workflow_state.compact_payload().get("governed_rounds", []),
             evidence_bundle=evidence_bundle.to_prompt_dict(),
+            entity_resolution=self._entity_resolution_from_context(task.context),
         )
         visualization_payload = self._build_visualization_recommendation_payload(
             recommendation=visualization_decision.get("visualization_recommendation")
@@ -767,6 +832,11 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 else None,
                 "evidence_bundle_assessment": evidence_bundle.assessment(),
                 "research_state": workflow_state.compact_payload(),
+                **(
+                    {"entity_resolution": entity_resolution.model_dump(mode="json", exclude_none=True)}
+                    if entity_resolution is not None
+                    else {}
+                ),
             },
         )
 
@@ -793,17 +863,22 @@ class AnalystAgent(AIEventSource, BaseAgent):
             ANALYST_CONTEXT_ANALYSIS_PROMPT.format(
                 question=task.question,
                 memory_context=self._memory_context(task.context),
+                resolved_entity_context=self._resolved_entity_context_prompt(
+                    self._entity_resolution_from_context(task.context)
+                ),
                 detail_expectation=self._detail_expectation(task.question),
                 result=json.dumps(context_result, default=str),
             )
         )
-        parsed = self._parse_json_object(
-            await self._llm.acomplete(
+        parsed = (
+            await acomplete_structured(
+                self._llm,
                 prompt,
-                temperature=0.0,
+                response_model=AnalystContextAnalysisOutput,
+                temperature=0.2,
                 max_tokens=self._detail_token_limit(task.question, standard=800, detailed=1200),
             )
-        )
+        ).model_dump(mode="json")
         result = parsed.get("result")
         if not isinstance(result, dict):
             raise ValueError("Analyst LLM response missing object field: result.")
@@ -839,8 +914,14 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 tools=json.dumps([tool.describe() for tool in tools], default=str, indent=2),
             )
         )
-        parsed = self._parse_json_object(await self._llm.acomplete(prompt, temperature=0.0, max_tokens=400))
-        selected_name = str(parsed.get("tool_name") or "").strip()
+        parsed = await acomplete_structured(
+            self._llm,
+            prompt,
+            response_model=AnalystSqlToolSelection,
+            temperature=0.0,
+            max_tokens=400,
+        )
+        selected_name = str(parsed.tool_name or "").strip()
         for tool in tools:
             if tool.name == selected_name:
                 return tool
@@ -950,31 +1031,471 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 )
         return final_tool, response, taxonomy, fallback_details, attempted_tools
 
+    async def _resolve_entity_context(
+        self,
+        *,
+        task: AgentTask,
+        tools: Sequence[SqlAnalysisTool],
+    ) -> AnalystResolvedEntity | None:
+        existing = self._entity_resolution_from_context(task.context)
+        if existing is not None and existing.resolved:
+            return existing
+        reference = self._extract_primary_entity_reference(task.question)
+        if (
+            reference is None
+            and existing is not None
+            and existing.status == "ambiguous"
+            and self._question_accepts_all_entity_matches(task.question)
+        ):
+            reference = existing.reference
+        if reference is None or not tools:
+            return existing if existing is not None and not self._question_accepts_all_entity_matches(task.question) else None
+
+        question = self._entity_resolution_question(reference=reference, original_question=task.question)
+        resolution_task = task.model_copy(
+            update={
+                "question": question,
+                "input": {**dict(task.input), "agent_mode": AnalystAgentMode.sql.value},
+            }
+        )
+        request = AnalystQueryRequest(
+            question=question,
+            conversation_context=self._combined_conversation_context(task.context),
+            limit=5,
+            error_retries=0,
+            error_history=[],
+        )
+        try:
+            final_tool, response, taxonomy, fallback_details, attempted_tools = await self._execute_governed_sql_round(
+                task=resolution_task,
+                tools=tools,
+                request=request,
+            )
+        except Exception as exc:
+            return AnalystResolvedEntity(
+                status="error",
+                reference=reference,
+                message=f"Entity resolution failed before metric analysis: {exc}",
+            )
+
+        attempt = SqlGovernedAttempt(
+            round_index=1,
+            tool_name=final_tool.name,
+            query_scope=final_tool.query_scope.value,
+            status=response.outcome.status.value if response.outcome is not None else None,
+            attempted_tools=tuple(attempted_tools),
+            fallback_details=fallback_details,
+        )
+        attempts = [attempt.to_dict()]
+        if response.has_error:
+            return AnalystResolvedEntity(
+                status="error",
+                reference=reference,
+                source_tool=final_tool.name,
+                query_scope=final_tool.query_scope.value,
+                sql_canonical=response.sql_canonical,
+                sql_executable=response.sql_executable,
+                selected_datasets=[dataset.dataset_id for dataset in response.selected_datasets],
+                selected_semantic_models=(
+                    [response.selected_semantic_model_id] if response.selected_semantic_model_id else []
+                ),
+                row_count=response.row_count,
+                message=response.error or taxonomy.message or "Entity resolution query failed.",
+                attempts=attempts,
+            )
+        return self._resolved_entity_from_response(
+            reference=reference,
+            response=response,
+            final_tool=final_tool,
+            attempts=attempts,
+        )
+
+    def _resolved_entity_from_response(
+        self,
+        *,
+        reference: AnalystEntityReference,
+        response: AnalystQueryResponse,
+        final_tool: SqlAnalysisTool,
+        attempts: list[dict[str, Any]],
+    ) -> AnalystResolvedEntity:
+        rows = self._result_rows_as_dicts(response)
+        row_count = response.row_count if response.row_count is not None else len(rows)
+        if not rows:
+            return AnalystResolvedEntity(
+                status="not_found",
+                reference=reference,
+                source_tool=final_tool.name,
+                query_scope=final_tool.query_scope.value,
+                sql_canonical=response.sql_canonical,
+                sql_executable=response.sql_executable,
+                selected_datasets=[dataset.dataset_id for dataset in response.selected_datasets],
+                selected_semantic_models=(
+                    [response.selected_semantic_model_id] if response.selected_semantic_model_id else []
+                ),
+                row_count=row_count,
+                message=f"I could not resolve entity identifier '{reference.identifier}' in governed data.",
+                attempts=attempts,
+            )
+
+        id_columns = self._candidate_columns(rows[0], _ENTITY_IDENTIFIER_COLUMN_HINTS)
+        matched_rows_by_index: dict[int, tuple[dict[str, Any], str]] = {}
+        for row_index, row in enumerate(rows):
+            for column in (id_columns or list(row.keys())):
+                if self._normalized_entity_text(row.get(column)) == self._normalized_entity_text(reference.identifier):
+                    matched_rows_by_index.setdefault(row_index, (row, column))
+        matched_rows = list(matched_rows_by_index.values())
+        if len(matched_rows) == 1:
+            matched_row, match_column = matched_rows[0]
+        elif len(matched_rows) > 1:
+            matched_row, match_column = matched_rows[0]
+        elif len(rows) == 1:
+            matched_row = rows[0]
+            match_column = None
+        else:
+            return AnalystResolvedEntity(
+                status="ambiguous",
+                reference=reference,
+                source_tool=final_tool.name,
+                query_scope=final_tool.query_scope.value,
+                sql_canonical=response.sql_canonical,
+                sql_executable=response.sql_executable,
+                selected_datasets=[dataset.dataset_id for dataset in response.selected_datasets],
+                selected_semantic_models=(
+                    [response.selected_semantic_model_id] if response.selected_semantic_model_id else []
+                ),
+                row_count=row_count,
+                message=f"Entity identifier '{reference.identifier}' returned multiple possible governed matches.",
+                attempts=attempts,
+            )
+
+        canonical_identifier = self._canonical_identifier_from_row(
+            row=matched_row,
+            reference=reference,
+            id_columns=id_columns,
+        )
+        matched_row_values = [row for row, _column in matched_rows] if matched_rows else [matched_row]
+        canonical_identifiers = {
+            self._normalized_entity_text(
+                self._canonical_identifier_from_row(row=row, reference=reference, id_columns=id_columns)
+            )
+            for row in matched_row_values
+        }
+        if len(canonical_identifiers) > 1:
+            return AnalystResolvedEntity(
+                status="ambiguous",
+                reference=reference,
+                source_tool=final_tool.name,
+                query_scope=final_tool.query_scope.value,
+                sql_canonical=response.sql_canonical,
+                sql_executable=response.sql_executable,
+                selected_datasets=[dataset.dataset_id for dataset in response.selected_datasets],
+                selected_semantic_models=(
+                    [response.selected_semantic_model_id] if response.selected_semantic_model_id else []
+                ),
+                row_count=row_count,
+                matched_rows_sample=matched_row_values[:5],
+                message=f"Entity identifier '{reference.identifier}' mapped to multiple governed identifiers.",
+                attempts=attempts,
+            )
+
+        canonical_name = self._common_value_by_column_hints(matched_row_values, _ENTITY_NAME_COLUMN_HINTS)
+        canonical_name = canonical_name or self._first_value_by_column_hints(matched_row, _ENTITY_NAME_COLUMN_HINTS)
+        canonical_name = canonical_name or reference.supplied_name
+        name_mismatch = self._entity_name_mismatch(
+            supplied_name=reference.supplied_name,
+            canonical_name=canonical_name,
+        )
+        message = "Resolved entity context before metric analysis."
+        if name_mismatch and reference.supplied_name and canonical_name:
+            message = (
+                f"Resolved identifier '{reference.identifier}' to '{canonical_name}', "
+                f"which differs from supplied name '{reference.supplied_name}'."
+            )
+        elif len(matched_row_values) > 1:
+            message = (
+                f"Resolved identifier '{reference.identifier}' across {len(matched_row_values)} governed rows; "
+                "downstream analysis should filter by the identifier across all matches."
+            )
+        return AnalystResolvedEntity(
+            status="resolved",
+            reference=reference,
+            canonical_identifier=canonical_identifier,
+            canonical_name=canonical_name,
+            source_tool=final_tool.name,
+            query_scope=final_tool.query_scope.value,
+            sql_canonical=response.sql_canonical,
+            sql_executable=response.sql_executable,
+            selected_datasets=[dataset.dataset_id for dataset in response.selected_datasets],
+            selected_semantic_models=(
+                [response.selected_semantic_model_id] if response.selected_semantic_model_id else []
+            ),
+            row_count=row_count,
+            matched_row=matched_row,
+            matched_rows_sample=matched_row_values[:5],
+            match_column=match_column,
+            name_mismatch=name_mismatch,
+            message=message,
+            attempts=attempts,
+        )
+
+    @classmethod
+    def _extract_primary_entity_reference(cls, question: str) -> AnalystEntityReference | None:
+        text = str(question or "")
+        for match in _PARENTHESIZED_IDENTIFIER_RE.finditer(text):
+            identifier = match.group("identifier")
+            if not cls._looks_like_entity_identifier(identifier):
+                continue
+            supplied_name = cls._entity_name_from_prefix(text[: match.start()])
+            original_text = f"{supplied_name} ({identifier})" if supplied_name else match.group(0)
+            return AnalystEntityReference(
+                identifier=identifier,
+                supplied_name=supplied_name,
+                original_text=original_text,
+                source="parenthesized_identifier",
+            )
+        for match in _CODE_IDENTIFIER_RE.finditer(text):
+            identifier = match.group(0)
+            if not cls._looks_like_entity_identifier(identifier):
+                continue
+            return AnalystEntityReference(
+                identifier=identifier,
+                original_text=identifier,
+                source="code_identifier",
+            )
+        return None
+
+    @staticmethod
+    def _question_accepts_all_entity_matches(question: str) -> bool:
+        text = str(question or "").casefold()
+        return bool(re.search(r"\b(all|both|everything|every|entire)\b", text))
+
+    @staticmethod
+    def _looks_like_entity_identifier(identifier: str) -> bool:
+        text = str(identifier or "").strip()
+        if len(text) < 4:
+            return False
+        if not any(char.isdigit() for char in text):
+            return False
+        return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]+", text))
+
+    @staticmethod
+    def _entity_name_from_prefix(prefix: str) -> str | None:
+        candidate = str(prefix or "").strip()
+        if not candidate:
+            return None
+        parts = _ENTITY_NAME_SPLIT_RE.split(candidate)
+        candidate = parts[-1] if parts else candidate
+        candidate = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", candidate).strip()
+        candidate = re.sub(r"^(?:the|a|an)\s+", "", candidate, flags=re.IGNORECASE).strip()
+        words = candidate.split()
+        if len(words) > 8:
+            candidate = " ".join(words[-8:])
+        return candidate or None
+
+    @staticmethod
+    def _entity_resolution_question(*, reference: AnalystEntityReference, original_question: str) -> str:
+        supplied_name = reference.supplied_name or "not supplied"
+        return (
+            "Resolve the governed entity before metric analysis.\n"
+            f"Identifier: {reference.identifier}\n"
+            f"Supplied name: {supplied_name}\n"
+            f"Original question: {original_question}\n"
+            "Use the identifier as the primary filter. Return at most 5 rows with the entity identifier/code, "
+            "display/name, type/category, status, inception/start/launch date, benchmark fields, and any join key "
+            "needed for later metric filtering. Do not calculate alpha, beta, performance, or other metrics."
+        )
+
+    @staticmethod
+    def _entity_resolution_from_context(context: dict[str, Any]) -> AnalystResolvedEntity | None:
+        raw = context.get("entity_resolution") or context.get("resolved_entity")
+        if raw is None:
+            raw_entities = context.get("resolved_entities")
+            if isinstance(raw_entities, list) and raw_entities:
+                raw = raw_entities[0]
+        if raw is None:
+            return None
+        if isinstance(raw, AnalystResolvedEntity):
+            return raw
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return AnalystResolvedEntity.model_validate(raw)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _request_with_entity_resolution(
+        *,
+        request: AnalystQueryRequest,
+        entity_resolution: AnalystResolvedEntity,
+    ) -> AnalystQueryRequest:
+        return request.model_copy(
+            update={"resolved_entities": [entity_resolution.model_dump(mode="json", exclude_none=True)]}
+        )
+
+    @staticmethod
+    def _task_with_entity_resolution(
+        *,
+        task: AgentTask,
+        entity_resolution: AnalystResolvedEntity,
+    ) -> AgentTask:
+        context = dict(task.context)
+        payload = entity_resolution.model_dump(mode="json", exclude_none=True)
+        context["entity_resolution"] = payload
+        context["resolved_entities"] = [payload]
+        return task.model_copy(update={"context": context})
+
+    def _entity_resolution_clarification_result(
+        self,
+        *,
+        task: AgentTask,
+        mode_decision: dict[str, Any],
+        entity_resolution: AnalystResolvedEntity,
+        agent_mode: str,
+    ) -> AgentResult:
+        message = entity_resolution.message or (
+            f"Which entity should I use for identifier '{entity_resolution.reference.identifier}'?"
+        )
+        return self.build_result(
+            task=task,
+            status=AgentResultStatus.needs_clarification,
+            output={
+                "analysis": "",
+                "result": {},
+                "artifacts": {},
+                "evidence": {
+                    "governed": {
+                        "attempted": bool(entity_resolution.attempts),
+                        "answered_question": False,
+                        "query_scope": entity_resolution.query_scope,
+                        "status": entity_resolution.status,
+                        "used_fallback": any(bool(item.get("fallback")) for item in entity_resolution.attempts),
+                    },
+                    "external": {"used": False, "source_count": 0},
+                    "limitations": [message],
+                },
+                "review_hints": {
+                    "requires_source_review": False,
+                    "governed_empty_result": entity_resolution.status == "not_found",
+                    "governed_error": entity_resolution.status == "error",
+                    "entity_resolution_status": entity_resolution.status,
+                },
+            },
+            artifacts={},
+            diagnostics={
+                "agent_mode": agent_mode,
+                "mode_decision": mode_decision,
+                "entity_resolution": entity_resolution.model_dump(mode="json", exclude_none=True),
+                "weak_evidence": True,
+            },
+            error=message,
+        )
+
+    @staticmethod
+    def _result_rows_as_dicts(response: AnalystQueryResponse) -> list[dict[str, Any]]:
+        if response.result is None:
+            return []
+        columns = [str(column) for column in response.result.columns]
+        rows: list[dict[str, Any]] = []
+        for raw_row in response.result.rows:
+            row_values = list(raw_row)
+            rows.append({column: row_values[index] if index < len(row_values) else None for index, column in enumerate(columns)})
+        return rows
+
+    @staticmethod
+    def _candidate_columns(row: dict[str, Any], hints: Sequence[str]) -> list[str]:
+        columns = list(row.keys())
+        return [
+            column
+            for column in columns
+            if any(hint in column.replace(".", "_").casefold() for hint in hints)
+        ]
+
+    @classmethod
+    def _canonical_identifier_from_row(
+        cls,
+        *,
+        row: dict[str, Any],
+        reference: AnalystEntityReference,
+        id_columns: Sequence[str],
+    ) -> str:
+        reference_value = cls._normalized_entity_text(reference.identifier)
+        for column in id_columns:
+            value = row.get(column)
+            if cls._normalized_entity_text(value) == reference_value:
+                return str(value).strip()
+        for column in id_columns:
+            value = row.get(column)
+            if value not in (None, ""):
+                return str(value).strip()
+        return reference.identifier
+
+    @staticmethod
+    def _first_value_by_column_hints(row: dict[str, Any], hints: Sequence[str]) -> str | None:
+        for column in AnalystAgent._candidate_columns(row, hints):
+            value = row.get(column)
+            if value not in (None, ""):
+                return str(value).strip()
+        return None
+
+    @classmethod
+    def _common_value_by_column_hints(cls, rows: Sequence[dict[str, Any]], hints: Sequence[str]) -> str | None:
+        values: list[str] = []
+        for row in rows:
+            value = cls._first_value_by_column_hints(row, hints)
+            if value:
+                values.append(value)
+        normalized = {cls._normalized_entity_text(value) for value in values if value}
+        if len(normalized) == 1 and values:
+            return values[0]
+        return None
+
+    @staticmethod
+    def _normalized_entity_text(value: Any) -> str:
+        return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+    @classmethod
+    def _entity_name_mismatch(cls, *, supplied_name: str | None, canonical_name: str | None) -> bool:
+        supplied = cls._normalized_entity_text(supplied_name)
+        canonical = cls._normalized_entity_text(canonical_name)
+        if not supplied or not canonical:
+            return False
+        return supplied not in canonical and canonical not in supplied
+
+    @staticmethod
+    def _resolved_entity_context_prompt(entity_resolution: AnalystResolvedEntity | None) -> str:
+        if entity_resolution is None:
+            return "None"
+        payload = entity_resolution.model_dump(mode="json", exclude_none=True)
+        return json.dumps(payload, default=str, indent=2)
+
     async def _summarize_sql_response(
         self,
         *,
         question: str,
         response: AnalystQueryResponse,
         memory_context: str = "",
+        entity_resolution: AnalystResolvedEntity | None = None,
     ) -> str:
         prompt = self._prompt(
             ANALYST_SQL_RESPONSE_PROMPT.format(
                 question=question,
                 memory_context=memory_context,
+                resolved_entity_context=self._resolved_entity_context_prompt(entity_resolution),
                 detail_expectation=self._detail_expectation(question),
                 sql=response.sql_canonical,
                 result=json.dumps(response.result.model_dump(mode="json") if response.result else {}, default=str),
                 outcome=json.dumps(response.outcome.model_dump(mode="json") if response.outcome else {}, default=str),
             )
         )
-        parsed = self._parse_json_object(
-            await self._llm.acomplete(
-                prompt,
-                temperature=0.0,
-                max_tokens=self._detail_token_limit(question, standard=700, detailed=1100),
-            )
+        parsed = await acomplete_structured(
+            self._llm,
+            prompt,
+            response_model=AnalystSqlSummaryOutput,
+            temperature=0.0,
+            max_tokens=self._detail_token_limit(question, standard=700, detailed=1100),
         )
-        analysis = str(parsed.get("analysis") or "").strip()
+        analysis = str(parsed.analysis or "").strip()
         if not analysis:
             raise ValueError("Analyst SQL summary response missing analysis.")
         return analysis
@@ -985,11 +1506,13 @@ class AnalystAgent(AIEventSource, BaseAgent):
         task: AgentTask,
         response: AnalystQueryResponse,
         memory_context: str = "",
+        entity_resolution: AnalystResolvedEntity | None = None,
     ) -> SqlEvidenceReviewDecision:
         prompt = self._prompt(
             ANALYST_SQL_EVIDENCE_REVIEW_PROMPT.format(
                 question=task.question,
                 memory_context=memory_context,
+                resolved_entity_context=self._resolved_entity_context_prompt(entity_resolution),
                 web_augmentation_available=self._web_augmentation_available(task=task),
                 sql=response.sql_canonical,
                 result=json.dumps(response.result.model_dump(mode="json") if response.result else {}, default=str),
@@ -997,21 +1520,27 @@ class AnalystAgent(AIEventSource, BaseAgent):
             )
         )
         try:
-            parsed = self._parse_json_object(await self._llm.acomplete(prompt, temperature=0.0, max_tokens=500))
+            parsed = await acomplete_structured(
+                self._llm,
+                prompt,
+                response_model=AnalystSqlEvidenceReviewOutput,
+                temperature=0.0,
+                max_tokens=500,
+            )
         except Exception:
             return self._default_sql_evidence_review(task=task, response=response)
 
-        decision = str(parsed.get("decision") or "").strip().lower()
-        sufficiency = str(parsed.get("sufficiency") or "").strip().lower()
+        decision = str(parsed.decision or "").strip().lower()
+        sufficiency = str(parsed.sufficiency or "").strip().lower()
         if decision not in {"answer", "augment_with_web", "clarify"}:
             return self._default_sql_evidence_review(task=task, response=response)
         if sufficiency not in {"sufficient", "partial", "insufficient"}:
             return self._default_sql_evidence_review(task=task, response=response)
         return SqlEvidenceReviewDecision(
             decision=decision,
-            reason=str(parsed.get("reason") or "").strip() or "Reviewed governed SQL evidence.",
+            reason=str(parsed.reason or "").strip() or "Reviewed governed SQL evidence.",
             sufficiency=sufficiency,
-            clarification_question=self._optional_string(parsed.get("clarification_question")),
+            clarification_question=self._optional_string(parsed.clarification_question),
         )
 
     async def _synthesize_research(
@@ -1025,11 +1554,13 @@ class AnalystAgent(AIEventSource, BaseAgent):
         governed_outcome: dict[str, Any] | None = None,
         governed_rounds: list[dict[str, Any]] | None = None,
         evidence_bundle: dict[str, Any] | None = None,
+        entity_resolution: AnalystResolvedEntity | None = None,
     ) -> dict[str, Any]:
         prompt = self._prompt(
             ANALYST_DEEP_RESEARCH_PROMPT.format(
                 question=question,
                 memory_context=memory_context,
+                resolved_entity_context=self._resolved_entity_context_prompt(entity_resolution),
                 detail_expectation=self._detail_expectation(question),
                 governed_analysis=governed_analysis,
                 governed_result=json.dumps(governed_result or {}, default=str),
@@ -1039,13 +1570,14 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 sources=json.dumps(sources, default=str),
             )
         )
-        parsed = self._parse_json_object(
-            await self._llm.acomplete(
-                prompt,
-                temperature=0.0,
-                max_tokens=self._detail_token_limit(question, standard=1200, detailed=1600),
-            )
+        parsed_model = await acomplete_structured(
+            self._llm,
+            prompt,
+            response_model=AnalystResearchSynthesisOutput,
+            temperature=0.0,
+            max_tokens=self._detail_token_limit(question, standard=1200, detailed=1600),
         )
+        parsed = parsed_model.model_dump(mode="json", exclude_none=True)
         if not isinstance(parsed.get("synthesis"), str):
             raise ValueError("Research LLM response missing synthesis.")
         findings = parsed.get("findings")
@@ -1070,11 +1602,13 @@ class AnalystAgent(AIEventSource, BaseAgent):
         response: AnalystQueryResponse,
         sources: list[dict[str, Any]],
         memory_context: str = "",
+        entity_resolution: AnalystResolvedEntity | None = None,
     ) -> dict[str, Any]:
         prompt = self._prompt(
             ANALYST_SQL_SYNTHESIS_PROMPT.format(
                 question=question,
                 memory_context=memory_context,
+                resolved_entity_context=self._resolved_entity_context_prompt(entity_resolution),
                 detail_expectation=self._detail_expectation(question),
                 analysis=analysis,
                 result=json.dumps(response.result.model_dump(mode="json") if response.result else {}, default=str),
@@ -1082,13 +1616,14 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 sources=json.dumps(sources, default=str),
             )
         )
-        parsed = self._parse_json_object(
-            await self._llm.acomplete(
-                prompt,
-                temperature=0.0,
-                max_tokens=self._detail_token_limit(question, standard=1200, detailed=1600),
-            )
+        parsed_model = await acomplete_structured(
+            self._llm,
+            prompt,
+            response_model=AnalystSqlSynthesisOutput,
+            temperature=0.0,
+            max_tokens=self._detail_token_limit(question, standard=1200, detailed=1600),
         )
+        parsed = parsed_model.model_dump(mode="json", exclude_none=True)
         if not isinstance(parsed.get("analysis"), str):
             raise ValueError("Analyst SQL synthesis response missing analysis.")
         findings = parsed.get("findings")
@@ -1109,6 +1644,9 @@ class AnalystAgent(AIEventSource, BaseAgent):
             ANALYST_EVIDENCE_PLAN_PROMPT.format(
                 question=task.question,
                 memory_context=self._combined_conversation_context(task.context),
+                resolved_entity_context=self._resolved_entity_context_prompt(
+                    self._entity_resolution_from_context(task.context)
+                ),
                 sql_tools=json.dumps([tool.describe() for tool in self._initial_sql_tools()], default=str, indent=2),
                 web_search_available=self._web_augmentation_available(task=task),
                 governed_round_limit=self._governed_round_limit(),
@@ -1117,8 +1655,13 @@ class AnalystAgent(AIEventSource, BaseAgent):
             )
         )
         try:
-            parsed = self._parse_json_object(await self._llm.acomplete(prompt, temperature=0.0, max_tokens=1000))
-            return AnalystEvidencePlan.model_validate(parsed)
+            return await acomplete_structured(
+                self._llm,
+                prompt,
+                response_model=AnalystEvidencePlan,
+                temperature=0.0,
+                max_tokens=1000,
+            )
         except Exception:
             return self._fallback_research_evidence_plan(task=task)
 
@@ -1186,6 +1729,9 @@ class AnalystAgent(AIEventSource, BaseAgent):
             ANALYST_RESEARCH_STEP_PROMPT.format(
                 question=task.question,
                 memory_context=self._combined_conversation_context(task.context),
+                resolved_entity_context=self._resolved_entity_context_prompt(
+                    self._entity_resolution_from_context(task.context)
+                ),
                 sql_tools=json.dumps([tool.describe() for tool in self._initial_sql_tools()], default=str, indent=2),
                 web_search_available=self._web_augmentation_available(task=task),
                 remaining_governed_rounds=self._remaining_governed_rounds(workflow_state=workflow_state),
@@ -1194,8 +1740,13 @@ class AnalystAgent(AIEventSource, BaseAgent):
             )
         )
         try:
-            parsed = self._parse_json_object(await self._llm.acomplete(prompt, temperature=0.0, max_tokens=700))
-            decision = ResearchStepDecision.model_validate(parsed)
+            decision = await acomplete_structured(
+                self._llm,
+                prompt,
+                response_model=ResearchStepDecision,
+                temperature=0.0,
+                max_tokens=700,
+            )
             return self._defer_premature_research_clarification(
                 task=task,
                 workflow_state=workflow_state,
@@ -1341,8 +1892,15 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 memory_context=self._memory_context(task.context),
             )
         )
+        parsed = await acomplete_structured(
+            self._llm,
+            prompt,
+            response_model=AnalystModeDecision,
+            temperature=0.0,
+            max_tokens=500,
+        )
         parsed = normalize_analyst_mode_decision(
-            self._parse_json_object(await self._llm.acomplete(prompt, temperature=0.0, max_tokens=500)),
+            parsed.model_dump(mode="json", exclude_none=True),
             default_mode=AnalystAgentMode.sql,
         )
         if parsed is None:
@@ -2265,18 +2823,6 @@ class AnalystAgent(AIEventSource, BaseAgent):
             cue in text
             for cue in ("search", "web", "latest", "current", "news", "source", "sources", "look up", "research")
         )
-
-    @staticmethod
-    def _parse_json_object(raw: str) -> dict[str, Any]:
-        text = raw.strip()
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end < start:
-            raise ValueError("LLM response did not contain a JSON object.")
-        parsed = json.loads(text[start : end + 1])
-        if not isinstance(parsed, dict):
-            raise ValueError("LLM response JSON must be an object.")
-        return parsed
 
 
 SemanticAnalystAgent = AnalystAgent

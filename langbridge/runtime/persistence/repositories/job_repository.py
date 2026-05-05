@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, case, or_, select
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -127,48 +127,76 @@ class JobRepository(AsyncBaseRepository[JobRecord]):
         queue_name: str | None = None,
     ) -> JobRecord | None:
         now = datetime.now(timezone.utc)
-        runnable = or_(
-            JobRecord.status == "queued",
-            and_(
-                JobRecord.status == "running",
-                JobRecord.locked_until.is_not(None),
-                JobRecord.locked_until < now,
-            ),
-        )
-        query = self._job_query().where(runnable)
-        query = query.where(
-            or_(JobRecord.scheduled_at.is_(None), JobRecord.scheduled_at <= now)
-        )
+        conditions = [
+            self._runnable_condition(now),
+            or_(JobRecord.scheduled_at.is_(None), JobRecord.scheduled_at <= now),
+        ]
         if job_types:
-            query = query.where(JobRecord.job_type.in_(sorted(job_types)))
+            conditions.append(JobRecord.job_type.in_(sorted(job_types)))
         if queue_name:
-            query = query.where(JobRecord.queue_name == queue_name)
-        result = await self._session.scalars(
-            query.order_by(
-                case(
-                    (JobRecord.priority == "high", 0),
-                    (JobRecord.priority == "normal", 1),
-                    else_=2,
+            conditions.append(JobRecord.queue_name == queue_name)
+        query = select(JobRecord.id).where(*conditions)
+        candidate_id = query.order_by(
+            case(
+                (JobRecord.priority == "high", 0),
+                (JobRecord.priority == "normal", 1),
+                else_=2,
+            ),
+            JobRecord.created_at.asc(),
+        ).limit(1).scalar_subquery()
+        result = await self._session.execute(
+            update(JobRecord)
+            .where(JobRecord.id == candidate_id, *conditions)
+            .values(
+                status="running",
+                lock_owner=worker_id,
+                locked_until=now + timedelta(seconds=max(1, int(lease_seconds))),
+                heartbeat_at=now,
+                attempt=JobRecord.attempt + 1,
+                started_at=case(
+                    (JobRecord.started_at.is_(None), now),
+                    else_=JobRecord.started_at,
                 ),
-                JobRecord.created_at.asc(),
-            ).limit(1)
+                updated_at=now,
+            )
+            .returning(JobRecord.id)
         )
-        job = result.one_or_none()
-        if job is None:
+        job_id = result.scalar_one_or_none()
+        if job_id is None:
             return None
-
-        job.status = "running"
-        job.lock_owner = worker_id
-        job.locked_until = now + timedelta(seconds=max(1, int(lease_seconds)))
-        job.heartbeat_at = now
-        job.attempt = int(job.attempt or 0) + 1
-        job.started_at = job.started_at or now
-        job.updated_at = now
         await self.flush()
-        return job
+        return await self.get_by_id(job_id)
 
     async def save_job(self, job: JobRecord) -> JobRecord:
         return await self.save(job)
+
+    async def heartbeat_job(
+        self,
+        *,
+        job_id: uuid.UUID,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> bool:
+        now = datetime.now(timezone.utc)
+        result = await self._session.execute(
+            update(JobRecord)
+            .where(
+                JobRecord.id == job_id,
+                JobRecord.status == "running",
+                JobRecord.lock_owner == worker_id,
+            )
+            .values(
+                locked_until=now + timedelta(seconds=max(1, int(lease_seconds))),
+                heartbeat_at=now,
+                updated_at=now,
+            )
+            .returning(JobRecord.id)
+        )
+        renewed_job_id = result.scalar_one_or_none()
+        if renewed_job_id is None:
+            return False
+        await self.flush()
+        return True
 
     async def append_event(
         self,
@@ -186,16 +214,28 @@ class JobRepository(AsyncBaseRepository[JobRecord]):
         details: dict[str, Any] | None,
     ) -> JobEventRecord:
         await self.flush()
-        job = await self.get_by_id(job_id)
-        if job is None:
+        now = datetime.now(timezone.utc)
+        next_sequence_expression = func.coalesce(JobRecord.last_sequence, 0) + 1
+        values: dict[Any, Any] = {
+            JobRecord.last_sequence: next_sequence_expression,
+            JobRecord.updated_at: now,
+        }
+        if terminal:
+            values[JobRecord.terminal_sequence] = next_sequence_expression
+        result = await self._session.execute(
+            update(JobRecord)
+            .where(JobRecord.id == job_id)
+            .values(values)
+            .returning(JobRecord.last_sequence)
+        )
+        next_sequence = result.scalar_one_or_none()
+        if next_sequence is None:
             raise KeyError(str(job_id))
-
-        next_sequence = int(job.last_sequence or 0) + 1
         event = JobEventRecord(
             id=uuid.uuid4(),
             job_id=job_id,
             task_id=task_id,
-            sequence=next_sequence,
+            sequence=int(next_sequence),
             event_type=event_type,
             status=status,
             stage=stage,
@@ -205,15 +245,22 @@ class JobRepository(AsyncBaseRepository[JobRecord]):
             source=source,
             raw_event_type=raw_event_type,
             details=dict(details or {}),
-            created_at=datetime.now(timezone.utc),
+            created_at=now,
         )
         self._session.add(event)
-        job.last_sequence = next_sequence
-        if terminal:
-            job.terminal_sequence = next_sequence
-        job.updated_at = datetime.now(timezone.utc)
         await self.flush()
         return event
+
+    @staticmethod
+    def _runnable_condition(now: datetime) -> Any:
+        return or_(
+            JobRecord.status == "queued",
+            and_(
+                JobRecord.status == "running",
+                JobRecord.locked_until.is_not(None),
+                JobRecord.locked_until < now,
+            ),
+        )
 
     async def list_events_after(
         self,

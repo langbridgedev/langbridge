@@ -392,6 +392,13 @@ export function fetchRuntimeJob(jobId) {
   return runtimeRequest(`/api/runtime/v1/jobs/${encodeURIComponent(jobId)}`);
 }
 
+export function cancelRuntimeJob(jobId, payload = {}) {
+  return runtimeRequest(`/api/runtime/v1/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function streamRuntimeJob(jobId, options = {}) {
   const { signal, onEvent, afterSequence } = options;
   const query = Number.isFinite(Number(afterSequence)) && Number(afterSequence) > 0

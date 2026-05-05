@@ -149,6 +149,7 @@ class RuntimeSemanticModelSummary(RuntimeModel):
     dataset_names: list[str] = Field(default_factory=list)
     dimension_count: int = 0
     measure_count: int = 0
+    metric_count: int = 0
     management_mode: ManagementMode
     managed: bool = False
 

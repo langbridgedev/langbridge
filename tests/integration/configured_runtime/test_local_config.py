@@ -1282,6 +1282,81 @@ ai:
         assert llm_connection.workspace_id == runtime.context.workspace_id
 
 
+def test_configured_local_runtime_preserves_structured_output_llm_configuration() -> None:
+    with TemporaryDirectory() as temp_dir:
+        config_path = Path(temp_dir) / "langbridge_config.yml"
+        config_path.write_text(
+            """
+version: 1
+
+connectors:
+  - name: local_demo
+    type: sqlite
+    connection:
+      location: ./example.db
+
+datasets:
+  - name: orders
+    connector: local_demo
+    materialization_mode: live
+    semantic_model: commerce
+    source:
+      table: orders
+
+semantic_models:
+  - name: commerce
+    default: true
+    model:
+      version: "1"
+      name: commerce
+      datasets:
+        orders:
+          relation_name: orders
+          dimensions:
+            - name: country
+              expression: country
+              type: string
+          measures:
+            - name: revenue
+              expression: revenue
+              type: number
+              aggregation: sum
+
+llm_connections:
+  - name: local_openai
+    provider: openai
+    model: gpt-4o-mini
+    api_key: test-key
+    default: true
+    configuration:
+      structured_outputs: native
+      timeout: 30
+
+ai:
+  profiles:
+    - name: analyst
+      default: true
+      scope:
+        semantic_models: [commerce]
+        query_policy: semantic_only
+      llm:
+        llm_connection: local_openai
+""".strip(),
+            encoding="utf-8",
+        )
+        runtime = build_configured_local_runtime(config_path=config_path)
+
+        agent_record = runtime._resolve_agent(None)
+        llm_connection = asyncio.run(
+            runtime.services.agent_execution._definitions.get_llm_connection(  # type: ignore[union-attr]
+                agent_record.agent_definition.llm_connection_id
+            )
+        )
+
+        assert llm_connection.configuration["structured_outputs"] == "native"
+        assert llm_connection.configuration["timeout"] == 30
+
+
 def test_configured_local_runtime_normalizes_canonical_agent_tools() -> None:
     with TemporaryDirectory() as temp_dir:
         config_path = Path(temp_dir) / "langbridge_config.yml"

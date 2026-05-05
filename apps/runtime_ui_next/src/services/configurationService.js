@@ -1,6 +1,5 @@
-import { resolveAsync } from "./runtimeService.js";
 import { langbridgeList, langbridgeRequest } from "./langbridgeApiClient.js";
-import { configurationCopy, configurationResources, configurationSections } from "../mocks/configuration.mock.js";
+import { normalizeAgentWorkspace } from "../features/configuration/agentModel.js";
 
 const resourceEndpoints = {
   connectors: "/api/runtime/v1/connectors",
@@ -9,41 +8,46 @@ const resourceEndpoints = {
   agents: "/api/runtime/v1/agents",
 };
 
+const configurationSections = [
+  { id: "connectors", label: "Connectors", description: "Data access and credentials" },
+  { id: "datasets", label: "Datasets", description: "Governed source tables" },
+  { id: "semantic-models", label: "Semantic Models", description: "Business metrics and dimensions" },
+  { id: "agents", label: "Analyst Agents", description: "Agent instructions and tools" },
+  { id: "security", label: "Security", description: "Users and runtime access" },
+];
+
+const configurationCopy = {
+  connectors: { title: "Connectors", eyebrow: "Access" },
+  datasets: { title: "Datasets", eyebrow: "Governed data" },
+  "semantic-models": { title: "Semantic Models", eyebrow: "Business layer" },
+  agents: { title: "Analyst Agents", eyebrow: "Reasoning" },
+  security: { title: "Security", eyebrow: "Governance" },
+};
+
 const mutableSections = new Set(["connectors", "datasets", "semantic-models"]);
 
 export function listConfigurationSections() {
-  return resolveAsync(configurationSections);
+  return Promise.resolve(configurationSections.map((section) => ({ ...section })));
 }
 
 export function getConfigurationCopy(section) {
-  return resolveAsync(configurationCopy[section] || configurationCopy.connectors);
+  return Promise.resolve({ ...(configurationCopy[section] || configurationCopy.connectors) });
 }
 
 export async function listConfigurationResources(section) {
-  const fallback = configurationResources[section] || [];
   const endpoint = resourceEndpoints[section];
   if (!endpoint) {
-    return resolveAsync(fallback);
+    throw new Error(`${formatSectionLabel(section)} is not a supported configuration section.`);
   }
-
-  try {
-    return (await langbridgeList(endpoint)).map((item) => normalizeResource(section, item));
-  } catch {
-    return resolveAsync(fallback);
-  }
+  return (await langbridgeList(endpoint)).map((item) => normalizeResource(section, item));
 }
 
 export async function getConfigurationResource(section, resource) {
   const endpoint = getResourceEndpoint(section, resource);
   if (!endpoint) {
-    return resolveAsync(resource);
+    throw new Error("Resource reference is missing.");
   }
-
-  try {
-    return normalizeResource(section, await langbridgeRequest(endpoint));
-  } catch {
-    return resolveAsync(resource);
-  }
+  return normalizeResource(section, await langbridgeRequest(endpoint));
 }
 
 export async function createConfigurationResource(section, payload) {
@@ -110,11 +114,31 @@ export async function runConfigurationResourceAction(section, resource, actionId
       body: JSON.stringify({ sync_mode: "INCREMENTAL", force_full_refresh: false }),
     });
   }
+  if (section === "datasets" && actionId === "full_refresh") {
+    return langbridgeRequest(`/api/runtime/v1/datasets/${encodedRef}/sync`, {
+      method: "POST",
+      body: JSON.stringify({ sync_mode: "FULL_REFRESH", force_full_refresh: true }),
+    });
+  }
   if (actionId === "refresh_detail") {
     return getConfigurationResource(section, resource);
   }
 
   throw new Error(`Action '${actionId}' is not supported for ${formatSectionLabel(section)}.`);
+}
+
+export async function runAgentConfigurationTest(resource, payload) {
+  const agentName = String(payload?.agent_name || resource?.name || resource?.rawPayload?.name || "").trim();
+  if (!agentName) {
+    throw new Error("Agent name is required.");
+  }
+  return langbridgeRequest("/api/runtime/v1/agents/ask", {
+    method: "POST",
+    body: JSON.stringify({
+      ...payload,
+      agent_name: agentName,
+    }),
+  });
 }
 
 export function getCreateTemplate(section) {
@@ -143,16 +167,6 @@ export function getCreateTemplate(section) {
       },
     };
   }
-  if (section === "semantic-models") {
-    return {
-      name: "new_semantic_model",
-      description: "Runtime-managed semantic model",
-      datasets: ["existing_dataset_name"],
-      model: {
-        datasets: [],
-      },
-    };
-  }
   return {};
 }
 
@@ -166,11 +180,6 @@ export function getUpdateTemplate(section, resource) {
   if (section === "datasets") {
     return {
       label: resource.rawPayload?.label || resource.name || "",
-      description: resource.rawPayload?.description || "",
-    };
-  }
-  if (section === "semantic-models") {
-    return {
       description: resource.rawPayload?.description || "",
     };
   }
@@ -219,6 +228,12 @@ export function getResourceActions(section, resource) {
         id: "run_sync",
         label: "Run sync",
         description: "Start an incremental sync for synced datasets.",
+        disabled: !isSynced,
+      },
+      {
+        id: "full_refresh",
+        label: "Full refresh",
+        description: "Start a full refresh for synced datasets.",
         disabled: !isSynced,
       },
       ...common,
@@ -350,6 +365,7 @@ function normalizeSemanticModel(item) {
     runtimeState: compactRows([
       ["Datasets", item.dataset_count],
       ["Measures", item.measure_count],
+      ["Metrics", item.metric_count],
       ["Dimensions", item.dimension_count],
       ["Default", yesNo(item.default)],
     ]),
@@ -371,8 +387,10 @@ function normalizeSemanticModel(item) {
 
 function normalizeAgent(item) {
   const name = item.name || item.id || "agent";
-  const tools = toArray(item.tools);
-  const toolLabels = tools.map(formatRelationshipValue);
+  const agent = normalizeAgentWorkspace(item);
+  const toolLabels = agent.tools.map((tool) => tool.name).filter(Boolean);
+  const semanticModels = agent.analystScope.semanticModels;
+  const datasets = agent.analystScope.datasets;
   return {
     id: stableId(item, name),
     ref: item.id || name,
@@ -386,23 +404,32 @@ function normalizeAgent(item) {
     owner: "Runtime API",
     lastUpdated: "Live",
     runtimeState: compactRows([
-      ["LLM connection", item.llm_connection],
-      ["Tools", item.tool_count ?? tools.length],
+      ["LLM connection", agent.llm.connection || agent.llm.model],
+      ["Query policy", agent.analystScope.queryPolicy],
+      ["Semantic models", semanticModels.length],
+      ["Datasets", datasets.length],
+      ["Tools", item.tool_count ?? agent.tools.length],
       ["Default", yesNo(item.default)],
     ]),
     configDefinition: compactRows([
       ["Name", name],
       ["Description", item.description],
+      ["LLM", agent.llm.connection || [agent.llm.provider, agent.llm.model].filter(Boolean).join(" ")],
+      ["Query policy", agent.analystScope.queryPolicy],
       ["Tools", toolLabels.join(", ")],
     ]),
-    relationships: toolLabels.length > 0 ? toolLabels : ["No tools listed"],
+    relationships: compactList([
+      ...semanticModels,
+      ...datasets,
+      ...toolLabels,
+    ]).length > 0 ? compactList([...semanticModels, ...datasets, ...toolLabels]) : ["No scope or tools listed"],
     details: {
       "Agent id": item.id || "n/a",
-      Tools: item.tools || tools,
+      Tools: item.tools || agent.tools,
       Definition: item.definition || {},
-      "Semantic models": item.semantic_models || [],
-      Datasets: item.datasets || [],
-      Instructions: item.instructions || "n/a",
+      "Semantic models": semanticModels,
+      Datasets: datasets,
+      Instructions: agent.prompts.user || "n/a",
     },
   };
 }
@@ -447,6 +474,7 @@ function formatSectionLabel(section, options = {}) {
     datasets: options.singular ? "dataset" : "datasets",
     "semantic-models": options.singular ? "semantic model" : "semantic models",
     agents: options.singular ? "agent" : "agents",
+    security: "security",
   };
   return labels[section] || section || "resource";
 }

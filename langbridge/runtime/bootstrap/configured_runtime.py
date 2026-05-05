@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 import yaml
 
+from langbridge.federation.executor import ArtifactStore
 from langbridge.plugins.connectors import ConnectorPlugin
 from langbridge.runtime.application import build_runtime_applications
 from langbridge.runtime.application.connectors import _extract_connection_metadata
@@ -127,6 +128,7 @@ from langbridge.runtime.services.jobs import (
     RuntimeJobProcessor,
     RuntimeJobService,
 )
+from langbridge.runtime.services.maintenance import RuntimeCleanupService
 from langbridge.runtime.services.runtime_host import (
     RuntimeHost,
     RuntimeProviders,
@@ -896,6 +898,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
                 "dataset_names": dataset_keys,
                 "dimension_count": dimension_count,
                 "measure_count": measure_count,
+                "metric_count": len(semantic_model.metrics or {}),
             }
 
         configured_graph = SemanticQueryExecutionService.parse_semantic_graph_config_from_record(
@@ -912,6 +915,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             "dataset_names": source_model_names,
             "dimension_count": 0,
             "measure_count": len(configured_graph.metrics or {}),
+            "metric_count": len(configured_graph.metrics or {}),
         }
 
     def _resolve_configured_semantic_graph(
@@ -974,13 +978,10 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             for member in semantic_query.dimensions
         ]
         payload["filters"] = [
-            {
-                **item.model_dump(by_alias=True, exclude_none=True),
-                "member": self._rewrite_member_for_semantic_graph_execution(
-                    member=item.member,
-                    dataset_source_keys=dataset_source_keys,
-                ),
-            }
+            self._rewrite_filter_for_semantic_graph_execution(
+                filter_item=item.model_dump(by_alias=True, exclude_none=True),
+                dataset_source_keys=dataset_source_keys,
+            )
             for item in semantic_query.filters
         ]
         payload["timeDimensions"] = [
@@ -998,6 +999,31 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             dataset_source_keys=dataset_source_keys,
         )
         return SemanticQuery.model_validate(payload)
+
+    def _rewrite_filter_for_semantic_graph_execution(
+        self,
+        *,
+        filter_item: Mapping[str, Any],
+        dataset_source_keys: Mapping[str, str],
+    ) -> dict[str, Any]:
+        payload = dict(filter_item or {})
+        for group_key in ("and", "or"):
+            if group_key in payload:
+                payload[group_key] = [
+                    self._rewrite_filter_for_semantic_graph_execution(
+                        filter_item=child,
+                        dataset_source_keys=dataset_source_keys,
+                    )
+                    for child in list(payload.get(group_key) or [])
+                ]
+                return payload
+        for member_key in ("member", "dimension", "measure", "timeDimension", "time_dimension"):
+            if payload.get(member_key):
+                payload[member_key] = self._rewrite_member_for_semantic_graph_execution(
+                    member=str(payload[member_key]),
+                    dataset_source_keys=dataset_source_keys,
+                )
+        return payload
 
     def _rewrite_semantic_query_for_unified_execution(
         self,
@@ -1627,34 +1653,57 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
     ) -> list[dict[str, Any]]:
         payload: list[dict[str, Any]] = []
         for filter_entry in filters or []:
-            entry = dict(filter_entry or {})
-            if entry.get("member"):
-                entry["member"] = self._qualify_semantic_member(
-                    member=str(entry["member"]),
+            payload.append(
+                self._normalize_semantic_filter_for_models(
+                    filter_entry=filter_entry,
                     semantic_models=semantic_models,
                 )
-            if entry.get("dimension"):
-                entry["dimension"] = self._qualify_semantic_member(
-                    member=str(entry["dimension"]),
-                    semantic_models=semantic_models,
-                )
-            if entry.get("measure"):
-                entry["measure"] = self._qualify_semantic_member(
-                    member=str(entry["measure"]),
-                    semantic_models=semantic_models,
-                )
-            if entry.get("timeDimension"):
-                entry["timeDimension"] = self._qualify_semantic_member(
-                    member=str(entry["timeDimension"]),
-                    semantic_models=semantic_models,
-                )
-            if entry.get("time_dimension"):
-                entry["time_dimension"] = self._qualify_semantic_member(
-                    member=str(entry["time_dimension"]),
-                    semantic_models=semantic_models,
-                )
-            payload.append(entry)
+            )
         return payload
+
+    def _normalize_semantic_filter_for_models(
+        self,
+        *,
+        filter_entry: dict[str, Any],
+        semantic_models: list[LocalRuntimeSemanticModelRecord],
+    ) -> dict[str, Any]:
+        entry = dict(filter_entry or {})
+        for group_key in ("and", "or"):
+            if group_key in entry:
+                entry[group_key] = [
+                    self._normalize_semantic_filter_for_models(
+                        filter_entry=child,
+                        semantic_models=semantic_models,
+                    )
+                    for child in list(entry.get(group_key) or [])
+                ]
+                return entry
+        if entry.get("member"):
+            entry["member"] = self._qualify_semantic_member(
+                member=str(entry["member"]),
+                semantic_models=semantic_models,
+            )
+        if entry.get("dimension"):
+            entry["dimension"] = self._qualify_semantic_member(
+                member=str(entry["dimension"]),
+                semantic_models=semantic_models,
+            )
+        if entry.get("measure"):
+            entry["measure"] = self._qualify_semantic_member(
+                member=str(entry["measure"]),
+                semantic_models=semantic_models,
+            )
+        if entry.get("timeDimension"):
+            entry["timeDimension"] = self._qualify_semantic_member(
+                member=str(entry["timeDimension"]),
+                semantic_models=semantic_models,
+            )
+        if entry.get("time_dimension"):
+            entry["time_dimension"] = self._qualify_semantic_member(
+                member=str(entry["time_dimension"]),
+                semantic_models=semantic_models,
+            )
+        return entry
 
     def _normalize_time_dimensions_for_models(
         self,
@@ -3474,6 +3523,13 @@ class ConfiguredLocalRuntimeHostFactory:
             secret_provider_registry=secret_provider_registry,
         )
         job_service = RuntimeJobService(repository=job_repository)
+        cleanup_service = RuntimeCleanupService(
+            federation_artifact_store=ArtifactStore(
+                base_dir=settings.FEDERATION_ARTIFACT_DIR,
+            ),
+            federation_ttl_seconds=settings.FEDERATION_DEFAULT_TTL_SECONDS,
+            logger=logging.getLogger("langbridge.runtime.cleanup.local"),
+        )
         agent_execution_service = (
             AgentExecutionService(
                 agent_definition_repository=agent_repository,
@@ -3513,6 +3569,7 @@ class ConfiguredLocalRuntimeHostFactory:
                 agent_execution=agent_execution_service,
                 jobs=job_service,
                 semantic_sql_query=semantic_sql_query_service,
+                cleanup=cleanup_service,
             ),
         ), thread_repository, thread_message_repository, job_repository
 

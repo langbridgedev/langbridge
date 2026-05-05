@@ -2,6 +2,7 @@ from dataclasses import dataclass, replace
 import inspect
 from typing import Any
 
+from langbridge.federation.executor import ArtifactCleanupResult
 from langbridge.runtime.context import RuntimeContext
 from langbridge.runtime.execution import FederatedQueryTool
 from langbridge.runtime.providers import (
@@ -16,6 +17,7 @@ from langbridge.runtime.services.agents import AgentExecutionService
 from langbridge.runtime.services.dataset_query import DatasetQueryService
 from langbridge.runtime.services.dataset_sync import ConnectorSyncRuntime
 from langbridge.runtime.services.jobs import RuntimeJobService
+from langbridge.runtime.services.maintenance import RuntimeCleanupService
 from langbridge.runtime.services.semantic_query_execution_service import (
     SemanticQueryExecutionService,
 )
@@ -46,6 +48,7 @@ class RuntimeServices:
     agent_execution: AgentExecutionService | None
     jobs: RuntimeJobService | None = None
     semantic_sql_query: SemanticSqlQueryService | None = None
+    cleanup: RuntimeCleanupService | None = None
 
 
 @dataclass(slots=True)
@@ -144,6 +147,8 @@ class RuntimeHost:
             capability = await capability
         return bool(capability)
 
-    async def cleanup_resources(self) -> None:
-        # Placeholder for any cleanup logic that might be needed in the future
-        pass
+    async def cleanup_resources(self) -> dict[str, Any]:
+        if self.services.cleanup is None:
+            return ArtifactCleanupResult().model_dump(mode="json")
+        result = await self.services.cleanup.cleanup_resources()
+        return result.model_dump(mode="json")

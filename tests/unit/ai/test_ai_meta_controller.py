@@ -194,6 +194,17 @@ class _PrematureClarificationRouteLLMProvider(_FakeLLMProvider):
         return await super().acomplete(prompt, **kwargs)
 
 
+class _EmptyRouteFieldLLMProvider(_FakeLLMProvider):
+    async def acomplete(self, prompt: str, **kwargs):
+        if "Decide Langbridge agent route" in prompt:
+            return (
+                '{"action":"direct","rationale":"Empty optional fields should normalize before strict validation.",'
+                '"agent_name":"analyst","task_kind":"","input":{},'
+                '"clarification_question":"","plan_guidance":""}'
+            )
+        return await super().acomplete(prompt, **kwargs)
+
+
 class _FakeWebSearchProvider:
     name = "fake-web"
 
@@ -436,6 +447,27 @@ def test_meta_controller_routes_simple_analyst_question_directly() -> None:
     assert run.final_result["answer_markdown"] == "Final answer from verified outputs.\n\n{{artifact:primary_result}}"
     assert "summary" not in run.final_result
     assert "visualization" not in run.final_result
+
+
+def test_meta_controller_normalizes_empty_optional_route_fields_before_validation() -> None:
+    llm = _EmptyRouteFieldLLMProvider()
+    controller = MetaControllerAgent(
+        registry=AgentRegistry([AnalystAgent(llm_provider=llm, config=_analyst_config())]),
+        llm_provider=llm,
+        presentation_agent=_presentation(llm),
+    )
+
+    run = _run(
+        controller.handle(
+            question="Show revenue by region",
+            context={"result": {"columns": [], "rows": []}},
+        )
+    )
+
+    assert run.execution_mode == "direct"
+    assert run.status == "completed"
+    assert run.diagnostics["route_decision"]["task_kind"] is None
+    assert run.diagnostics["route_decision"]["clarification_question"] is None
 
 
 def test_meta_controller_routes_single_analyst_web_research_directly() -> None:

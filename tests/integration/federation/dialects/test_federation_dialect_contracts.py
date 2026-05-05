@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from langbridge.federation.connectors import SourceCapabilities
 from langbridge.federation.models.plans import StageType
 from tests.helpers.federation_dialect_harness import FederationDialectHarness, SqliteTableFixture
 
@@ -278,6 +279,13 @@ EXECUTION_MATRIX: tuple[DialectExecutionCase, ...] = (
 )
 
 
+def _sql_capabilities_for_sources(source_ids: Mapping[str, str]) -> dict[str, SourceCapabilities]:
+    return {
+        source_id: SourceCapabilities(pushdown_full_query=True, pushdown_join=True)
+        for source_id in set(source_ids.values())
+    }
+
+
 @pytest.mark.parametrize("case", PLAN_MATRIX, ids=[case.name for case in PLAN_MATRIX])
 def test_federation_dialect_plan_matrix(tmp_path: Path, case: DialectPlanCase) -> None:
     harness = FederationDialectHarness(tmp_path)
@@ -291,6 +299,7 @@ def test_federation_dialect_plan_matrix(tmp_path: Path, case: DialectPlanCase) -
         workflow=workflow,
         input_dialect=case.input_dialect,
         source_dialects=case.source_dialects,
+        source_capabilities=_sql_capabilities_for_sources(case.source_by_table),
     )
 
     harness.assert_stage_types(

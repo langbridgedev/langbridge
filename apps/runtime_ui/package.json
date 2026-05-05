@@ -1,5 +1,5 @@
 {
-  "name": "@langbridge/runtime-ui",
+  "name": "@langbridge/runtime-ui-legacy",
   "private": true,
   "version": "0.1.0",
   "type": "module",

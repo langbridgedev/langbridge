@@ -31,6 +31,12 @@ class FilterTarget:
 
 
 @dataclass(frozen=True)
+class FilterGroupTarget:
+    operator: str
+    children: List[Any]
+
+
+@dataclass(frozen=True)
 class OrderItem:
     member: str
     direction: str
@@ -73,7 +79,7 @@ class TsqlSemanticTranslator:
             else:
                 measures.append(resolved)
 
-        filter_targets: List[FilterTarget] = []
+        filter_targets: List[Any] = []
         for item in parsed.filters:
             filter_targets.append(self._resolve_filter_target(resolver, item))
 
@@ -154,7 +160,7 @@ class TsqlSemanticTranslator:
         time_dimensions: Sequence[TimeDimensionRef],
         measures: Sequence[MeasureRef],
         metrics: Sequence[MetricRef],
-        filter_targets: Sequence[FilterTarget],
+        filter_targets: Sequence[Any],
         segments: Sequence[SegmentRef],
     ) -> Set[str]:
         required_datasets: Set[str] = set()
@@ -168,7 +174,7 @@ class TsqlSemanticTranslator:
         for metric in metrics:
             required_datasets.update(resolver.extract_datasets_from_expression(metric.expression))
         for target in filter_targets:
-            required_datasets.update(target.datasets)
+            required_datasets.update(self._filter_target_datasets(target))
         for segment in segments:
             required_datasets.add(segment.dataset)
 
@@ -180,7 +186,7 @@ class TsqlSemanticTranslator:
         time_dimensions: Sequence[TimeDimensionRef],
         measures: Sequence[MeasureRef],
         metrics: Sequence[MetricRef],
-        filter_targets: Sequence[FilterTarget],
+        filter_targets: Sequence[Any],
         segments: Sequence[SegmentRef],
     ) -> str:
         if measures:
@@ -193,10 +199,29 @@ class TsqlSemanticTranslator:
         if dimensions:
             return dimensions[0].dataset
         if filter_targets:
-            return next(iter(filter_targets[0].datasets))
+            dataset = self._first_filter_target_dataset(filter_targets[0])
+            if dataset:
+                return dataset
         if segments:
             return segments[0].dataset
         raise SemanticQueryError(f"Semantic query did not reference any tables in {dimensions}, {time_dimensions}, {measures}, {metrics}, {filter_targets}, {segments}.")
+
+    def _filter_target_datasets(self, target: Any) -> Set[str]:
+        if isinstance(target, FilterGroupTarget):
+            datasets: Set[str] = set()
+            for child in target.children:
+                datasets.update(self._filter_target_datasets(child))
+            return datasets
+        return set(target.datasets)
+
+    def _first_filter_target_dataset(self, target: Any) -> Optional[str]:
+        if isinstance(target, FilterGroupTarget):
+            for child in target.children:
+                dataset = self._first_filter_target_dataset(child)
+                if dataset:
+                    return dataset
+            return None
+        return next(iter(target.datasets), None)
 
     def _datasets_from_expression(self, expression: str) -> List[str]:
         matches = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\.", expression)
@@ -294,15 +319,19 @@ class TsqlSemanticTranslator:
     def _build_where_conditions(
         self,
         alias_map: Dict[str, str],
-        filter_targets: Sequence[FilterTarget],
+        filter_targets: Sequence[Any],
         time_dimensions: Sequence[TimeDimensionRef],
         segments: Sequence[SegmentRef],
     ) -> List[exp.Expression]:
         conditions: List[exp.Expression] = []
         for target in filter_targets:
-            if target.kind == "measure" or target.kind == "metric":
-                continue
-            conditions.append(self._replace_table_refs(target.expression, alias_map))
+            condition = self._build_scoped_filter_condition(
+                target=target,
+                alias_map=alias_map,
+                scope="row",
+            )
+            if condition is not None:
+                conditions.append(condition)
 
         for time_dimension in time_dimensions:
             if not time_dimension.date_range:
@@ -335,13 +364,63 @@ class TsqlSemanticTranslator:
     def _build_having_conditions(
         self,
         alias_map: Dict[str, str],
-        filter_targets: Sequence[FilterTarget],
+        filter_targets: Sequence[Any],
     ) -> List[exp.Expression]:
         conditions: List[exp.Expression] = []
         for target in filter_targets:
-            if target.kind in {"measure", "metric"}:
-                conditions.append(self._replace_table_refs(target.expression, alias_map))
+            condition = self._build_scoped_filter_condition(
+                target=target,
+                alias_map=alias_map,
+                scope="aggregate",
+            )
+            if condition is not None:
+                conditions.append(condition)
         return conditions
+
+    def _build_scoped_filter_condition(
+        self,
+        *,
+        target: Any,
+        alias_map: Dict[str, str],
+        scope: str,
+    ) -> Optional[exp.Expression]:
+        if isinstance(target, FilterGroupTarget):
+            expressions: List[exp.Expression] = []
+            skipped_other_scope = False
+            for child in target.children:
+                expression = self._build_scoped_filter_condition(
+                    target=child,
+                    alias_map=alias_map,
+                    scope=scope,
+                )
+                if expression is None:
+                    skipped_other_scope = True
+                    continue
+                expressions.append(expression)
+            if not expressions:
+                return None
+            if target.operator == "or" and skipped_other_scope:
+                raise SemanticQueryError(
+                    "OR filter groups cannot mix dimension/time filters with measure/metric filters "
+                    "because they would need both WHERE and HAVING clauses."
+                )
+            return self._combine_filter_group_conditions(expressions, target.operator)
+
+        target_scope = "aggregate" if target.kind in {"measure", "metric"} else "row"
+        if target_scope != scope:
+            return None
+        return self._replace_table_refs(target.expression, alias_map)
+
+    def _combine_filter_group_conditions(
+        self,
+        expressions: Sequence[exp.Expression],
+        operator: str,
+    ) -> exp.Expression:
+        if len(expressions) == 1:
+            return expressions[0]
+        if operator == "or":
+            return exp.or_(*expressions)
+        return exp.and_(*expressions)
 
     def _build_order_clause(
         self,
@@ -467,7 +546,15 @@ class TsqlSemanticTranslator:
 
         return query
 
-    def _resolve_filter_target(self, resolver: SemanticModelResolver, item: FilterItem) -> FilterTarget:
+    def _resolve_filter_target(self, resolver: SemanticModelResolver, item: FilterItem) -> Any:
+        if item.and_ is not None or item.or_ is not None:
+            operator = "or" if item.or_ is not None else "and"
+            children = item.or_ if operator == "or" else item.and_
+            resolved_children = [self._resolve_filter_target(resolver, child) for child in children or []]
+            if not resolved_children:
+                raise SemanticQueryError("Filter group must include at least one child filter.")
+            return FilterGroupTarget(operator=operator, children=resolved_children)
+
         member = item.member or item.dimension or item.measure or item.time_dimension
         if not member:
             raise SemanticQueryError("Filter is missing member information.")

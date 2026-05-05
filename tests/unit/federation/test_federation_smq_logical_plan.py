@@ -33,10 +33,11 @@ def _build_semantic_model() -> SemanticModel:
         relationships=[
             Relationship(
                 name="orders_to_customers",
-                from_="orders",
-                to="customers",
+                source_dataset="orders",
+                source_field="customer_id",
+                target_dataset="customers",
+                target_field="id",
                 type="inner",
-                join_on="orders.customer_id = customers.id",
             )
         ],
     )
@@ -175,7 +176,9 @@ def test_smq_pushes_full_query_down_for_single_source_with_logical_relation_name
         dialect="postgres",
         workflow=workflow,
         source_dialects={"source_warehouse": "postgres"},
-        source_capabilities={"source_warehouse": SourceCapabilities(pushdown_join=True)},
+        source_capabilities={
+            "source_warehouse": SourceCapabilities(pushdown_full_query=True, pushdown_join=True)
+        },
     )
 
     assert output.physical_plan.pushdown_full_query is True

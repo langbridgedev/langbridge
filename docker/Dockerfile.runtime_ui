@@ -2,13 +2,13 @@
 
 FROM node:22-bookworm-slim AS ui-builder
 
-WORKDIR /src/apps/runtime_ui
+WORKDIR /src/apps/runtime_ui_next
 
-COPY apps/runtime_ui/package.json apps/runtime_ui/package-lock.json ./
+COPY apps/runtime_ui_next/package.json apps/runtime_ui_next/package-lock.json ./
 
 RUN npm ci
 
-COPY apps/runtime_ui ./
+COPY apps/runtime_ui_next ./
 
 RUN npm run build
 

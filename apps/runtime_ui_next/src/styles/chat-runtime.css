@@ -389,6 +389,73 @@
   animation: lb-pulse 1.2s infinite;
 }
 
+.thread-empty-state--chat {
+  align-self: center;
+  justify-self: center;
+  display: grid;
+  width: min(100%, 680px);
+  gap: 14px;
+  justify-items: center;
+  padding: 28px 18px;
+  background: transparent;
+  color: var(--text);
+  text-align: center;
+}
+
+.thread-empty-icon {
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+}
+
+.thread-empty-state--chat strong {
+  display: block;
+  font-size: clamp(1.35rem, 3vw, 1.85rem);
+  letter-spacing: -0.04em;
+}
+
+.thread-empty-state--chat p {
+  max-width: 460px;
+  margin: 6px auto 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.thread-suggestion-strip--empty {
+  display: grid;
+  width: min(100%, 560px);
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.thread-suggestion-strip--empty .starter-button {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 13px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 620;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.thread-suggestion-strip--empty .starter-button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.thread-suggestion-strip--empty .starter-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .thread-conversation-stack {
   display: grid;
   gap: 26px;
@@ -506,7 +573,7 @@
 }
 
 .artifact-markdown-card {
-  margin: 14px 0;
+  margin: 12px 0 16px;
   border: 1px solid var(--border);
   border-radius: 18px;
   background: var(--surface);
@@ -514,20 +581,18 @@
 }
 
 .artifact-markdown-card--chart {
-  width: min(100%, 660px);
-  margin: 10px 0 16px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  width: min(100%, 640px);
+  border-color: color-mix(in srgb, var(--border) 62%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
   overflow: visible;
 }
 
 .artifact-markdown-card--table {
   width: min(100%, 720px);
-  margin: 10px 0 16px;
   border-color: color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: 14px;
-  background: transparent;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 76%, transparent);
 }
 
 .artifact-markdown-card-head {
@@ -535,8 +600,20 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
+  min-width: 0;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
+}
+
+.artifact-markdown-card-head > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.artifact-markdown-card--chart .artifact-markdown-card-head {
+  border-bottom-color: color-mix(in srgb, var(--border) 58%, transparent);
+  background: color-mix(in srgb, var(--surface-muted) 34%, transparent);
 }
 
 .artifact-markdown-card--table .artifact-markdown-card-head {
@@ -563,6 +640,47 @@
   white-space: nowrap;
 }
 
+.artifact-markdown-card--chart .artifact-markdown-card-head strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.88rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-markdown-actions,
+.artifact-markdown-supporting-actions,
+.artifact-modal-actions,
+.run-inspector-raw-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.artifact-markdown-actions button,
+.artifact-markdown-supporting-actions button,
+.artifact-modal-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.artifact-markdown-actions button:hover,
+.artifact-markdown-supporting-actions button:hover,
+.artifact-modal-actions button:hover {
+  border-color: var(--border-strong);
+  background: var(--hover);
+  color: var(--text);
+}
+
 .artifact-markdown-missing {
   padding: 12px;
   border: 1px dashed var(--border-strong);
@@ -578,9 +696,28 @@
 }
 
 .artifact-markdown-supporting summary {
+  display: flex;
   cursor: pointer;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding: 10px 12px;
   font-weight: 700;
+}
+
+.artifact-markdown-supporting summary > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-markdown-supporting-actions button {
+  padding: 4px 8px;
+}
+
+.artifact-markdown-supporting .code-block {
+  margin: 0 10px 10px;
 }
 
 .result-table-shell {
@@ -675,9 +812,9 @@
 
 .artifact-markdown-card--chart .chart-panel {
   gap: 8px;
-  padding: 4px 0 2px;
+  padding: 10px 12px 12px;
   border: 0;
-  border-radius: 0;
+  border-radius: 0 0 16px 16px;
   background: transparent;
 }
 
@@ -688,8 +825,7 @@
 }
 
 .artifact-markdown-card--chart .chart-panel-header {
-  align-items: baseline;
-  padding: 0 2px;
+  display: none;
 }
 
 .chart-panel-header h3,
@@ -755,7 +891,7 @@
 
 .artifact-markdown-card--chart .chart-canvas {
   display: block;
-  max-height: 240px;
+  max-height: 220px;
 }
 
 .artifact-markdown-card--chart .chart-pie-layout {
@@ -765,7 +901,7 @@
 
 .artifact-markdown-card--chart .chart-pie {
   display: block;
-  max-height: 210px;
+  max-height: 200px;
 }
 
 .chart-plot-backdrop,
@@ -846,6 +982,96 @@
   width: 9px;
   height: 9px;
   border-radius: 999px;
+}
+
+.artifact-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.artifact-modal-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(100%, 1080px);
+  max-height: min(88vh, 920px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.artifact-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 86%, var(--surface-muted));
+}
+
+.artifact-modal-header h3,
+.artifact-modal-header p {
+  margin: 0;
+}
+
+.artifact-modal-actions {
+  justify-content: flex-end;
+}
+
+.artifact-modal-close {
+  width: 34px;
+  height: 34px;
+  justify-content: center;
+  padding: 0 !important;
+}
+
+.artifact-modal-body {
+  display: grid;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.artifact-modal-body .chart-panel {
+  min-height: 360px;
+}
+
+.artifact-modal-body .chart-visual-region {
+  min-height: 320px;
+}
+
+.artifact-modal-body .table-wrap {
+  max-height: 58vh;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 14px;
+}
+
+.artifact-modal-body .result-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-muted);
+}
+
+.artifact-modal-code-section {
+  display: grid;
+  gap: 8px;
+}
+
+.artifact-modal-code-section h4 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .diagnostics-disclosure {
@@ -1451,6 +1677,36 @@
 
   .artifact-markdown-card--table {
     width: 100%;
+  }
+
+  .artifact-markdown-card-head,
+  .artifact-modal-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .artifact-markdown-actions,
+  .artifact-modal-actions {
+    width: 100%;
+  }
+
+  .artifact-markdown-actions button,
+  .artifact-modal-actions button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .artifact-modal-overlay {
+    padding: 10px;
+  }
+
+  .artifact-modal-dialog {
+    max-height: 92vh;
+    border-radius: 18px;
+  }
+
+  .artifact-modal-body {
+    padding: 12px;
   }
 
   .artifact-markdown-card--chart .chart-pie-layout {

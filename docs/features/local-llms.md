@@ -3,6 +3,11 @@
 Langbridge runtime supports Ollama as a local LLM provider for runtime agents and
 semantic vector embeddings.
 
+For structured agent outputs, Langbridge supports
+`configuration.structured_outputs` with `auto`, `native`, or `prompt`. See
+[Structured LLM Outputs](./structured-llm-outputs.md) for provider-specific
+examples.
+
 Example runtime config:
 
 ```yaml
@@ -14,6 +19,7 @@ llm_connections:
     configuration:
       base_url: http://localhost:11434
       embedding_model: nomic-embed-text
+      structured_outputs: auto
       keep_alive: 5m
       options:
         num_ctx: 8192
@@ -39,6 +45,7 @@ llm_connections:
     configuration:
       base_url: http://localhost:1234/v1
       embedding_model: your-loaded-embedding-model
+      structured_outputs: prompt
 ```
 
 This same pattern works for other local OpenAI-compatible servers when they

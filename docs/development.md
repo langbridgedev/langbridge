@@ -50,7 +50,7 @@ langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml
 Build the runtime-owned UI bundle:
 
 ```bash
-cd apps/runtime_ui
+cd apps/runtime_ui_next
 npm install
 npm run build
 ```

@@ -1,5 +1,4 @@
 """Specification-driven planner for Langbridge AI."""
-import json
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
@@ -16,6 +15,7 @@ from langbridge.ai.base import (
 )
 from langbridge.ai.modes import analyst_output_contract_for_task_input, normalize_analyst_task_input
 from langbridge.ai.llm.base import LLMProvider
+from langbridge.ai.llm.structured import acomplete_structured
 from langbridge.ai.orchestration.planner_prompts import build_execution_plan_prompt
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -38,6 +38,22 @@ class ExecutionPlan(BaseModel):
     rationale: str
     requires_pev: bool = True
     revision_count: int = 0
+    clarification_question: str | None = None
+
+
+class PlannerLLMStep(BaseModel):
+    step_id: str | None = None
+    agent_name: str
+    task_kind: str
+    question: str | None = None
+    input: dict[str, Any] = Field(default_factory=dict)
+    depends_on: list[str] = Field(default_factory=list)
+
+
+class PlannerLLMOutput(BaseModel):
+    route: str
+    steps: list[PlannerLLMStep]
+    rationale: str
     clarification_question: str | None = None
 
 
@@ -192,7 +208,15 @@ class PlannerAgent(BaseAgent):
             specification_payloads=[self._spec_payload(item) for item in specifications],
             revision_count=revision_count,
         )
-        return self._parse_json_object(await self._llm.acomplete(prompt, temperature=0.0, max_tokens=900))
+        return (
+            await acomplete_structured(
+                self._llm,
+                prompt,
+                response_model=PlannerLLMOutput,
+                temperature=0.0,
+                max_tokens=900,
+            )
+        ).model_dump(mode="json", exclude_none=True)
 
     @staticmethod
     def _steps_from_payload(
@@ -273,17 +297,5 @@ class PlannerAgent(BaseAgent):
         text = value.strip()
         return text or None
 
-    @staticmethod
-    def _parse_json_object(raw: str) -> dict[str, Any]:
-        text = raw.strip()
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end < start:
-            raise ValueError("Planner LLM response did not contain a JSON object.")
-        parsed = json.loads(text[start : end + 1])
-        if not isinstance(parsed, dict):
-            raise ValueError("Planner LLM response JSON must be an object.")
-        return parsed
 
-
-__all__ = ["ExecutionPlan", "PlannerAgent", "PlanStep"]
+__all__ = ["ExecutionPlan", "PlannerAgent", "PlanStep", "PlannerLLMOutput", "PlannerLLMStep"]

@@ -1,5 +1,4 @@
 """LLM-guided meta-controller gateway for the Langbridge AI package."""
-import json
 from enum import Enum
 from typing import Any
 
@@ -18,6 +17,7 @@ from langbridge.ai.base import (
 )
 from langbridge.ai.events import AIEventEmitter, AIEventSource
 from langbridge.ai.llm.base import LLMProvider
+from langbridge.ai.llm.structured import acomplete_structured
 from langbridge.ai.modes import AnalystAgentMode, analyst_output_contract_for_task_input, normalize_analyst_task_input
 from langbridge.ai.orchestration.continuation import (
     ContinuationState,
@@ -56,6 +56,16 @@ class MetaControllerDecision(BaseModel):
     rationale: str
     agent_name: str | None = None
     task_kind: AgentTaskKind | None = None
+    input: dict[str, Any] = Field(default_factory=dict)
+    clarification_question: str | None = None
+    plan_guidance: str | None = None
+
+
+class MetaControllerLLMDecision(BaseModel):
+    action: MetaControllerAction
+    rationale: str
+    agent_name: str | None = None
+    task_kind: str | None = None
     input: dict[str, Any] = Field(default_factory=dict)
     clarification_question: str | None = None
     plan_guidance: str | None = None
@@ -312,12 +322,18 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             requested_agent_mode=str(context.get("requested_agent_mode") or context.get("agent_mode") or ""),
             specification_payloads=[self._spec_payload(item) for item in specifications],
         )
-        raw = await self._llm.acomplete(prompt, temperature=0.0, max_tokens=700)
-        parsed = self._parse_json_object(raw)
+        decision = await acomplete_structured(
+            self._llm,
+            prompt,
+            response_model=MetaControllerLLMDecision,
+            temperature=0.0,
+            max_tokens=700,
+        )
+        decision_payload = decision.model_dump(mode="python")
         for key in ("agent_name", "task_kind", "clarification_question", "plan_guidance"):
-            if parsed.get(key) in ("", None):
-                parsed[key] = None
-        decision = MetaControllerDecision.model_validate(parsed)
+            if decision_payload.get(key) in ("", None):
+                decision_payload[key] = None
+        decision = MetaControllerDecision.model_validate(decision_payload)
         decision = self._normalize_route_decision(
             decision,
             question=question,
@@ -1745,18 +1761,6 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
     def _uses_mode_aware_analyst_contract(specification: AgentSpecification) -> bool:
         supported_modes = specification.metadata.get("supported_modes")
         return isinstance(supported_modes, list) and bool(supported_modes)
-
-    @staticmethod
-    def _parse_json_object(raw: str) -> dict[str, Any]:
-        text = raw.strip()
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end < start:
-            raise ValueError("Meta-controller LLM response did not contain a JSON object.")
-        parsed = json.loads(text[start : end + 1])
-        if not isinstance(parsed, dict):
-            raise ValueError("Meta-controller LLM response JSON must be an object.")
-        return parsed
 
 
 __all__ = ["MetaControllerAction", "MetaControllerAgent", "MetaControllerDecision", "MetaControllerRun"]

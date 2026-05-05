@@ -14,6 +14,13 @@ from .factory import (
     create_client_from_connection,
     create_chat_model_from_connection,
 )
+from .structured import (
+    StructuredOutputError,
+    StructuredOutputMode,
+    StructuredOutputUnsupportedError,
+    acomplete_structured,
+    ainvoke_structured,
+)
 
 # Import concrete providers to register them with the factory.
 try:  # pragma: no cover - optional provider deps may be unavailable in some test environments
@@ -49,6 +56,11 @@ __all__ = [
     'create_provider',
     'create_client_from_connection',
     'create_chat_model_from_connection',
+    'StructuredOutputError',
+    'StructuredOutputMode',
+    'StructuredOutputUnsupportedError',
+    'acomplete_structured',
+    'ainvoke_structured',
     'OpenAIProvider',
     'AnthropicProvider',
     'AzureOpenAIProvider',

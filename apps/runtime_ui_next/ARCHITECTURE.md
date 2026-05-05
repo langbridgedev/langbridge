@@ -1,18 +1,18 @@
-# Langbridge Runtime UI Next Architecture
+# Langbridge Runtime UI Architecture
 
-`runtime_ui_next` is the side-by-side candidate for the next Langbridge runtime UI. It lives in
-`langbridge/apps` because it is a runtime-local product surface for operating a portable Langbridge
-runtime. It does not replace `langbridge/apps/runtime_ui` yet.
+`runtime_ui_next` is now the packaged Langbridge runtime UI source. It lives in `langbridge/apps`
+because it is a runtime-local product surface for operating a portable Langbridge runtime. The legacy
+`langbridge/apps/runtime_ui` app remains available for rollback/reference during migration.
 
 ## Phase 1 Scope
 
 Phase 1 turns the moved concept app into a production-oriented scaffold:
 
-- Keep the current `runtime_ui` packaged app untouched.
+- Keep the legacy `runtime_ui` source untouched for rollback/reference.
 - Use `react-router-dom` instead of the concept app's custom history listener.
-- Use the same runtime auth/API foundation as the current production UI.
+- Use the same runtime auth/API foundation as the legacy packaged UI.
 - Keep the new chat-first information architecture and shell.
-- Build locally to `dist` rather than `langbridge/ui/static`.
+- Build into the packaged static directory used by the runtime host.
 
 ## Phase 2 Scope
 
@@ -66,10 +66,15 @@ Current feature adapters:
 - `chatService`: lists threads and agents, with fallback examples for unfinished chat UI states.
 - `configurationService`: lists/details/actions for connectors, datasets, semantic models, and agents.
 - `queryService`: still mostly scaffolded for visual iteration.
-- `dashboardService`: still mostly scaffolded for visual iteration.
+- `dashboardService`: local-first dashboard persistence plus semantic-model discovery and widget execution adapters.
 - `navigationService`: adapts recent/project lists to the active workspace.
 
 Chat-specific rendering should continue to prefer markdown plus artifacts. Do not add a second non-markdown answer layout unless the backend contract changes.
+
+Dashboard Builder is intentionally local-first in `runtime_ui_next`: board definitions are stored in
+browser storage, migrated from the legacy runtime UI key when present, exported as portable JSON, and
+executed through `/api/runtime/v1/semantic/query`. Do not add dashboard CRUD endpoints to the portable
+runtime until there is an explicit product decision on runtime-local versus cloud-managed ownership.
 
 ## Auth Flow
 
@@ -105,10 +110,10 @@ Override with:
 LANGBRIDGE_RUNTIME_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-## Build Isolation
+## Packaged Build
 
-`runtime_ui_next` currently builds to its own `dist` directory. Do not point it at
-`langbridge/ui/static` until the replacement cutover phase.
+`runtime_ui_next` builds to `langbridge/ui/static`, which is the packaged static bundle served by
+`langbridge.ui.register_runtime_ui` under `/ui`.
 
 ## Migration Rule
 

@@ -22,7 +22,7 @@ That includes:
 - `langbridge.ai`
 - `langbridge.mcp`
 - `langbridge.ui`
-- `apps/runtime_ui`
+- `apps/runtime_ui_next`
 - `packages/sdk`
 
 ## What Should Stay Out

@@ -1,4 +1,4 @@
-from langbridge.federation.executor.artifact_store import ArtifactStore
+from langbridge.federation.executor.artifact_store import ArtifactCleanupResult, ArtifactStore
 from langbridge.federation.executor.cache_context import (
     StageCacheDescriptor,
     StageCacheInput,
@@ -21,6 +21,7 @@ from langbridge.federation.executor.stage_executor import StageExecutionContext,
 
 __all__ = [
     "ArtifactStore",
+    "ArtifactCleanupResult",
     "StageCacheDescriptor",
     "StageCacheInput",
     "StageCacheInputKind",

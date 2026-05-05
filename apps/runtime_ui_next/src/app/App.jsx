@@ -28,9 +28,16 @@ function DashboardRoute({ navigate }) {
   return <DashboardBoardPage dashboardId={dashboardId} navigate={navigate} />;
 }
 
-function ConfigurationRoute({ navigate }) {
+function ConfigurationRoute({ navigate, authStatus, session }) {
   const { section = "connectors" } = useParams();
-  return <ConfigurationPage section={section} navigate={navigate} />;
+  return (
+    <ConfigurationPage
+      section={section}
+      navigate={navigate}
+      authStatus={authStatus}
+      session={session}
+    />
+  );
 }
 
 function RuntimeRoutes({ authStatus, session, onLogout }) {
@@ -83,8 +90,16 @@ function RuntimeRoutes({ authStatus, session, onLogout }) {
         <Route path="/query-workspace" element={<QueryWorkspacePage navigate={navigate} />} />
         <Route path="/dashboards" element={<DashboardRoute navigate={navigate} />} />
         <Route path="/dashboards/:dashboardId" element={<DashboardRoute navigate={navigate} />} />
+        <Route path="/connectors" element={<Navigate to="/configure/connectors" replace />} />
+        <Route path="/datasets" element={<Navigate to="/configure/datasets" replace />} />
+        <Route path="/semantic-models" element={<Navigate to="/configure/semantic-models" replace />} />
+        <Route path="/agents" element={<Navigate to="/configure/agents" replace />} />
+        <Route path="/security" element={<Navigate to="/configure/security" replace />} />
         <Route path="/configure" element={<Navigate to="/configure/connectors" replace />} />
-        <Route path="/configure/:section" element={<ConfigurationRoute navigate={navigate} />} />
+        <Route
+          path="/configure/:section"
+          element={<ConfigurationRoute navigate={navigate} authStatus={authStatus} session={session} />}
+        />
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Routes>
     </AppShell>

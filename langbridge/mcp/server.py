@@ -36,6 +36,7 @@ def build_runtime_mcp_server(
     auth_resolver: RuntimeAuthResolver,
     mount_path: str = DEFAULT_MCP_MOUNT_PATH,
     debug: bool = False,
+    stateless_http: bool = False,
 ) -> tuple[FastMCP, Any]:
     tool_availability = _build_mcp_tool_availability(runtime_host)
     available_mcp_tools = [
@@ -50,6 +51,7 @@ def build_runtime_mcp_server(
             "Tool calls execute against the runtime workspace available to the current caller."
         ),
         streamable_http_path="/",
+        stateless_http=stateless_http,
     )
     _disable_unused_fastmcp_handlers(server)
 

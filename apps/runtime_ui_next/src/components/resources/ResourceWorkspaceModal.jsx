@@ -16,6 +16,7 @@ export function ResourceWorkspaceModal({
   mode,
   resource,
   detailLoading = false,
+  detailError = "",
   capabilities,
   createTemplate,
   updateTemplate,
@@ -129,6 +130,7 @@ export function ResourceWorkspaceModal({
         </nav>
 
         {error ? <div className="resource-error">{error}</div> : null}
+        {detailError ? <div className="resource-error">{detailError}</div> : null}
         {detailLoading ? <div className="resource-loading">Loading runtime detail...</div> : null}
 
         {activeTab === "overview" && resource ? (

@@ -95,13 +95,13 @@ is upgraded explicitly.
 
 ## Runtime UI
 
-The runtime UI is source-controlled in `apps/runtime_ui` and built into `langbridge/ui/static`, which the Python host serves when `ui` is enabled.
+The runtime UI is source-controlled in `apps/runtime_ui_next` and built into `langbridge/ui/static`, which the Python host serves when `ui` is enabled. The legacy `apps/runtime_ui` app remains in the repo for rollback/reference during migration.
 
 For local UI development:
 
 ```bash
 langbridge serve --config examples/deployment/runtime_host/langbridge_config.yml --features ui
-cd apps/runtime_ui
+cd apps/runtime_ui_next
 npm install
 npm run dev
 ```
@@ -109,7 +109,7 @@ npm run dev
 To build the production UI bundle:
 
 ```bash
-cd apps/runtime_ui
+cd apps/runtime_ui_next
 npm install
 npm run build
 ```

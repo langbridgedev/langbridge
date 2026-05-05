@@ -1514,6 +1514,15 @@ def test_runtime_host_api_serves_ui_when_feature_enabled(tmp_path: Path) -> None
     assert "ui" in info.json()["capabilities"]
 
 
+def test_runtime_host_api_uses_stateless_mcp_for_multi_worker_hosts(tmp_path: Path) -> None:
+    runtime = _build_runtime(tmp_path)
+    app = _create_runtime_app(runtime, features=["mcp"], workers=4)
+
+    assert app.state.runtime_workers == 4
+    assert app.state.runtime_mcp_stateless_http is True
+    assert app.state.runtime_background_tasks_enabled is False
+
+
 @pytest.mark.anyio
 async def test_runtime_host_api_serves_mcp_when_feature_enabled(tmp_path: Path) -> None:
     runtime = _build_runtime(tmp_path)

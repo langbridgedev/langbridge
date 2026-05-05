@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping, MutableMapping
+from typing import Any, Mapping, MutableMapping, TypeVar
+
+from pydantic import BaseModel
 
 
 class LLMProviderName(str, Enum):
@@ -68,6 +70,7 @@ class LLMConnectionConfig:
 
 LLMMessage = dict[str, Any]
 LLMResponse = dict[str, Any]
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 class LLMProvider(ABC):
@@ -128,6 +131,22 @@ class LLMProvider(ABC):
     ) -> str:
         """Asynchronously generate a text completion for the given prompt."""
 
+    async def acomplete_structured(
+        self,
+        prompt: str,
+        *,
+        response_model: type[StructuredModel],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> StructuredModel:
+        """Asynchronously generate and validate structured output."""
+        return await self.ainvoke_structured(
+            [{"role": "user", "content": prompt}],
+            response_model=response_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
     @abstractmethod
     def invoke(
         self,
@@ -147,6 +166,84 @@ class LLMProvider(ABC):
         max_tokens: int | None = None,
     ) -> LLMResponse:
         """Asynchronously invoke the model with messages and return a plain dict response."""
+
+    async def ainvoke_structured(
+        self,
+        messages: list[LLMMessage],
+        *,
+        response_model: type[StructuredModel],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> StructuredModel:
+        """Asynchronously invoke the model and validate structured output.
+
+        Concrete providers can override the native path. The base implementation
+        centralizes auto/native/prompt behavior so provider call sites can depend
+        on one structured-output API.
+        """
+        from .structured import (
+            StructuredOutputMode,
+            StructuredOutputUnsupportedError,
+            configured_structured_output_mode,
+            parse_structured_text,
+        )
+
+        mode = configured_structured_output_mode(self.configuration)
+        if mode in {StructuredOutputMode.auto, StructuredOutputMode.native}:
+            try:
+                return await self._ainvoke_structured_native(
+                    messages,
+                    response_model=response_model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            except StructuredOutputUnsupportedError:
+                if mode == StructuredOutputMode.native:
+                    raise
+            except Exception:
+                if mode == StructuredOutputMode.native:
+                    raise
+
+        fallback_messages = self._messages_with_structured_prompt(
+            messages,
+            response_model=response_model,
+        )
+        response = await self.ainvoke(
+            fallback_messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return parse_structured_text(response_text(response), response_model=response_model)
+
+    async def _ainvoke_structured_native(
+        self,
+        messages: list[LLMMessage],
+        *,
+        response_model: type[StructuredModel],
+        temperature: float,
+        max_tokens: int | None,
+    ) -> StructuredModel:
+        from .structured import StructuredOutputUnsupportedError
+
+        raise StructuredOutputUnsupportedError(
+            f"Provider '{self.name.value}' does not implement native structured output."
+        )
+
+    @staticmethod
+    def _messages_with_structured_prompt(
+        messages: list[LLMMessage],
+        *,
+        response_model: type[BaseModel],
+    ) -> list[LLMMessage]:
+        from .structured import structured_prompt
+
+        if not messages:
+            return [{"role": "user", "content": structured_prompt("", response_model=response_model)}]
+        updated = list(messages)
+        last = dict(updated[-1])
+        last["content"] = structured_prompt(str(last.get("content") or ""), response_model=response_model)
+        updated[-1] = last
+        return updated
         
     @abstractmethod
     async def create_embeddings(

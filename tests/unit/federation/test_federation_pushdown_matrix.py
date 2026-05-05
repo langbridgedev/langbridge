@@ -32,6 +32,19 @@ class PushdownMatrixCase:
     expected_pushdown_by_alias: Mapping[str, Mapping[str, bool]] = field(default_factory=dict)
 
 
+def _source_capabilities(**overrides: bool) -> SourceCapabilities:
+    values = {
+        "pushdown_full_query": False,
+        "pushdown_filter": True,
+        "pushdown_projection": True,
+        "pushdown_aggregation": True,
+        "pushdown_limit": True,
+        "pushdown_join": False,
+    }
+    values.update(overrides)
+    return SourceCapabilities(**values)
+
+
 PUSHDOWN_MATRIX: tuple[PushdownMatrixCase, ...] = (
     PushdownMatrixCase(
         name="single_source_full_query_pushdown",
@@ -43,12 +56,42 @@ PUSHDOWN_MATRIX: tuple[PushdownMatrixCase, ...] = (
         ),
         source_by_table={"orders": "src_orders"},
         source_dialects={"src_orders": "postgres"},
+        source_capabilities={
+            "src_orders": _source_capabilities(pushdown_full_query=True, pushdown_join=True)
+        },
         expected_stage_types=(StageType.REMOTE_FULL_QUERY,),
         expected_pushdown_full_query=True,
         required_remote_tokens=("SUM", "GROUP BY", "ORDER BY"),
     ),
     PushdownMatrixCase(
-        name="missing_filter_capability_keeps_filter_local",
+        name="sql_full_query_ignores_scan_capabilities",
+        sql=(
+            "SELECT o.customer_id, SUM(o.net_revenue) AS total_revenue "
+            "FROM orders AS o "
+            "JOIN customers AS c ON o.customer_id = c.customer_id "
+            "WHERE o.net_revenue > 100 "
+            "GROUP BY o.customer_id "
+            "ORDER BY total_revenue DESC "
+            "LIMIT 5"
+        ),
+        source_by_table={"orders": "src_orders", "customers": "src_orders"},
+        source_dialects={"src_orders": "postgres"},
+        source_capabilities={
+            "src_orders": _source_capabilities(
+                pushdown_full_query=True,
+                pushdown_filter=False,
+                pushdown_projection=False,
+                pushdown_aggregation=False,
+                pushdown_limit=False,
+                pushdown_join=False,
+            )
+        },
+        expected_stage_types=(StageType.REMOTE_FULL_QUERY,),
+        expected_pushdown_full_query=True,
+        required_remote_tokens=("JOIN", "NET_REVENUE > 100", "GROUP BY", "LIMIT 5"),
+    ),
+    PushdownMatrixCase(
+        name="scan_source_missing_filter_capability_keeps_filter_local",
         sql=(
             "SELECT o.order_id, o.net_revenue "
             "FROM orders AS o "
@@ -56,41 +99,47 @@ PUSHDOWN_MATRIX: tuple[PushdownMatrixCase, ...] = (
         ),
         source_by_table={"orders": "src_orders"},
         source_dialects={"src_orders": "postgres"},
-        source_capabilities={"src_orders": SourceCapabilities(pushdown_filter=False)},
+        source_capabilities={
+            "src_orders": _source_capabilities(pushdown_filter=False)
+        },
         expected_stage_types=(StageType.REMOTE_SCAN, StageType.LOCAL_COMPUTE),
         expected_pushdown_full_query=False,
         forbidden_remote_tokens=("NET_REVENUE > 100",),
         required_local_tokens=("NET_REVENUE > 100",),
-        expected_reason_fragments=("filter pushdown is unavailable",),
+        expected_reason_fragments=("full-query SQL pushdown is unavailable",),
         expected_pushdown_by_alias={"o": {"filter": False, "projection": True}},
     ),
     PushdownMatrixCase(
-        name="missing_projection_capability_scans_full_rows",
+        name="scan_source_missing_projection_capability_scans_full_rows",
         sql="SELECT o.order_id FROM orders AS o",
         source_by_table={"orders": "src_orders"},
         source_dialects={"src_orders": "postgres"},
-        source_capabilities={"src_orders": SourceCapabilities(pushdown_projection=False)},
+        source_capabilities={
+            "src_orders": _source_capabilities(pushdown_projection=False)
+        },
         expected_stage_types=(StageType.REMOTE_SCAN, StageType.LOCAL_COMPUTE),
         expected_pushdown_full_query=False,
         required_remote_tokens=("SELECT *",),
-        expected_reason_fragments=("projection pushdown is unavailable",),
+        expected_reason_fragments=("full-query SQL pushdown is unavailable",),
         expected_pushdown_by_alias={"o": {"projection": False}},
     ),
     PushdownMatrixCase(
-        name="missing_limit_capability_keeps_limit_local",
+        name="scan_source_missing_limit_capability_keeps_limit_local",
         sql="SELECT o.order_id FROM orders AS o LIMIT 2",
         source_by_table={"orders": "src_orders"},
         source_dialects={"src_orders": "postgres"},
-        source_capabilities={"src_orders": SourceCapabilities(pushdown_limit=False)},
+        source_capabilities={
+            "src_orders": _source_capabilities(pushdown_limit=False)
+        },
         expected_stage_types=(StageType.REMOTE_SCAN, StageType.LOCAL_COMPUTE),
         expected_pushdown_full_query=False,
         forbidden_remote_tokens=("LIMIT 2",),
         required_local_tokens=("LIMIT 2",),
-        expected_reason_fragments=("limit pushdown is unavailable",),
+        expected_reason_fragments=("full-query SQL pushdown is unavailable",),
         expected_pushdown_by_alias={"o": {"limit": False}},
     ),
     PushdownMatrixCase(
-        name="missing_aggregation_capability_keeps_aggregate_local",
+        name="scan_source_missing_aggregation_capability_keeps_aggregate_local",
         sql=(
             "SELECT o.customer_id, SUM(o.net_revenue) AS total_revenue "
             "FROM orders AS o "
@@ -98,11 +147,13 @@ PUSHDOWN_MATRIX: tuple[PushdownMatrixCase, ...] = (
         ),
         source_by_table={"orders": "src_orders"},
         source_dialects={"src_orders": "postgres"},
-        source_capabilities={"src_orders": SourceCapabilities(pushdown_aggregation=False)},
+        source_capabilities={
+            "src_orders": _source_capabilities(pushdown_aggregation=False)
+        },
         expected_stage_types=(StageType.REMOTE_SCAN, StageType.LOCAL_COMPUTE),
         expected_pushdown_full_query=False,
         required_local_tokens=("SUM", "GROUP BY"),
-        expected_reason_fragments=("aggregation pushdown is unavailable",),
+        expected_reason_fragments=("full-query SQL pushdown is unavailable",),
         expected_pushdown_by_alias={"o": {"aggregation": False}},
     ),
     PushdownMatrixCase(
@@ -114,6 +165,9 @@ PUSHDOWN_MATRIX: tuple[PushdownMatrixCase, ...] = (
         ),
         source_by_table={"orders": "src_orders"},
         source_dialects={"src_orders": "sqlite"},
+        source_capabilities={
+            "src_orders": _source_capabilities(pushdown_full_query=True, pushdown_join=True)
+        },
         expected_stage_types=(StageType.REMOTE_SCAN, StageType.LOCAL_COMPUTE),
         expected_pushdown_full_query=False,
         forbidden_remote_tokens=("BTRIM",),
@@ -130,6 +184,9 @@ PUSHDOWN_MATRIX: tuple[PushdownMatrixCase, ...] = (
         ),
         source_by_table={"shopify_orders": "src_orders"},
         source_dialects={"src_orders": "postgres"},
+        source_capabilities={
+            "src_orders": _source_capabilities(pushdown_full_query=True, pushdown_join=True)
+        },
         table_names={"shopify_orders": "orders"},
         expected_stage_types=(StageType.REMOTE_FULL_QUERY,),
         expected_pushdown_full_query=True,
@@ -141,6 +198,9 @@ PUSHDOWN_MATRIX: tuple[PushdownMatrixCase, ...] = (
         sql='SELECT o.order_id FROM "org_abc"."semantic"."shopify_orders" AS o',
         source_by_table={"shopify_orders": "src_orders"},
         source_dialects={"src_orders": "postgres"},
+        source_capabilities={
+            "src_orders": _source_capabilities(pushdown_full_query=True, pushdown_join=True)
+        },
         table_names={"shopify_orders": "shopify_orders"},
         table_schemas={"shopify_orders": "semantic"},
         table_catalogs={"shopify_orders": "org_abc"},
@@ -165,6 +225,9 @@ PUSHDOWN_MATRIX: tuple[PushdownMatrixCase, ...] = (
         ),
         source_by_table={"aligned_returns": "src_products"},
         source_dialects={"src_products": "snowflake"},
+        source_capabilities={
+            "src_products": _source_capabilities(pushdown_full_query=True, pushdown_join=True)
+        },
         table_metadata={
             "aligned_returns": {
                 "physical_sql": (
@@ -177,7 +240,7 @@ PUSHDOWN_MATRIX: tuple[PushdownMatrixCase, ...] = (
         expected_stage_types=(StageType.REMOTE_SCAN, StageType.LOCAL_COMPUTE),
         expected_pushdown_full_query=False,
         required_remote_tokens=("FROM (SELECT PRODUCT_ID AS product_id", "PRODUCT_ID = 'P-1'"),
-        expected_reason_fragments=("physical relations",),
+        expected_reason_fragments=("physical SQL bindings",),
         expected_pushdown_by_alias={"aligned_returns": {"filter": True, "projection": True}},
     ),
 )

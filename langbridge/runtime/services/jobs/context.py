@@ -27,7 +27,7 @@ class JobExecutionContext:
         raw_event_type: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> RuntimeJobEvent:
-        return await self._service.append_event(
+        event = await self._service.append_event(
             job_id=self.job.id,
             task_id=task_id,
             event_type=event_type,
@@ -40,6 +40,10 @@ class JobExecutionContext:
             raw_event_type=raw_event_type,
             details=details,
         )
+        self.job.last_sequence = max(int(self.job.last_sequence or 0), int(event.sequence or 0))
+        if terminal:
+            self.job.terminal_sequence = event.sequence
+        return event
 
     async def upsert_task(
         self,

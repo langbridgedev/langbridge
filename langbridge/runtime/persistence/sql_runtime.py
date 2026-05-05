@@ -250,6 +250,7 @@ def build_sql_runtime_resources(
             "add_artifact",
             "append_event",
             "claim_next",
+            "heartbeat_job",
             "save",
             "save_job",
             "upsert_task",

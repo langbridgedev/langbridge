@@ -1,9 +1,11 @@
 from typing import Any, Mapping
 
 import httpx
+from pydantic import BaseModel
 
 from ..base import LLMMessage, LLMProvider, LLMProviderName, LLMResponse, response_text
 from ..factory import register_provider
+from ..structured import json_schema_for_model, parse_structured_text
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 
@@ -102,6 +104,27 @@ class OllamaProvider(LLMProvider):
             )
         return self._chat_response(_response_payload(response))
 
+    async def _ainvoke_structured_native(
+        self,
+        messages: list[LLMMessage],
+        *,
+        response_model: type[BaseModel],
+        temperature: float,
+        max_tokens: int | None,
+    ) -> BaseModel:
+        async with self.create_async_client() as client:
+            response = await client.post(
+                "/api/chat",
+                json=self._chat_payload(
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format=json_schema_for_model(response_model),
+                ),
+            )
+        payload = self._chat_response(_response_payload(response))
+        return parse_structured_text(str(payload.get("text") or ""), response_model=response_model)
+
     async def create_embeddings(
         self,
         texts: list[str],
@@ -124,13 +147,16 @@ class OllamaProvider(LLMProvider):
         *,
         temperature: float,
         max_tokens: int | None,
+        response_format: Any = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model_name,
             "messages": [self._message_payload(message) for message in messages],
             "stream": False,
         }
-        if self.configuration.get("format") is not None:
+        if response_format is not None:
+            payload["format"] = response_format
+        elif self.configuration.get("format") is not None:
             payload["format"] = self.configuration["format"]
         if self.configuration.get("keep_alive") is not None:
             payload["keep_alive"] = self.configuration["keep_alive"]

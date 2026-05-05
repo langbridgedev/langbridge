@@ -1,6 +1,5 @@
 """Semantic search tool for query grounding."""
 
-import json
 import logging
 import uuid
 from typing import Any, Protocol
@@ -9,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from langbridge.ai.events import AIEventEmitter, AIEventSource
 from langbridge.ai.llm.base import LLMProvider
+from langbridge.ai.llm.structured import acomplete_structured
 from langbridge.runtime.embeddings import EmbeddingProvider
 from langbridge.runtime.services.semantic_vector_search import SemanticVectorSearchService
 
@@ -42,6 +42,10 @@ class SemanticSearchResultCollection(BaseModel):
 
     def to_prompt_strings(self) -> list[str]:
         return [result.to_prompt_string() for result in self.results]
+
+
+class SemanticEntityExtraction(BaseModel):
+    entities: list[str] = Field(default_factory=list)
 
 
 class SemanticSearchTool(AIEventSource):
@@ -194,27 +198,22 @@ class SemanticSearchTool(AIEventSource):
             "Return STRICT JSON only: {\"entities\":[\"...\"]}\n"
             f"Return at most {top_k} entities. Query: {query}\n"
         )
-        raw = await self._llm.acomplete(prompt, temperature=0.0, max_tokens=300)
-        parsed = self._parse_json_object(raw)
-        entities = parsed.get("entities")
-        if not isinstance(entities, list):
-            raise ValueError("Entity recognition response did not include an entities list.")
+        parsed = await acomplete_structured(
+            self._llm,
+            prompt,
+            response_model=SemanticEntityExtraction,
+            temperature=0.0,
+            max_tokens=300,
+        )
+        entities = parsed.entities
         phrases = [str(item).strip() for item in entities if str(item).strip()]
         return phrases[:top_k] or [query]
-
-    @staticmethod
-    def _parse_json_object(raw: str) -> dict[str, Any]:
-        text = raw.strip()
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end < start:
-            raise ValueError("Semantic search LLM response did not contain a JSON object.")
-        return json.loads(text[start : end + 1])
 
 
 __all__ = [
     "SemanticSearchResult",
     "SemanticSearchResultCollection",
+    "SemanticEntityExtraction",
     "SemanticSearchTool",
     "VectorStoreLike",
 ]

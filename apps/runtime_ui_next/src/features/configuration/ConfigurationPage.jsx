@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 
 import { ResourceList } from "../../components/resources/ResourceList.jsx";
 import { ResourceWorkspaceModal } from "../../components/resources/ResourceWorkspaceModal.jsx";
+import { AgentWorkspaceModal } from "../../components/agents/AgentWorkspaceModal.jsx";
 import { ConnectorConfigurationList } from "../../components/connectors/ConnectorConfigurationList.jsx";
+import { ConnectorWorkspaceModal } from "../../components/connectors/ConnectorWorkspaceModal.jsx";
+import { DatasetWorkspaceModal } from "../../components/datasets/DatasetWorkspaceModal.jsx";
+import { SemanticModelWorkspaceModal } from "../../components/semantic-models/SemanticModelWorkspaceModal.jsx";
+import { SecurityManagementPage } from "./SecurityManagementPage.jsx";
 import {
   createConfigurationResource,
   deleteConfigurationResource,
@@ -21,7 +26,7 @@ import { classNames } from "../../utils/classNames.js";
 
 const defaultSection = "connectors";
 
-export function ConfigurationPage({ section = defaultSection, navigate }) {
+export function ConfigurationPage({ section = defaultSection, navigate, authStatus, session }) {
   const [sections, setSections] = useState([]);
   const [resources, setResources] = useState([]);
   const [activeSection, setActiveSection] = useState(null);
@@ -30,15 +35,18 @@ export function ConfigurationPage({ section = defaultSection, navigate }) {
   const [activeResource, setActiveResource] = useState(null);
   const [resourceLoading, setResourceLoading] = useState(false);
   const [workspaceMode, setWorkspaceMode] = useState(null);
-  const capabilities = useMemo(() => getSectionCapabilities(activeSection), [activeSection]);
-  const createTemplate = useMemo(() => getCreateTemplate(activeSection), [activeSection]);
+  const [resourceListError, setResourceListError] = useState("");
+  const [resourceDetailError, setResourceDetailError] = useState("");
+  const activeSectionId = activeSection?.id || "";
+  const capabilities = useMemo(() => getSectionCapabilities(activeSectionId), [activeSectionId]);
+  const createTemplate = useMemo(() => getCreateTemplate(activeSectionId), [activeSectionId]);
   const updateTemplate = useMemo(
-    () => (activeResource ? getUpdateTemplate(activeSection, activeResource) : {}),
-    [activeResource, activeSection],
+    () => (activeResource ? getUpdateTemplate(activeSectionId, activeResource) : {}),
+    [activeResource, activeSectionId],
   );
   const resourceActions = useMemo(
-    () => (activeResource ? getResourceActions(activeSection, activeResource) : []),
-    [activeResource, activeSection],
+    () => (activeResource ? getResourceActions(activeSectionId, activeResource) : []),
+    [activeResource, activeSectionId],
   );
 
   useEffect(() => {
@@ -56,14 +64,25 @@ export function ConfigurationPage({ section = defaultSection, navigate }) {
 
     setActiveResourceId(null);
     setActiveResource(null);
+    setResourceListError("");
+    setResourceDetailError("");
     setWorkspaceMode(null);
+    if (activeSection.id === "security") {
+      setResources([]);
+      setLoadingResources(false);
+      return;
+    }
     void loadResources(activeSection.id);
   }, [activeSection]);
 
-  async function loadResources(targetSection = activeSection) {
+  async function loadResources(targetSection = activeSectionId) {
     setLoadingResources(true);
+    setResourceListError("");
     try {
       setResources(await listConfigurationResources(targetSection));
+    } catch (caughtError) {
+      setResources([]);
+      setResourceListError(caughtError?.message || "Unable to load runtime resources.");
     } finally {
       setLoadingResources(false);
     }
@@ -73,6 +92,7 @@ export function ConfigurationPage({ section = defaultSection, navigate }) {
     const listResource = resources.find((resource) => resource.id === resourceId);
     setActiveResourceId(resourceId);
     setActiveResource(listResource || null);
+    setResourceDetailError("");
     setWorkspaceMode("detail");
     if (!listResource) {
       return;
@@ -80,9 +100,11 @@ export function ConfigurationPage({ section = defaultSection, navigate }) {
 
     setResourceLoading(true);
     try {
-      const detailed = await getConfigurationResource(activeSection, listResource);
+      const detailed = await getConfigurationResource(activeSectionId, listResource);
       setActiveResource(detailed);
       mergeResource(detailed);
+    } catch (caughtError) {
+      setResourceDetailError(caughtError?.message || "Unable to load runtime detail.");
     } finally {
       setResourceLoading(false);
     }
@@ -91,6 +113,7 @@ export function ConfigurationPage({ section = defaultSection, navigate }) {
   function openCreateWorkspace() {
     setActiveResourceId(null);
     setActiveResource(null);
+    setResourceDetailError("");
     setWorkspaceMode("create");
   }
 
@@ -98,10 +121,11 @@ export function ConfigurationPage({ section = defaultSection, navigate }) {
     setWorkspaceMode(null);
     setActiveResourceId(null);
     setActiveResource(null);
+    setResourceDetailError("");
   }
 
   async function handleCreate(payload) {
-    const created = await createConfigurationResource(activeSection, payload);
+    const created = await createConfigurationResource(activeSectionId, payload);
     setResources((current) => [created, ...current.filter((resource) => resource.id !== created.id)]);
     setActiveResource(created);
     setActiveResourceId(created.id);
@@ -110,20 +134,20 @@ export function ConfigurationPage({ section = defaultSection, navigate }) {
   }
 
   async function handleUpdate(payload) {
-    const updated = await updateConfigurationResource(activeSection, activeResource, payload);
+    const updated = await updateConfigurationResource(activeSectionId, activeResource, payload);
     setActiveResource(updated);
     mergeResource(updated);
     return updated;
   }
 
   async function handleDelete() {
-    await deleteConfigurationResource(activeSection, activeResource);
+    await deleteConfigurationResource(activeSectionId, activeResource);
     setResources((current) => current.filter((resource) => resource.id !== activeResource.id));
     closeWorkspace();
   }
 
   async function handleAction(actionId) {
-    const result = await runConfigurationResourceAction(activeSection, activeResource, actionId);
+    const result = await runConfigurationResourceAction(activeSectionId, activeResource, actionId);
     if (actionId === "refresh_detail" && result?.id) {
       setActiveResource(result);
       mergeResource(result);
@@ -150,7 +174,7 @@ export function ConfigurationPage({ section = defaultSection, navigate }) {
         {sections.map((item) => (
           <button
             key={item.id}
-            className={classNames("config-nav-item", activeSection === item.id && "active")}
+            className={classNames("config-nav-item", activeSectionId === item.id && "active")}
             type="button"
             onClick={() => navigate(`/configure/${item.id}`)}
           >
@@ -166,13 +190,20 @@ export function ConfigurationPage({ section = defaultSection, navigate }) {
             <p className="eyebrow">{activeSection?.label || "Configure"}</p>
             <h2>{activeSection?.label || "Resources"}</h2>
           </div>
-          <div className="management-legend">
-            <span><i /> Runtime managed</span>
-            <span><i /> Config managed</span>
-          </div>
+          {activeSection.id === "security" ? null : (
+            <div className="management-legend">
+              <span><i /> Runtime managed</span>
+              <span><i /> Config managed</span>
+            </div>
+          )}
         </section>
 
-        <section className="config-resource-layout config-resource-layout--list">
+        {resourceListError ? <div className="resource-error">{resourceListError}</div> : null}
+
+        {activeSection.id === "security" ? (
+          <SecurityManagementPage authStatus={authStatus} session={session} />
+        ) : (
+          <section className="config-resource-layout config-resource-layout--list">
           {activeSection.id === "connectors" ? (
             <ConnectorConfigurationList
               resources={resources}
@@ -194,9 +225,69 @@ export function ConfigurationPage({ section = defaultSection, navigate }) {
               loading={loadingResources}
             />
           )}
-        </section>
+          </section>
+        )}
 
-        {workspaceMode ? (
+        {workspaceMode && activeSectionId === "connectors" ? (
+          <ConnectorWorkspaceModal
+            mode={workspaceMode}
+            resource={activeResource}
+            detailLoading={resourceLoading}
+            capabilities={capabilities}
+            actions={resourceActions}
+            detailError={resourceDetailError}
+            onClose={closeWorkspace}
+            onCreate={handleCreate}
+            onUpdate={handleUpdate}
+            onDelete={handleDelete}
+            onAction={handleAction}
+          />
+        ) : null}
+
+        {workspaceMode && activeSectionId === "datasets" ? (
+          <DatasetWorkspaceModal
+            mode={workspaceMode}
+            resource={activeResource}
+            detailLoading={resourceLoading}
+            capabilities={capabilities}
+            actions={resourceActions}
+            detailError={resourceDetailError}
+            onClose={closeWorkspace}
+            onCreate={handleCreate}
+            onUpdate={handleUpdate}
+            onDelete={handleDelete}
+            onAction={handleAction}
+          />
+        ) : null}
+
+        {workspaceMode && activeSectionId === "semantic-models" ? (
+          <SemanticModelWorkspaceModal
+            mode={workspaceMode}
+            resource={activeResource}
+            detailLoading={resourceLoading}
+            capabilities={capabilities}
+            actions={resourceActions}
+            detailError={resourceDetailError}
+            onClose={closeWorkspace}
+            onCreate={handleCreate}
+            onUpdate={handleUpdate}
+            onDelete={handleDelete}
+            onAction={handleAction}
+          />
+        ) : null}
+
+        {workspaceMode && activeSectionId === "agents" ? (
+          <AgentWorkspaceModal
+            resource={activeResource}
+            detailLoading={resourceLoading}
+            actions={resourceActions}
+            detailError={resourceDetailError}
+            onClose={closeWorkspace}
+            onAction={handleAction}
+          />
+        ) : null}
+
+        {workspaceMode && !["connectors", "datasets", "semantic-models", "agents", "security"].includes(activeSectionId) ? (
           <ResourceWorkspaceModal
             section={activeSection}
             mode={workspaceMode}
@@ -206,6 +297,7 @@ export function ConfigurationPage({ section = defaultSection, navigate }) {
             createTemplate={createTemplate}
             updateTemplate={updateTemplate}
             actions={resourceActions}
+            detailError={resourceDetailError}
             onClose={closeWorkspace}
             onCreate={handleCreate}
             onUpdate={handleUpdate}

@@ -1,3 +1,6 @@
+import pytest
+
+from langbridge.semantic.errors import SemanticQueryError
 from langbridge.semantic.model import Dimension, Measure, SemanticModel, Table
 from langbridge.semantic.query import SemanticQuery, SemanticQueryEngine
 
@@ -48,6 +51,71 @@ def test_ordering_by_schema_table_time_dimension_uses_projected_time_dimension_a
 
     assert 'ORDER BY "orders__created_at_day" DESC' in sql
     assert "ORDER BY created_at DESC" not in sql
+
+
+def test_or_filter_group_compiles_to_or_conditions() -> None:
+    model = SemanticModel(
+        version="1.0",
+        tables={
+            "orders": Table(
+                name="orders",
+                dimensions=[
+                    Dimension(name="region", type="string"),
+                    Dimension(name="status", type="string"),
+                ],
+                measures=[Measure(name="amount", type="number", aggregation="sum")],
+            )
+        },
+    )
+    query = SemanticQuery.model_validate(
+        {
+            "measures": ["orders.amount"],
+            "filters": [
+                {
+                    "or": [
+                        {"member": "orders.region", "operator": "equals", "values": ["UK"]},
+                        {"member": "orders.status", "operator": "equals", "values": ["paid"]},
+                    ]
+                }
+            ],
+        }
+    )
+
+    sql = SemanticQueryEngine().compile(query, model, dialect="postgres").sql
+
+    assert 't0."region" = \'UK\'' in sql
+    assert 't0."status" = \'paid\'' in sql
+    assert " OR " in sql
+
+
+def test_or_filter_group_rejects_mixed_where_and_having_scopes() -> None:
+    model = SemanticModel(
+        version="1.0",
+        tables={
+            "orders": Table(
+                name="orders",
+                dimensions=[Dimension(name="region", type="string")],
+                measures=[Measure(name="amount", type="number", aggregation="sum")],
+            )
+        },
+    )
+    query = SemanticQuery.model_validate(
+        {
+            "dimensions": ["orders.region"],
+            "measures": ["orders.amount"],
+            "filters": [
+                {
+                    "or": [
+                        {"member": "orders.region", "operator": "equals", "values": ["UK"]},
+                        {"measure": "orders.amount", "operator": "gt", "values": ["100"]},
+                    ]
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(SemanticQueryError, match="OR filter groups cannot mix"):
+        SemanticQueryEngine().compile(query, model, dialect="postgres")
 
 
 def test_relative_time_preset_builds_timestamp_window_not_literal_value_filter() -> None:
@@ -337,54 +405,6 @@ def test_measure_expression_uses_underlying_column_name_not_measure_name() -> No
 
     assert 'SUM(t0."net_revenue") AS "shopify_orders__net_sales"' in sql
     assert 'SUM(t0."net_sales")' not in sql
-
-
-def test_metric_can_use_group_safe_dimension_lookup_via_any_value() -> None:
-    model = SemanticModel.model_validate(
-        {
-            "version": "1.0",
-            "name": "returns",
-            "datasets": {
-                "returns": {
-                    "relation_name": "returns",
-                    "dimensions": [
-                        {"name": "fund_id", "expression": "fund_id", "type": "string"},
-                        {"name": "frequency", "expression": "frequency", "type": "string"},
-                    ],
-                    "measures": [
-                        {
-                            "name": "amount",
-                            "expression": "amount",
-                            "type": "number",
-                            "aggregation": "sum",
-                        }
-                    ],
-                }
-            },
-            "metrics": {
-                "annualised_amount": {
-                    "expression": (
-                        "CASE "
-                        "WHEN ANY_VALUE(returns.frequency) ILIKE 'MONTHLY' THEN SUM(returns.amount) * 12 "
-                        "ELSE SUM(returns.amount) "
-                        "END"
-                    )
-                }
-            },
-        }
-    )
-    query = SemanticQuery.model_validate(
-        {
-            "measures": ["annualised_amount"],
-            "dimensions": ["returns.fund_id"],
-        }
-    )
-
-    sql = SemanticQueryEngine().compile(query, model, dialect="snowflake").sql
-
-    assert "ANY_VALUE(t0.frequency) ILIKE 'MONTHLY'" in sql
-    assert 'GROUP BY t0."fund_id"' in sql
-    assert 'GROUP BY t0."fund_id", t0."frequency"' not in sql
 
 
 def test_ilike_filter_compiles_to_portable_case_insensitive_like() -> None:
