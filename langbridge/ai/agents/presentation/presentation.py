@@ -1,5 +1,7 @@
 """Final response presentation agent for Langbridge AI."""
-from typing import Any
+from typing import Any, TypeVar
+
+from pydantic import BaseModel
 
 from langbridge.ai.base import (
     AgentIOContract,
@@ -13,8 +15,7 @@ from langbridge.ai.base import (
     BaseAgent,
 )
 from langbridge.ai.events import AIEventEmitter, AIEventSource
-from langbridge.ai.llm.base import LLMProvider
-from langbridge.ai.llm.structured import acomplete_structured
+from langbridge.ai.llm.base import LLMMessage, LLMProvider, LLMRequest
 from langbridge.ai.agents.presentation.artifacts import (
     build_available_artifacts,
 )
@@ -22,6 +23,8 @@ from langbridge.ai.agents.presentation.contracts import PresentationLLMOutput
 from langbridge.ai.agents.presentation.prompts import build_presentation_prompt
 from langbridge.ai.agents.presentation.response import PresentationResponseAssembler
 from langbridge.ai.tools.charting import ChartSpec, ChartingTool
+
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 class PresentationAgent(AIEventSource, BaseAgent):
@@ -38,6 +41,29 @@ class PresentationAgent(AIEventSource, BaseAgent):
         self._llm = llm_provider
         self._charting_tool = charting_tool
         self._response_assembler = PresentationResponseAssembler()
+
+    async def _complete_structured(
+        self,
+        prompt: str,
+        *,
+        response_model: type[StructuredModel],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        purpose: str = "presentation.structured",
+    ) -> StructuredModel:
+        invocation = await self._llm.ainvoke(
+            LLMRequest[StructuredModel](
+                purpose=purpose,
+                messages=[LLMMessage(role="user", content=prompt)],
+                response_model=response_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+        parsed = invocation.response.parsed
+        if parsed is None:
+            raise ValueError(f"Presentation LLM response missing parsed {response_model.__name__}.")
+        return parsed
 
     @property
     def specification(self) -> AgentSpecification:
@@ -115,12 +141,12 @@ class PresentationAgent(AIEventSource, BaseAgent):
             presentation_guidance=presentation_guidance,
         )
         parsed = (
-            await acomplete_structured(
-                self._llm,
+            await self._complete_structured(
                 prompt,
                 response_model=PresentationLLMOutput,
                 temperature=0.2,
                 max_tokens=2400,
+                purpose="presentation.compose",
             )
         ).model_dump(mode="json", exclude_none=True)
         response = self._response_assembler.assemble(

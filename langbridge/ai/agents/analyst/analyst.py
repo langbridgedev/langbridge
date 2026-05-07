@@ -3,7 +3,9 @@
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Sequence, TypeVar
+
+from pydantic import BaseModel
 
 from langbridge.ai.base import (
     AgentCostLevel,
@@ -41,6 +43,7 @@ from langbridge.ai.agents.analyst.contracts import (
     AnalystSqlSummaryOutput,
     AnalystSqlSynthesisOutput,
     AnalystSqlToolSelection,
+    VisualizationRecommendation,
 )
 from langbridge.ai.agents.analyst.research_workflow import (
     EvidenceBundle,
@@ -49,8 +52,7 @@ from langbridge.ai.agents.analyst.research_workflow import (
     ResearchWorkflowState,
 )
 from langbridge.ai.agents.presentation.guidance import PresentationGuidance
-from langbridge.ai.llm.base import LLMProvider
-from langbridge.ai.llm.structured import acomplete_structured
+from langbridge.ai.llm.base import LLMMessage, LLMProvider, LLMRequest
 from langbridge.ai.modes import (
     AnalystAgentMode,
     analyst_output_contract_for_task_input,
@@ -93,7 +95,7 @@ _SEMANTIC_FALLBACK_MARKERS = (
 _PARENTHESIZED_IDENTIFIER_RE = re.compile(r"\((?P<identifier>[A-Za-z][A-Za-z0-9_-]{2,})\)")
 _CODE_IDENTIFIER_RE = re.compile(r"\b[A-Z][A-Z0-9_-]{3,}\b")
 _ENTITY_NAME_SPLIT_RE = re.compile(
-    r"\b(?:for|of|about|called|named|entity|product|security|fund|portfolio|asset)\b",
+    r"\b(?:for|of|about|called|named|entity|item|record|account|asset|customer|product|group|segment)\b",
     re.IGNORECASE,
 )
 _ENTITY_IDENTIFIER_COLUMN_HINTS = (
@@ -110,7 +112,86 @@ _ENTITY_IDENTIFIER_COLUMN_HINTS = (
 _ENTITY_NAME_COLUMN_HINTS = ("name", "display", "title", "label", "description")
 _ENTITY_INCEPTION_COLUMN_HINTS = ("inception", "launch", "start", "created", "first")
 _ENTITY_STATUS_COLUMN_HINTS = ("status", "state", "active")
-_ENTITY_BENCHMARK_COLUMN_HINTS = ("benchmark", "index")
+_ENTITY_NAME_REFERENCE_PATTERNS = (
+    re.compile(
+        r"\b(?:why\s+(?:did|does|has|have)|how\s+did|what\s+caused)\s+"
+        r"(?P<name>[A-Za-z0-9][A-Za-z0-9&.'’ _/-]{2,80}?)\s+"
+        r"(?:have|has|had|perform|change|increase|decrease|drop|rise|fall|trend|score|return|underperform|outperform)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:for|of|about)\s+"
+        r"(?P<name>[A-Za-z0-9][A-Za-z0-9&.'’ _/-]{2,80}?)\s+"
+        r"(?:since|in|during|over|from|against|versus|vs\.?|with)\b",
+        re.IGNORECASE,
+    ),
+)
+_ENTITY_NAME_SIGNAL_TERMS = (
+    "alpha",
+    "beta",
+    "baseline",
+    "comparison",
+    "entity",
+    "group",
+    "inception",
+    "item",
+    "kpi",
+    "measure",
+    "metric",
+    "outperform",
+    "performance",
+    "product",
+    "record",
+    "return",
+    "score",
+    "trend",
+    "underperform",
+)
+_METRIC_EXPLANATION_TERMS = (
+    "bad",
+    "decrease",
+    "dropped",
+    "fall",
+    "fell",
+    "high",
+    "increase",
+    "low",
+    "lost",
+    "negative",
+    "poor",
+    "rise",
+    "rose",
+    "weak",
+    "underperform",
+    "underperformed",
+    "why",
+)
+
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
+_METRIC_OUTCOME_TERMS = (
+    "alpha",
+    "beta",
+    "cost",
+    "count",
+    "efficiency",
+    "growth",
+    "kpi",
+    "margin",
+    "measure",
+    "metric",
+    "outcome",
+    "performance",
+    "rate",
+    "revenue",
+    "return",
+    "returns",
+    "sales",
+    "score",
+    "spend",
+    "trend",
+    "value",
+    "volume",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +267,29 @@ class AnalystAgent(AIEventSource, BaseAgent):
         self._sql_tools = list(sql_analysis_tools or [])
         self._semantic_search_tools = list(semantic_search_tools or [])
         self._web_search_tool = web_search_tool
+
+    async def _complete_structured(
+        self,
+        prompt: str,
+        *,
+        response_model: type[StructuredModel],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        purpose: str = "analyst.structured",
+    ) -> StructuredModel:
+        invocation = await self._llm.ainvoke(
+            LLMRequest[StructuredModel](
+                purpose=purpose,
+                messages=[LLMMessage(role="user", content=prompt)],
+                response_model=response_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+        parsed = invocation.response.parsed
+        if parsed is None:
+            raise ValueError(f"Analyst LLM response missing parsed {response_model.__name__}.")
+        return parsed
 
     @property
     def specification(self) -> AgentSpecification:
@@ -411,6 +515,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
                     diagnostics = {
                         "agent_mode": AnalystAgentMode.sql.value,
                         "mode_decision": mode_decision,
+                        "investigation_profile": self._question_investigation_profile(task.question),
                         "selected_tool": final_tool.name,
                         "selected_query_scope": final_tool.query_scope.value,
                         "error_taxonomy": taxonomy.to_dict(),
@@ -425,6 +530,16 @@ class AnalystAgent(AIEventSource, BaseAgent):
                         diagnostics["entity_resolution"] = entity_resolution.model_dump(mode="json", exclude_none=True)
                     if fallback_details is not None:
                         diagnostics["fallback"] = fallback_details
+                    diagnostics["investigation_trace"] = self._build_sql_investigation_trace(
+                        task=task,
+                        entity_resolution=entity_resolution,
+                        final_tool=final_tool,
+                        response=response,
+                        review=review,
+                        governed_attempts=governed_attempts,
+                        web_result=None,
+                        final_status="needs_clarification",
+                    )
                     return self.build_result(
                         task=task,
                         status=AgentResultStatus.needs_clarification,
@@ -505,6 +620,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
         diagnostics = {
             "agent_mode": AnalystAgentMode.sql.value,
             "mode_decision": mode_decision,
+            "investigation_profile": self._question_investigation_profile(task.question),
             "selected_tool": final_tool.name,
             "selected_query_scope": final_tool.query_scope.value,
             "error_taxonomy": taxonomy.to_dict(),
@@ -519,6 +635,16 @@ class AnalystAgent(AIEventSource, BaseAgent):
             diagnostics["entity_resolution"] = entity_resolution.model_dump(mode="json", exclude_none=True)
         if fallback_details is not None:
             diagnostics["fallback"] = fallback_details
+        diagnostics["investigation_trace"] = self._build_sql_investigation_trace(
+            task=task,
+            entity_resolution=entity_resolution,
+            final_tool=final_tool,
+            response=response,
+            review=review,
+            governed_attempts=governed_attempts,
+            web_result=web_result,
+            final_status=status.value,
+        )
         return self.build_result(
             task=task,
             status=status,
@@ -592,8 +718,19 @@ class AnalystAgent(AIEventSource, BaseAgent):
                     diagnostics={
                         "agent_mode": AnalystAgentMode.research.value,
                         "mode_decision": mode_decision,
+                        "investigation_profile": self._question_investigation_profile(task.question),
                         "research_phase": "clarify",
                         "research_steps": research_steps,
+                        "investigation_trace": self._build_research_investigation_trace(
+                            task=task,
+                            entity_resolution=entity_resolution,
+                            evidence_plan=evidence_plan,
+                            workflow_state=workflow_state,
+                            research_steps=research_steps,
+                            sources=sources,
+                            visualization_payload=None,
+                            final_status="needs_clarification",
+                        ),
                     },
                 )
 
@@ -705,8 +842,19 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 diagnostics={
                     "agent_mode": AnalystAgentMode.research.value,
                     "mode_decision": mode_decision,
+                    "investigation_profile": self._question_investigation_profile(task.question),
                     "governed_seeded": bool(governed_output),
                     "research_steps": research_steps,
+                    "investigation_trace": self._build_research_investigation_trace(
+                        task=task,
+                        entity_resolution=entity_resolution,
+                        evidence_plan=evidence_plan,
+                        workflow_state=workflow_state,
+                        research_steps=research_steps,
+                        sources=sources,
+                        visualization_payload=None,
+                        final_status="blocked",
+                    ),
                 },
             )
         if latest_governed_result is not None and latest_governed_result.status == AgentResultStatus.failed and not sources:
@@ -734,9 +882,20 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 diagnostics={
                     "agent_mode": AnalystAgentMode.research.value,
                     "mode_decision": mode_decision,
+                    "investigation_profile": self._question_investigation_profile(task.question),
                     "research_phase": "evidence_unavailable",
                     "research_steps": research_steps,
                     "research_state": workflow_state.compact_payload(),
+                    "investigation_trace": self._build_research_investigation_trace(
+                        task=task,
+                        entity_resolution=entity_resolution,
+                        evidence_plan=evidence_plan,
+                        workflow_state=workflow_state,
+                        research_steps=research_steps,
+                        sources=sources,
+                        visualization_payload=None,
+                        final_status="blocked",
+                    ),
                 },
             )
         visualization_decision = research_steps[-1] if research_steps else {}
@@ -821,6 +980,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
             diagnostics={
                 "agent_mode": AnalystAgentMode.research.value,
                 "mode_decision": mode_decision,
+                "investigation_profile": self._question_investigation_profile(task.question),
                 "web_search": web_result.to_dict() if web_result else None,
                 "weak_evidence": not bool(sources) and not bool(governed_output),
                 "governed_seeded": bool(governed_output),
@@ -832,6 +992,16 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 else None,
                 "evidence_bundle_assessment": evidence_bundle.assessment(),
                 "research_state": workflow_state.compact_payload(),
+                "investigation_trace": self._build_research_investigation_trace(
+                    task=task,
+                    entity_resolution=entity_resolution,
+                    evidence_plan=evidence_plan,
+                    workflow_state=workflow_state,
+                    research_steps=research_steps,
+                    sources=sources,
+                    visualization_payload=visualization_payload,
+                    final_status="succeeded",
+                ),
                 **(
                     {"entity_resolution": entity_resolution.model_dump(mode="json", exclude_none=True)}
                     if entity_resolution is not None
@@ -871,12 +1041,12 @@ class AnalystAgent(AIEventSource, BaseAgent):
             )
         )
         parsed = (
-            await acomplete_structured(
-                self._llm,
+            await self._complete_structured(
                 prompt,
                 response_model=AnalystContextAnalysisOutput,
                 temperature=0.2,
                 max_tokens=self._detail_token_limit(task.question, standard=800, detailed=1200),
+                purpose="analyst.context_analysis",
             )
         ).model_dump(mode="json")
         result = parsed.get("result")
@@ -914,12 +1084,12 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 tools=json.dumps([tool.describe() for tool in tools], default=str, indent=2),
             )
         )
-        parsed = await acomplete_structured(
-            self._llm,
+        parsed = await self._complete_structured(
             prompt,
             response_model=AnalystSqlToolSelection,
             temperature=0.0,
             max_tokens=400,
+            purpose="analyst.sql_tool_selection",
         )
         selected_name = str(parsed.tool_name or "").strip()
         for tool in tools:
@@ -1148,6 +1318,10 @@ class AnalystAgent(AIEventSource, BaseAgent):
             matched_row, match_column = matched_rows[0]
         elif len(matched_rows) > 1:
             matched_row, match_column = matched_rows[0]
+        elif reference.source == "name_phrase":
+            matched_row = rows[0]
+            match_column = None
+            matched_rows = [(row, "") for row in rows]
         elif len(rows) == 1:
             matched_row = rows[0]
             match_column = None
@@ -1174,6 +1348,23 @@ class AnalystAgent(AIEventSource, BaseAgent):
             id_columns=id_columns,
         )
         matched_row_values = [row for row, _column in matched_rows] if matched_rows else [matched_row]
+        if reference.source == "name_phrase" and len(matched_row_values) > 1 and not id_columns:
+            return AnalystResolvedEntity(
+                status="ambiguous",
+                reference=reference,
+                source_tool=final_tool.name,
+                query_scope=final_tool.query_scope.value,
+                sql_canonical=response.sql_canonical,
+                sql_executable=response.sql_executable,
+                selected_datasets=[dataset.dataset_id for dataset in response.selected_datasets],
+                selected_semantic_models=(
+                    [response.selected_semantic_model_id] if response.selected_semantic_model_id else []
+                ),
+                row_count=row_count,
+                matched_rows_sample=matched_row_values[:5],
+                message=f"Entity search text '{reference.identifier}' returned multiple possible governed matches.",
+                attempts=attempts,
+            )
         canonical_identifiers = {
             self._normalized_entity_text(
                 self._canonical_identifier_from_row(row=row, reference=reference, id_columns=id_columns)
@@ -1262,7 +1453,53 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 original_text=identifier,
                 source="code_identifier",
             )
+        return cls._extract_name_entity_reference(text)
+
+    @classmethod
+    def _extract_name_entity_reference(cls, question: str) -> AnalystEntityReference | None:
+        text = str(question or "")
+        if not cls._question_has_name_entity_signal(text):
+            return None
+        for pattern in _ENTITY_NAME_REFERENCE_PATTERNS:
+            match = pattern.search(text)
+            if match is None:
+                continue
+            name = cls._clean_entity_name_candidate(match.group("name"))
+            if not cls._valid_name_entity_candidate(name):
+                continue
+            return AnalystEntityReference(
+                identifier=name,
+                supplied_name=name,
+                original_text=name,
+                source="name_phrase",
+            )
         return None
+
+    @staticmethod
+    def _question_has_name_entity_signal(question: str) -> bool:
+        text = str(question or "").casefold()
+        return any(term in text for term in _ENTITY_NAME_SIGNAL_TERMS)
+
+    @staticmethod
+    def _clean_entity_name_candidate(value: str) -> str:
+        text = str(value or "").strip()
+        text = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", text).strip()
+        text = re.sub(r"^(?:the|a|an)\s+", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+", " ", text)
+        return text
+
+    @staticmethod
+    def _valid_name_entity_candidate(value: str) -> bool:
+        text = str(value or "").strip()
+        if len(text) < 3:
+            return False
+        words = text.split()
+        if len(words) > 8:
+            return False
+        normalized = text.casefold()
+        if normalized in {"return", "returns", "performance", "alpha", "beta", "benchmark"}:
+            return False
+        return any(char.isdigit() for char in text) or len(words) >= 2
 
     @staticmethod
     def _question_accepts_all_entity_matches(question: str) -> bool:
@@ -1295,14 +1532,25 @@ class AnalystAgent(AIEventSource, BaseAgent):
     @staticmethod
     def _entity_resolution_question(*, reference: AnalystEntityReference, original_question: str) -> str:
         supplied_name = reference.supplied_name or "not supplied"
+        if reference.source == "name_phrase":
+            return (
+                "Resolve the governed entity before metric analysis.\n"
+                f"Search text: {reference.identifier}\n"
+                f"Supplied name: {supplied_name}\n"
+                f"Original question: {original_question}\n"
+                "Search governed entity fields for the supplied name/text. Return at most 5 strong matches with the "
+                "entity identifier/code, display/name, type/category, status, start/created date, comparison or baseline "
+                "fields when present, and any join key needed for later metric filtering. Do not calculate requested "
+                "metrics or aggregations."
+            )
         return (
             "Resolve the governed entity before metric analysis.\n"
             f"Identifier: {reference.identifier}\n"
             f"Supplied name: {supplied_name}\n"
             f"Original question: {original_question}\n"
             "Use the identifier as the primary filter. Return at most 5 rows with the entity identifier/code, "
-            "display/name, type/category, status, inception/start/launch date, benchmark fields, and any join key "
-            "needed for later metric filtering. Do not calculate alpha, beta, performance, or other metrics."
+            "display/name, type/category, status, start/created date, comparison or baseline fields when present, "
+            "and any join key needed for later metric filtering. Do not calculate requested metrics or aggregations."
         )
 
     @staticmethod
@@ -1386,6 +1634,11 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 "agent_mode": agent_mode,
                 "mode_decision": mode_decision,
                 "entity_resolution": entity_resolution.model_dump(mode="json", exclude_none=True),
+                "investigation_profile": self._question_investigation_profile(task.question),
+                "investigation_trace": self._build_entity_resolution_trace(
+                    entity_resolution=entity_resolution,
+                    final_status="needs_clarification",
+                ),
                 "weak_evidence": True,
             },
             error=message,
@@ -1488,12 +1741,12 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 outcome=json.dumps(response.outcome.model_dump(mode="json") if response.outcome else {}, default=str),
             )
         )
-        parsed = await acomplete_structured(
-            self._llm,
+        parsed = await self._complete_structured(
             prompt,
             response_model=AnalystSqlSummaryOutput,
             temperature=0.0,
             max_tokens=self._detail_token_limit(question, standard=700, detailed=1100),
+            purpose="analyst.sql_summary",
         )
         analysis = str(parsed.analysis or "").strip()
         if not analysis:
@@ -1520,12 +1773,12 @@ class AnalystAgent(AIEventSource, BaseAgent):
             )
         )
         try:
-            parsed = await acomplete_structured(
-                self._llm,
+            parsed = await self._complete_structured(
                 prompt,
                 response_model=AnalystSqlEvidenceReviewOutput,
                 temperature=0.0,
                 max_tokens=500,
+                purpose="analyst.sql_evidence_review",
             )
         except Exception:
             return self._default_sql_evidence_review(task=task, response=response)
@@ -1570,12 +1823,12 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 sources=json.dumps(sources, default=str),
             )
         )
-        parsed_model = await acomplete_structured(
-            self._llm,
+        parsed_model = await self._complete_structured(
             prompt,
             response_model=AnalystResearchSynthesisOutput,
             temperature=0.0,
             max_tokens=self._detail_token_limit(question, standard=1200, detailed=1600),
+            purpose="analyst.research_synthesis",
         )
         parsed = parsed_model.model_dump(mode="json", exclude_none=True)
         if not isinstance(parsed.get("synthesis"), str):
@@ -1616,12 +1869,12 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 sources=json.dumps(sources, default=str),
             )
         )
-        parsed_model = await acomplete_structured(
-            self._llm,
+        parsed_model = await self._complete_structured(
             prompt,
             response_model=AnalystSqlSynthesisOutput,
             temperature=0.0,
             max_tokens=self._detail_token_limit(question, standard=1200, detailed=1600),
+            purpose="analyst.sql_synthesis",
         )
         parsed = parsed_model.model_dump(mode="json", exclude_none=True)
         if not isinstance(parsed.get("analysis"), str):
@@ -1647,6 +1900,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 resolved_entity_context=self._resolved_entity_context_prompt(
                     self._entity_resolution_from_context(task.context)
                 ),
+                investigation_profile=self._question_investigation_profile(task.question),
                 sql_tools=json.dumps([tool.describe() for tool in self._initial_sql_tools()], default=str, indent=2),
                 web_search_available=self._web_augmentation_available(task=task),
                 governed_round_limit=self._governed_round_limit(),
@@ -1655,17 +1909,22 @@ class AnalystAgent(AIEventSource, BaseAgent):
             )
         )
         try:
-            return await acomplete_structured(
-                self._llm,
+            plan: AnalystEvidencePlan = await self._complete_structured(
                 prompt,
                 response_model=AnalystEvidencePlan,
                 temperature=0.0,
                 max_tokens=1000,
+                purpose="analyst.evidence_plan",
             )
+            return self._harden_evidence_plan_for_profile(task=task, plan=plan)
         except Exception:
             return self._fallback_research_evidence_plan(task=task)
 
     def _fallback_research_evidence_plan(self, *, task: AgentTask) -> AnalystEvidencePlan:
+        profile = self._question_investigation_profile(task.question)
+        if profile == "metric_explanation" and self._initial_sql_tools():
+            return self._metric_explanation_evidence_plan(task=task)
+
         steps: list[AnalystEvidencePlanStep] = []
         if self._initial_sql_tools():
             steps.append(
@@ -1709,6 +1968,124 @@ class AnalystAgent(AIEventSource, BaseAgent):
             ],
         )
 
+    def _harden_evidence_plan_for_profile(
+        self,
+        *,
+        task: AgentTask,
+        plan: AnalystEvidencePlan,
+    ) -> AnalystEvidencePlan:
+        profile = self._question_investigation_profile(task.question)
+        if profile != "metric_explanation":
+            return plan
+        if not self._initial_sql_tools():
+            return plan
+        governed_steps = [step for step in plan.steps if step.action == "query_governed"]
+        question_text = " ".join(str(step.question or step.evidence_goal or "") for step in governed_steps).casefold()
+        has_breakdown = any(token in question_text for token in ("month", "period", "breakdown", "trend"))
+        has_aggregate = any(token in question_text for token in ("aggregate", "summary", "full", "total", "period"))
+        has_comparison = any(token in question_text for token in ("baseline", "comparison", "target", "prior", "peer", "relative"))
+        if len(governed_steps) >= 3 and has_breakdown and has_aggregate and has_comparison:
+            return plan
+        return self._metric_explanation_evidence_plan(task=task)
+
+    def _metric_explanation_evidence_plan(self, *, task: AgentTask) -> AnalystEvidencePlan:
+        timeframe = self._extract_timeframe_text(task.question)
+        timeframe_clause = f" for {timeframe}" if timeframe else " for the requested period"
+        breakdown_step = AnalystEvidencePlanStep(
+            step_id="e1",
+            action="query_governed",
+            question=(
+                "Using the resolved entity when available, retrieve period-by-period values for the requested "
+                f"metric or outcome{timeframe_clause} at the finest defensible governed grain, including "
+                "relevant grouping fields when available."
+            ),
+            evidence_goal="Find where the requested metric or outcome weakened, improved, or changed within the period.",
+            expected_signal="A dated metric or outcome breakdown with meaningful period-to-period variation.",
+            success_criteria="Returns dated rows sufficient to identify the periods or groups driving the result.",
+        )
+        aggregate_step = AnalystEvidencePlanStep(
+            step_id="e2",
+            action="query_governed",
+            question=(
+                "Using the resolved entity when available, calculate the full-period aggregate, summary, or "
+                f"otherwise defensible overall value for the requested metric or outcome{timeframe_clause}."
+            ),
+            evidence_goal="Quantify the overall period result before accepting or rejecting the user's premise.",
+            expected_signal="A full-period aggregate, rate, score, or other appropriate summary value.",
+            success_criteria="Returns an overall value with clear period start and end or an explicit governed limitation.",
+            depends_on=["e1"],
+        )
+        comparison_step = AnalystEvidencePlanStep(
+            step_id="e3",
+            action="query_governed",
+            question=(
+                "Using the resolved entity when available, compare the requested metric or outcome against an "
+                "available baseline, target, prior period, peer group, or comparison series."
+            ),
+            evidence_goal="Validate whether the user's premise is true in absolute terms, relative terms, or both.",
+            expected_signal="Baseline or comparison evidence with relative difference when available.",
+            success_criteria="Returns comparison evidence or a clear governed limitation that no comparison is available.",
+            depends_on=["e2"],
+        )
+        synthesize_step = AnalystEvidencePlanStep(
+            step_id="e4",
+            action="synthesize",
+            evidence_goal="Explain the metric result, premise check, and evidence-backed caveats.",
+            expected_signal="A concise verdict distinguishing absolute movement from baseline-relative movement.",
+            success_criteria="The answer identifies the main periods or groups, overall result, comparison context, and limits.",
+            depends_on=["e1", "e2", "e3"],
+        )
+        return AnalystEvidencePlan(
+            objective=task.question,
+            question_type="metric_explanation",
+            timeframe=timeframe,
+            required_metrics=["period metric or outcome", "full-period aggregate or summary", "baseline or comparison value"],
+            required_dimensions=["date or period", "resolved entity", "available baseline or comparison dimension"],
+            steps=[breakdown_step, aggregate_step, comparison_step, synthesize_step],
+            synthesis_requirements=[
+                "Validate whether the user's premise is true before accepting it.",
+                "Separate absolute metric movement from baseline-relative movement when comparison evidence exists.",
+                "Name the periods, groups, or slices that drove the result when governed evidence supports it.",
+                "Do not present causal explanations as facts unless source evidence or governed explanatory fields support them.",
+            ],
+            external_context_needed=False,
+            visualization_recommendation=VisualizationRecommendation(
+                recommendation="helpful",
+                chart_type="bar",
+                rationale="A period chart helps show where the requested metric or outcome weakened, improved, or changed.",
+            ),
+        )
+
+    @staticmethod
+    def _question_investigation_profile(question: str) -> str:
+        text = str(question or "").casefold()
+        if any(term in text for term in ("relationship", "correlat", "associated", "with higher", "with lower", "also underperform")):
+            return "relationship"
+        has_metric_or_outcome = any(term in text for term in _METRIC_OUTCOME_TERMS)
+        has_explanation = any(term in text for term in _METRIC_EXPLANATION_TERMS)
+        if has_metric_or_outcome and has_explanation:
+            return "metric_explanation"
+        if any(term in text for term in ("benchmark", "relative", "versus", " vs ", "excess")):
+            return "benchmark_comparison"
+        if any(term in text for term in ("driver", "reason", "caused", "why")):
+            return "driver_analysis"
+        if any(term in text for term in ("trend", "over time", "month", "quarter", "year")):
+            return "trend_breakdown"
+        return "general"
+
+    @staticmethod
+    def _extract_timeframe_text(question: str) -> str | None:
+        text = str(question or "")
+        quarter_match = re.search(r"\bQ[1-4]\s+(?:19|20)\d{2}\b", text, flags=re.IGNORECASE)
+        if quarter_match:
+            return quarter_match.group(0)
+        year_match = re.search(r"\b(19|20)\d{2}\b", text)
+        if year_match:
+            return year_match.group(0)
+        if re.search(r"\bsince\s+inception\b", text, flags=re.IGNORECASE):
+            return "since inception"
+        return None
+
     @staticmethod
     def _research_ready_to_synthesize(
         *,
@@ -1732,6 +2109,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 resolved_entity_context=self._resolved_entity_context_prompt(
                     self._entity_resolution_from_context(task.context)
                 ),
+                investigation_profile=self._question_investigation_profile(task.question),
                 sql_tools=json.dumps([tool.describe() for tool in self._initial_sql_tools()], default=str, indent=2),
                 web_search_available=self._web_augmentation_available(task=task),
                 remaining_governed_rounds=self._remaining_governed_rounds(workflow_state=workflow_state),
@@ -1740,12 +2118,12 @@ class AnalystAgent(AIEventSource, BaseAgent):
             )
         )
         try:
-            decision = await acomplete_structured(
-                self._llm,
+            decision = await self._complete_structured(
                 prompt,
                 response_model=ResearchStepDecision,
                 temperature=0.0,
                 max_tokens=700,
+                purpose="analyst.research_step_decision",
             )
             return self._defer_premature_research_clarification(
                 task=task,
@@ -1892,12 +2270,12 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 memory_context=self._memory_context(task.context),
             )
         )
-        parsed = await acomplete_structured(
-            self._llm,
+        parsed = await self._complete_structured(
             prompt,
             response_model=AnalystModeDecision,
             temperature=0.0,
             max_tokens=500,
+            purpose="analyst.mode_selection",
         )
         parsed = normalize_analyst_mode_decision(
             parsed.model_dump(mode="json", exclude_none=True),
@@ -2440,6 +2818,245 @@ class AnalystAgent(AIEventSource, BaseAgent):
             ),
             "evidence_bundle_assessment": evidence_bundle.assessment() if evidence_bundle is not None else None,
         }
+
+    def _build_sql_investigation_trace(
+        self,
+        *,
+        task: AgentTask,
+        entity_resolution: AnalystResolvedEntity | None,
+        final_tool: SqlAnalysisTool,
+        response: AnalystQueryResponse,
+        review: SqlEvidenceReviewDecision | None,
+        governed_attempts: Sequence[SqlGovernedAttempt],
+        web_result: WebSearchResult | None,
+        final_status: str,
+    ) -> list[dict[str, Any]]:
+        trace = self._build_entity_resolution_trace(
+            entity_resolution=entity_resolution,
+            final_status="resolved" if entity_resolution is not None and entity_resolution.resolved else final_status,
+        )
+        trace.append(
+            self._trace_item(
+                trace_id="context-selected",
+                trace_type="semantic_context" if final_tool.query_scope == SqlQueryScope.semantic else "dataset_context",
+                title=(
+                    "Semantic context selected"
+                    if final_tool.query_scope == SqlQueryScope.semantic
+                    else "Dataset context selected"
+                ),
+                status="completed",
+                summary=f"Selected {final_tool.name} for governed analysis.",
+                tool_name=final_tool.name,
+                query_scope=final_tool.query_scope.value,
+                selected_datasets=[dataset.dataset_id for dataset in response.selected_datasets],
+                selected_semantic_models=(
+                    [response.selected_semantic_model_id] if response.selected_semantic_model_id else []
+                ),
+            )
+        )
+        for index, attempt in enumerate(governed_attempts, start=1):
+            trace.append(
+                self._trace_item(
+                    trace_id=f"governed-round-{index}",
+                    trace_type="governed_query",
+                    title=f"Governed query round {index}",
+                    status=attempt.status or "completed",
+                    summary=f"Ran governed SQL through {attempt.tool_name}.",
+                    tool_name=attempt.tool_name,
+                    query_scope=attempt.query_scope,
+                    rowcount=response.row_count if index == len(governed_attempts) else None,
+                    sql_index=index,
+                )
+            )
+        if review is not None:
+            trace.append(
+                self._trace_item(
+                    trace_id="evidence-review",
+                    trace_type="evidence_review",
+                    title="Evidence reviewed",
+                    status=review.decision,
+                    summary=review.reason,
+                    sufficiency=review.sufficiency,
+                )
+            )
+        if web_result is not None:
+            trace.append(
+                self._trace_item(
+                    trace_id="web-augmentation",
+                    trace_type="external_context",
+                    title="External context gathered",
+                    status="completed",
+                    summary=f"Added {len(web_result.results)} source-backed result(s).",
+                )
+            )
+        trace.append(
+            self._trace_item(
+                trace_id="synthesis",
+                trace_type="synthesis",
+                title="Answer synthesized",
+                status=final_status,
+                summary="Synthesized the final answer from governed evidence and explicit caveats.",
+                investigation_profile=self._question_investigation_profile(task.question),
+            )
+        )
+        return trace
+
+    def _build_research_investigation_trace(
+        self,
+        *,
+        task: AgentTask,
+        entity_resolution: AnalystResolvedEntity | None,
+        evidence_plan: AnalystEvidencePlan | None,
+        workflow_state: ResearchWorkflowState,
+        research_steps: Sequence[dict[str, Any]],
+        sources: Sequence[dict[str, Any]],
+        visualization_payload: dict[str, Any] | None,
+        final_status: str,
+    ) -> list[dict[str, Any]]:
+        trace = self._build_entity_resolution_trace(
+            entity_resolution=entity_resolution,
+            final_status="resolved" if entity_resolution is not None and entity_resolution.resolved else final_status,
+        )
+        if evidence_plan is not None:
+            governed_count = len([step for step in evidence_plan.steps if step.action == "query_governed"])
+            trace.append(
+                self._trace_item(
+                    trace_id="evidence-plan",
+                    trace_type="evidence_plan",
+                    title="Evidence plan created",
+                    status="completed",
+                    summary=(
+                        f"{governed_count} governed evidence step(s) planned for "
+                        f"{self._question_investigation_profile(task.question)}."
+                    ),
+                    step_count=len(evidence_plan.steps),
+                    investigation_profile=self._question_investigation_profile(task.question),
+                )
+            )
+        for index, step in enumerate(research_steps, start=1):
+            action = str(step.get("action") or "").strip()
+            trace.append(
+                self._trace_item(
+                    trace_id=f"research-step-{index}",
+                    trace_type=action or "research_step",
+                    title=self._research_step_title(action=action, index=index),
+                    status="completed" if action != "clarify" else "needs_clarification",
+                    summary=str(step.get("evidence_goal") or step.get("rationale") or "").strip(),
+                    recommended_chart_type=step.get("recommended_chart_type"),
+                    plan_step_id=step.get("plan_step_id"),
+                )
+            )
+        for index, round_ in enumerate(workflow_state.governed_rounds, start=1):
+            trace.append(
+                self._trace_item(
+                    trace_id=f"governed-evidence-{index}",
+                    trace_type="governed_query",
+                    title=f"Governed evidence round {index}",
+                    status=round_.status,
+                    summary=round_.question,
+                    query_scope=round_.query_scope,
+                    rowcount=round_.rowcount,
+                    sql_index=index,
+                )
+            )
+        if sources:
+            trace.append(
+                self._trace_item(
+                    trace_id="source-context",
+                    trace_type="external_context",
+                    title="External context gathered",
+                    status="completed",
+                    summary=f"Added {len(sources)} source-backed item(s).",
+                )
+            )
+        if visualization_payload and visualization_payload.get("recommendation") not in (None, "", "none"):
+            trace.append(
+                self._trace_item(
+                    trace_id="visualization",
+                    trace_type="visualization",
+                    title="Visualization recommended",
+                    status="completed",
+                    summary=str(visualization_payload.get("rationale") or "A visual can support the answer.").strip(),
+                    recommended_chart_type=visualization_payload.get("chart_type"),
+                )
+            )
+        trace.append(
+            self._trace_item(
+                trace_id="synthesis",
+                trace_type="synthesis",
+                title="Answer synthesized",
+                status=final_status,
+                summary="Synthesized the answer from the evidence bundle and stated material caveats.",
+                investigation_profile=self._question_investigation_profile(task.question),
+            )
+        )
+        return trace
+
+    def _build_entity_resolution_trace(
+        self,
+        *,
+        entity_resolution: AnalystResolvedEntity | None,
+        final_status: str,
+    ) -> list[dict[str, Any]]:
+        if entity_resolution is None:
+            return []
+        name = entity_resolution.canonical_name or entity_resolution.reference.supplied_name
+        identifier = entity_resolution.canonical_identifier or entity_resolution.reference.identifier
+        if entity_resolution.resolved:
+            summary = "Resolved governed entity"
+            if name and identifier:
+                summary = f"Resolved {name} ({identifier}) before metric analysis."
+            elif identifier:
+                summary = f"Resolved {identifier} before metric analysis."
+        else:
+            summary = entity_resolution.message or "Entity resolution needs user clarification."
+        return [
+            self._trace_item(
+                trace_id="entity-resolution",
+                trace_type="entity_resolution",
+                title="Entity resolved" if entity_resolution.resolved else "Entity resolution needs clarification",
+                status=entity_resolution.status if entity_resolution.status else final_status,
+                summary=summary,
+                query_scope=entity_resolution.query_scope,
+                rowcount=entity_resolution.row_count,
+                canonical_identifier=entity_resolution.canonical_identifier,
+                canonical_name=entity_resolution.canonical_name,
+                source_tool=entity_resolution.source_tool,
+            )
+        ]
+
+    @staticmethod
+    def _research_step_title(*, action: str, index: int) -> str:
+        titles = {
+            "query_governed": f"Governed evidence step {index}",
+            "augment_with_web": f"External context step {index}",
+            "synthesize": "Ready to synthesize",
+            "clarify": "Clarification required",
+        }
+        return titles.get(action, f"Research step {index}")
+
+    @staticmethod
+    def _trace_item(
+        *,
+        trace_id: str,
+        trace_type: str,
+        title: str,
+        status: str,
+        summary: str,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        item: dict[str, Any] = {
+            "id": trace_id,
+            "type": trace_type,
+            "title": title,
+            "status": status,
+            "summary": summary,
+        }
+        for key, value in extra.items():
+            if value in (None, "", [], {}):
+                continue
+            item[key] = value
+        return item
 
     @staticmethod
     def _build_visualization_recommendation_payload(

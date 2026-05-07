@@ -1,7 +1,13 @@
 from .base import (
+    LLMEmbeddingsInvocation,
+    LLMEmbeddingsRequest,
     LLMProvider,
     LLMProviderName,
     LLMConnectionConfig,
+    LLMInvocation,
+    LLMMessage,
+    LLMRequest,
+    LLMResponse,
     ProviderConfigurationError,
     ProviderNotRegisteredError,
     coerce_provider_name,
@@ -14,12 +20,19 @@ from .factory import (
     create_client_from_connection,
     create_chat_model_from_connection,
 )
-from .structured import (
-    StructuredOutputError,
+from .contracts import (
+    StructuredOutputConfig,
+    StructuredOutputContract,
+    StructuredOutputIncompleteError,
     StructuredOutputMode,
+    StructuredOutputRefusalError,
+    StructuredOutputSchema,
     StructuredOutputUnsupportedError,
-    acomplete_structured,
-    ainvoke_structured,
+)
+from .structured import (
+    JsonPayloadExtractor,
+    StructuredOutputError,
+    StructuredOutputParser,
 )
 
 # Import concrete providers to register them with the factory.
@@ -47,6 +60,12 @@ __all__ = [
     'LLMProvider',
     'LLMProviderName',
     'LLMConnectionConfig',
+    'LLMEmbeddingsInvocation',
+    'LLMEmbeddingsRequest',
+    'LLMInvocation',
+    'LLMMessage',
+    'LLMRequest',
+    'LLMResponse',
     'ProviderConfigurationError',
     'ProviderNotRegisteredError',
     'coerce_provider_name',
@@ -57,10 +76,15 @@ __all__ = [
     'create_client_from_connection',
     'create_chat_model_from_connection',
     'StructuredOutputError',
+    'StructuredOutputConfig',
+    'StructuredOutputContract',
+    'StructuredOutputIncompleteError',
     'StructuredOutputMode',
+    'StructuredOutputParser',
+    'StructuredOutputRefusalError',
+    'StructuredOutputSchema',
     'StructuredOutputUnsupportedError',
-    'acomplete_structured',
-    'ainvoke_structured',
+    'JsonPayloadExtractor',
     'OpenAIProvider',
     'AnthropicProvider',
     'AzureOpenAIProvider',

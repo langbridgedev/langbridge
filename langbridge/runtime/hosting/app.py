@@ -123,10 +123,15 @@ def create_runtime_api_app(
     ui_enabled = "ui" in enabled_features
     odbc_enabled = "odbc" in enabled_features
     runtime_workers = max(1, int(workers or 1))
-    run_background_tasks = (
-        runtime_workers == 1
-        if background_tasks_enabled is None
-        else bool(background_tasks_enabled)
+    lease_service = _resolve_runtime_lease_service(host)
+    run_background_tasks = _resolve_runtime_background_tasks_enabled(
+        runtime_workers=runtime_workers,
+        explicit_enabled=background_tasks_enabled,
+        lease_service=lease_service,
+    )
+    background_task_coordination = _runtime_background_task_coordination(
+        enabled=run_background_tasks,
+        lease_service=lease_service,
     )
     stateless_mcp = runtime_workers > 1 if mcp_stateless_http is None else bool(mcp_stateless_http)
     auth_resolver = RuntimeAuthResolver(
@@ -137,10 +142,11 @@ def create_runtime_api_app(
         default_context=host.context,
         runtime_host=host,
     )
-    task_manager = RuntimeBackgroundTaskManager(
+    task_manager = background_task_manager or RuntimeBackgroundTaskManager(
         runtime_host=host,
         default_tasks=default_background_tasks,
         custom_tasks=background_tasks,
+        lease_service=lease_service,
     )
     mcp_server = None
     mcp_app = None
@@ -219,6 +225,7 @@ def create_runtime_api_app(
     app.state.runtime_auth = auth_resolver
     app.state.runtime_background_tasks = task_manager
     app.state.runtime_background_tasks_enabled = run_background_tasks
+    app.state.runtime_background_task_coordination = background_task_coordination
     app.state.runtime_debug = bool(debug)
     app.state.runtime_odbc = odbc_server
     app.state.runtime_workers = runtime_workers
@@ -1364,6 +1371,49 @@ async def _execute_runtime_sql(
 
 def _parse_runtime_features_env(value: str | None) -> tuple[str, ...]:
     return _normalize_runtime_features(str(value or "").split(","))
+
+
+def _resolve_runtime_lease_service(runtime_host: RuntimeHost) -> Any | None:
+    services = getattr(runtime_host, "services", None)
+    if services is None:
+        return None
+    return getattr(services, "leases", None)
+
+
+def _resolve_runtime_background_tasks_enabled(
+    *,
+    runtime_workers: int,
+    explicit_enabled: bool | None,
+    lease_service: Any | None,
+) -> bool:
+    has_distributed_coordination = lease_service is not None
+    if explicit_enabled is None:
+        if runtime_workers == 1 or has_distributed_coordination:
+            return True
+        logging.getLogger(__name__).warning(
+            "Runtime background tasks are disabled for multi-worker in-memory runtimes. "
+            "Configure runtime.metadata_store as sqlite or postgres to enable distributed coordination."
+        )
+        return False
+    enabled = bool(explicit_enabled)
+    if enabled and runtime_workers > 1 and not has_distributed_coordination:
+        raise ValueError(
+            "Runtime background tasks cannot be explicitly enabled with workers > 1 "
+            "unless runtime.metadata_store is sqlite or postgres."
+        )
+    return enabled
+
+
+def _runtime_background_task_coordination(
+    *,
+    enabled: bool,
+    lease_service: Any | None,
+) -> str:
+    if not enabled:
+        return "disabled"
+    if lease_service is not None:
+        return "distributed_lease"
+    return "process_local"
 
 
 def _raise_runtime_internal_server_error(operation: str, exc: Exception) -> None:

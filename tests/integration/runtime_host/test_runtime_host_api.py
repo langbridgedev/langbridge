@@ -1520,7 +1520,8 @@ def test_runtime_host_api_uses_stateless_mcp_for_multi_worker_hosts(tmp_path: Pa
 
     assert app.state.runtime_workers == 4
     assert app.state.runtime_mcp_stateless_http is True
-    assert app.state.runtime_background_tasks_enabled is False
+    assert app.state.runtime_background_tasks_enabled is True
+    assert app.state.runtime_background_task_coordination == "distributed_lease"
 
 
 @pytest.mark.anyio

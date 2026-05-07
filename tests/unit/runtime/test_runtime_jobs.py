@@ -104,6 +104,18 @@ class FailingJobHandler:
         raise RuntimeError("handler exploded")
 
 
+class FlakyClaimJobRepository(_InMemoryJobRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.claim_attempts = 0
+
+    async def claim_next(self, *args: Any, **kwargs: Any):
+        self.claim_attempts += 1
+        if self.claim_attempts == 1:
+            raise RuntimeError("claim temporarily unavailable")
+        return await super().claim_next(*args, **kwargs)
+
+
 class RecordingDatasetSyncRuntimeHost:
     def __init__(self, *, workspace_id: uuid.UUID, actor_id: uuid.UUID) -> None:
         self.context = RuntimeContext.build(
@@ -414,6 +426,43 @@ async def test_runtime_job_processor_claims_default_queue_only() -> None:
     assert still_inline.status == RuntimeJobStatus.queued.value
     assert completed_default.status == RuntimeJobStatus.succeeded.value
     assert completed_default.result == {"echo": "default"}
+
+
+@pytest.mark.anyio
+async def test_runtime_job_processor_survives_transient_claim_errors() -> None:
+    repository = FlakyClaimJobRepository()
+    service = RuntimeJobService(repository=repository)
+    handlers = RuntimeJobHandlerRegistry()
+    handlers.register(EchoJobHandler())
+    processor = RuntimeJobProcessor(
+        job_service=service,
+        handlers=handlers,
+        worker_id="unit-worker",
+        poll_interval_seconds=0.01,
+    )
+    job = await service.create_job(
+        workspace_id=uuid.uuid4(),
+        actor_id=uuid.uuid4(),
+        request=CreateRuntimeJobRequest(
+            job_type="test.echo",
+            payload={"value": "hello"},
+        ),
+    )
+
+    processor.start()
+    try:
+        for _ in range(50):
+            completed = await service.get_job(job_id=job.id)
+            if completed.status == RuntimeJobStatus.succeeded.value:
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        await processor.stop()
+
+    completed = await service.get_job(job_id=job.id)
+    assert repository.claim_attempts >= 2
+    assert completed.status == RuntimeJobStatus.succeeded.value
+    assert completed.result == {"echo": "hello"}
 
 
 @pytest.mark.anyio

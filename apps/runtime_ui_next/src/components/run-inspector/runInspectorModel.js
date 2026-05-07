@@ -83,6 +83,19 @@ function readSqlItems(execution, diagnostics) {
     : arrayValue(diagnostics?.sql);
 }
 
+function readInvestigationTrace(execution, diagnostics) {
+  const directTrace = arrayValue(diagnostics?.investigation_trace);
+  if (directTrace.length > 0) {
+    return directTrace;
+  }
+  const items = [];
+  readStepResults(execution, diagnostics).forEach((step) => {
+    const stepTrace = arrayValue(step?.diagnostics?.investigation_trace);
+    stepTrace.forEach((item) => items.push(item));
+  });
+  return items;
+}
+
 function statusTone(value, fallback = "neutral") {
   const status = textValue(value).toLowerCase();
   if (["success", "succeeded", "completed", "passed", "approve", "approved", "finalize"].includes(status)) {
@@ -160,7 +173,31 @@ function buildSummary({ diagnostics, execution, routeDecision, sqlItems }) {
   };
 }
 
-function buildFlowItems({ diagnostics, execution, routeDecision }) {
+function buildTraceFlowItems(traceItems) {
+  return traceItems
+    .filter((item) => item && typeof item === "object")
+    .map((item, index) => {
+      const status = textValue(item.status);
+      const rowCount = numberValue(item.rowcount);
+      const meta = compact([
+        item.type ? toTitle(item.type) : "",
+        status ? toTitle(status) : "",
+        item.query_scope,
+        rowCount !== null ? `${rowCount.toLocaleString()} rows` : "",
+        item.recommended_chart_type ? `${item.recommended_chart_type} chart` : "",
+      ]).join(" | ");
+      return {
+        id: textValue(item.id) || `investigation-${index + 1}`,
+        type: textValue(item.type) || "investigation",
+        tone: statusTone(status, "neutral"),
+        title: textValue(item.title) || `Investigation step ${index + 1}`,
+        description: textValue(item.summary || item.rationale || item.evidence_goal),
+        meta,
+      };
+    });
+}
+
+function buildFlowItems({ diagnostics, execution, routeDecision, investigationTrace }) {
   const items = [];
 
   if (routeDecision) {
@@ -186,6 +223,23 @@ function buildFlowItems({ diagnostics, execution, routeDecision }) {
       description: textValue(execution.summary),
       meta: compact([execution.execution_mode, execution.stop_reason]).join(" | "),
     });
+  }
+
+  const traceItems = buildTraceFlowItems(investigationTrace);
+  if (traceItems.length > 0) {
+    items.push(...traceItems);
+    const finalReview = readFinalReview(execution, diagnostics);
+    if (finalReview) {
+      items.push({
+        id: "final-review",
+        type: "review",
+        tone: statusTone(finalReview.action || finalReview.reason_code),
+        title: finalReview.action ? `Final review: ${toTitle(finalReview.action)}` : "Final review",
+        description: textValue(finalReview.rationale || finalReview.reason_code),
+        meta: textValue(finalReview.reason_code),
+      });
+    }
+    return items;
   }
 
   readPlanSteps(execution, diagnostics).forEach((step, index) => {
@@ -321,10 +375,11 @@ export function buildRunInspectorModel(diagnostics) {
   const execution = readExecution(source);
   const routeDecision = readRouteDecision(source);
   const sqlItems = readSqlItems(execution, source);
+  const investigationTrace = readInvestigationTrace(execution, source);
 
   return {
     summary: buildSummary({ diagnostics: source, execution, routeDecision, sqlItems }),
-    flowItems: buildFlowItems({ diagnostics: source, execution, routeDecision }),
+    flowItems: buildFlowItems({ diagnostics: source, execution, routeDecision, investigationTrace }),
     queryItems: buildQueryItems(sqlItems),
     checkItems: buildCheckItems({ diagnostics: source, execution }),
     raw: source,

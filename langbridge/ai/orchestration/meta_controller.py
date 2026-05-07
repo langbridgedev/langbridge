@@ -1,6 +1,6 @@
 """LLM-guided meta-controller gateway for the Langbridge AI package."""
 from enum import Enum
-from typing import Any
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -16,8 +16,7 @@ from langbridge.ai.base import (
     BaseAgent,
 )
 from langbridge.ai.events import AIEventEmitter, AIEventSource
-from langbridge.ai.llm.base import LLMProvider
-from langbridge.ai.llm.structured import acomplete_structured
+from langbridge.ai.llm.base import LLMMessage, LLMProvider, LLMRequest
 from langbridge.ai.modes import AnalystAgentMode, analyst_output_contract_for_task_input, normalize_analyst_task_input
 from langbridge.ai.orchestration.continuation import (
     ContinuationState,
@@ -42,6 +41,8 @@ from langbridge.ai.orchestration.planner import ExecutionPlan, PlannerAgent, Pla
 from langbridge.ai.orchestration.verification import AgentVerifier, VerificationOutcome, VerificationReasonCode
 from langbridge.ai.question_intent import AnalystQuestionIntent
 from langbridge.ai.registry import AgentRegistry
+
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 class MetaControllerAction(str, Enum):
@@ -115,6 +116,29 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
         self._max_iterations = max(1, int(max_iterations))
         self._max_replans = max(0, int(max_replans))
         self._max_step_retries = max(0, int(max_step_retries))
+
+    async def _complete_structured(
+        self,
+        prompt: str,
+        *,
+        response_model: type[StructuredModel],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        purpose: str = "meta_controller.structured",
+    ) -> StructuredModel:
+        invocation = await self._llm.ainvoke(
+            LLMRequest[StructuredModel](
+                purpose=purpose,
+                messages=[LLMMessage(role="user", content=prompt)],
+                response_model=response_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+        parsed = invocation.response.parsed
+        if parsed is None:
+            raise ValueError(f"Meta-controller LLM response missing parsed {response_model.__name__}.")
+        return parsed
 
     @property
     def specification(self) -> AgentSpecification:
@@ -322,12 +346,12 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             requested_agent_mode=str(context.get("requested_agent_mode") or context.get("agent_mode") or ""),
             specification_payloads=[self._spec_payload(item) for item in specifications],
         )
-        decision = await acomplete_structured(
-            self._llm,
+        decision = await self._complete_structured(
             prompt,
             response_model=MetaControllerLLMDecision,
             temperature=0.0,
             max_tokens=700,
+            purpose="meta_controller.route",
         )
         decision_payload = decision.model_dump(mode="python")
         for key in ("agent_name", "task_kind", "clarification_question", "plan_guidance"):

@@ -2,9 +2,26 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from ..base import LLMMessage, LLMProvider, LLMProviderName, LLMResponse, ProviderConfigurationError, response_text
+from ..base import (
+    LLMEmbeddingsInvocation,
+    LLMEmbeddingsRequest,
+    LLMInvocation,
+    LLMMessage,
+    LLMProvider,
+    LLMProviderName,
+    LLMRequest,
+    LLMResponse,
+    ProviderConfigurationError,
+    response_text,
+)
 from ..factory import register_provider
-from ..structured import StructuredOutputUnsupportedError, validate_structured_payload
+from ..contracts import (
+    StructuredOutputConfig,
+    StructuredOutputContract,
+    StructuredOutputMode,
+    StructuredOutputUnsupportedError,
+)
+from ..structured import StructuredOutputParser
 
 try:  # pragma: no cover - optional dependency
     from openai import AsyncAzureOpenAI, AzureOpenAI
@@ -23,11 +40,11 @@ _OPTIONAL_CONFIG_KEYS = {
 }
 
 
-def _to_dict(response: Any) -> LLMResponse:
+def _to_dict(response: Any) -> dict[str, Any]:
     if hasattr(response, "model_dump"):
         return response.model_dump(mode="json")
     if isinstance(response, dict):
-        return response
+        return dict(response)
     return {"raw": response}
 
 
@@ -73,13 +90,6 @@ class AzureOpenAIProvider(LLMProvider):
         return params
 
     def create_client(self, **overrides: Any) -> Any:
-        if AzureOpenAI is None:  # pragma: no cover - optional dependency
-            raise RuntimeError(str(_IMPORT_ERROR))
-        params = self._client_params(dict(overrides))
-        params.pop("_deployment", None)
-        return AzureOpenAI(**params)
-
-    def create_async_client(self, **overrides: Any) -> Any:
         if AsyncAzureOpenAI is None:  # pragma: no cover - optional dependency
             raise RuntimeError(str(_IMPORT_ERROR))
         params = self._client_params(dict(overrides))
@@ -89,77 +99,70 @@ class AzureOpenAIProvider(LLMProvider):
     def _deployment(self) -> str:
         return str(self._client_params({})["_deployment"])
 
-    def complete(
-        self,
-        prompt: str,
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> str:
-        return response_text(
-            self.invoke(
-                [{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-        )
-
-    async def acomplete(
-        self,
-        prompt: str,
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> str:
-        return response_text(
-            await self.ainvoke(
-                [{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-        )
-
-    def invoke(
-        self,
-        messages: list[LLMMessage],
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> LLMResponse:
-        client = self.create_client()
-        response = client.chat.completions.create(
-            model=self._deployment(),
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return _to_dict(response)
-
     async def ainvoke(
         self,
-        messages: list[LLMMessage],
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> LLMResponse:
-        client = self.create_async_client()
-        response = await client.chat.completions.create(
-            model=self._deployment(),
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return _to_dict(response)
+        request: LLMRequest[BaseModel],
+    ) -> LLMInvocation[BaseModel]:
+        if request.response_model is not None:
+            return await self._invoke_structured(request)
+        response = await self._create_text_response(request)
+        return LLMInvocation(request=request, response=response)
 
-    async def _ainvoke_structured_native(
+    async def _invoke_structured(
         self,
-        messages: list[LLMMessage],
+        request: LLMRequest[BaseModel],
+    ) -> LLMInvocation[BaseModel]:
+        response_model = request.response_model
+        if response_model is None:
+            raise StructuredOutputUnsupportedError("Azure OpenAI structured invocation requires response_model.")
+
+        mode = StructuredOutputConfig.from_mapping(self.configuration).mode
+        if mode in {StructuredOutputMode.auto, StructuredOutputMode.native}:
+            try:
+                response = await self._create_native_structured_response(request, response_model=response_model)
+                return LLMInvocation(request=request, response=response)
+            except StructuredOutputUnsupportedError:
+                if mode == StructuredOutputMode.native:
+                    raise
+
+        text_request = request.model_copy(
+            update={
+                "messages": self._messages_with_output_contract(request.messages, response_model=response_model),
+                "response_model": None,
+            }
+        )
+        text_response = await self._create_text_response(text_request)
+        return LLMInvocation(
+            request=request,
+            response=self._extract_response(text_response, response_model=response_model),
+        )
+
+    async def _create_text_response(
+        self,
+        request: LLMRequest[Any],
+    ) -> LLMResponse[Any]:
+        client = self.create_client()
+        response = await client.chat.completions.create(
+            **self._clean_kwargs(
+                {
+                    "model": self._deployment(),
+                    "messages": [self._message_payload(message) for message in request.messages],
+                    "temperature": request.temperature,
+                    "max_tokens": request.max_tokens,
+                    **request.provider_options,
+                }
+            )
+        )
+        payload = _to_dict(response)
+        return LLMResponse(raw_response=payload, text=response_text(payload), extract_mode="text")
+
+    async def _create_native_structured_response(
+        self,
+        request: LLMRequest[BaseModel],
         *,
         response_model: type[BaseModel],
-        temperature: float,
-        max_tokens: int | None,
-    ) -> BaseModel:
-        client = self.create_async_client()
+    ) -> LLMResponse[BaseModel]:
+        client = self.create_client()
         completions = getattr(getattr(client, "chat", None), "completions", None)
         parse = getattr(completions, "parse", None)
         if not callable(parse):
@@ -168,10 +171,11 @@ class AzureOpenAIProvider(LLMProvider):
             **self._clean_kwargs(
                 {
                     "model": self._deployment(),
-                    "messages": messages,
+                    "messages": [self._message_payload(message) for message in request.messages],
                     "response_format": response_model,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
+                    "temperature": request.temperature,
+                    "max_tokens": request.max_tokens,
+                    **request.provider_options,
                 }
             )
         )
@@ -181,21 +185,51 @@ class AzureOpenAIProvider(LLMProvider):
         parsed = getattr(getattr(choices[0], "message", None), "parsed", None)
         if parsed is None:
             raise StructuredOutputUnsupportedError("Azure OpenAI structured response did not include message.parsed.")
-        return validate_structured_payload(parsed, response_model=response_model)
+        payload = _to_dict(response)
+        return LLMResponse(
+            raw_response=payload,
+            text=response_text(payload),
+            parsed=StructuredOutputParser(response_model).validate_payload(parsed),
+            response_model_name=response_model.__name__,
+            extract_mode="native_structured",
+        )
 
-    async def create_embeddings(
+    async def acreate_embeddings(
         self,
-        texts: list[str],
-        embedding_model: str | None = None,
-    ) -> list[list[float]]:
-        if not texts:
-            return []
-        model = embedding_model or self.configuration.get("embedding_model")
+        request: LLMEmbeddingsRequest,
+    ) -> LLMEmbeddingsInvocation:
+        cleaned = [text for text in request.texts if isinstance(text, str)]
+        if not cleaned:
+            return LLMEmbeddingsInvocation(request=request, embeddings=[], raw_response=None)
+        model = request.embedding_model or self.configuration.get("embedding_model")
         if not model:
             raise ProviderConfigurationError("Azure embeddings require embedding_model.")
-        client = self.create_async_client()
-        response = await client.embeddings.create(model=model, input=texts)
-        return [list(item.embedding) for item in response.data]
+        client = self.create_client()
+        response = await client.embeddings.create(model=model, input=cleaned, **request.provider_options)
+        return LLMEmbeddingsInvocation(
+            request=request,
+            embeddings=[list(item.embedding) for item in response.data],
+            raw_response=_to_dict(response),
+        )
+
+    @staticmethod
+    def _message_payload(message: LLMMessage) -> dict[str, str]:
+        role = "system" if message.role == "developer" else message.role
+        return {"role": role, "content": message.content}
+
+    @staticmethod
+    def _messages_with_output_contract(
+        messages: list[LLMMessage],
+        *,
+        response_model: type[BaseModel],
+    ) -> list[LLMMessage]:
+        output_contract = LLMMessage(
+            role="system",
+            kind="output_contract",
+            trusted=True,
+            content=StructuredOutputContract(response_model).system_instruction(),
+        )
+        return [output_contract, *messages]
 
 
 __all__ = ["AzureOpenAIProvider"]

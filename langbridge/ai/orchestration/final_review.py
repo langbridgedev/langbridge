@@ -1,7 +1,7 @@
 """Semantic final review scaffold for Langbridge AI."""
 import re
 from enum import Enum
-from typing import Any
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -15,9 +15,10 @@ from langbridge.ai.base import (
     AgentTaskKind,
     BaseAgent,
 )
-from langbridge.ai.llm.base import LLMProvider
-from langbridge.ai.llm.structured import acomplete_structured
+from langbridge.ai.llm.base import LLMMessage, LLMProvider, LLMRequest
 from langbridge.ai.orchestration.final_review_prompts import build_final_review_prompt
+
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 class FinalReviewAction(str, Enum):
@@ -67,6 +68,29 @@ class FinalReviewAgent(BaseAgent):
 
     def __init__(self, *, llm_provider: LLMProvider) -> None:
         self._llm = llm_provider
+
+    async def _complete_structured(
+        self,
+        prompt: str,
+        *,
+        response_model: type[StructuredModel],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        purpose: str = "final_review.structured",
+    ) -> StructuredModel:
+        invocation = await self._llm.ainvoke(
+            LLMRequest[StructuredModel](
+                purpose=purpose,
+                messages=[LLMMessage(role="user", content=prompt)],
+                response_model=response_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+        parsed = invocation.response.parsed
+        if parsed is None:
+            raise ValueError(f"Final-review LLM response missing parsed {response_model.__name__}.")
+        return parsed
 
     @property
     def specification(self) -> AgentSpecification:
@@ -139,12 +163,12 @@ class FinalReviewAgent(BaseAgent):
             reason_codes=[item.value for item in FinalReviewReasonCode],
         )
         payload = (
-            await acomplete_structured(
-                self._llm,
+            await self._complete_structured(
                 prompt,
                 response_model=FinalReviewLLMOutput,
                 temperature=0.0,
                 max_tokens=700,
+                purpose="final_review.review",
             )
         ).model_dump(mode="json")
         self._ensure_reason_code(payload)

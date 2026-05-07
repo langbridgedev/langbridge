@@ -1,5 +1,5 @@
 """Specification-driven planner for Langbridge AI."""
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -14,12 +14,13 @@ from langbridge.ai.base import (
     BaseAgent,
 )
 from langbridge.ai.modes import analyst_output_contract_for_task_input, normalize_analyst_task_input
-from langbridge.ai.llm.base import LLMProvider
-from langbridge.ai.llm.structured import acomplete_structured
+from langbridge.ai.llm.base import LLMMessage, LLMProvider, LLMRequest
 from langbridge.ai.orchestration.planner_prompts import build_execution_plan_prompt
 
 if TYPE_CHECKING:  # pragma: no cover
     from langbridge.ai.orchestration.execution import PlanExecutionState
+
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 class PlanStep(BaseModel):
@@ -62,6 +63,29 @@ class PlannerAgent(BaseAgent):
 
     def __init__(self, *, llm_provider: LLMProvider) -> None:
         self._llm = llm_provider
+
+    async def _complete_structured(
+        self,
+        prompt: str,
+        *,
+        response_model: type[StructuredModel],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        purpose: str = "planner.structured",
+    ) -> StructuredModel:
+        invocation = await self._llm.ainvoke(
+            LLMRequest[StructuredModel](
+                purpose=purpose,
+                messages=[LLMMessage(role="user", content=prompt)],
+                response_model=response_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+        parsed = invocation.response.parsed
+        if parsed is None:
+            raise ValueError(f"Planner LLM response missing parsed {response_model.__name__}.")
+        return parsed
 
     @property
     def specification(self) -> AgentSpecification:
@@ -209,12 +233,12 @@ class PlannerAgent(BaseAgent):
             revision_count=revision_count,
         )
         return (
-            await acomplete_structured(
-                self._llm,
+            await self._complete_structured(
                 prompt,
                 response_model=PlannerLLMOutput,
                 temperature=0.0,
                 max_tokens=900,
+                purpose="planner.execution_plan",
             )
         ).model_dump(mode="json", exclude_none=True)
 

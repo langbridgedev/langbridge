@@ -4,7 +4,15 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from langbridge.ai.llm import LLMProviderName, OllamaProvider, create_provider, registered_providers
+from langbridge.ai.llm import (
+    LLMEmbeddingsRequest,
+    LLMMessage,
+    LLMProviderName,
+    LLMRequest,
+    OllamaProvider,
+    create_provider,
+    registered_providers,
+)
 from langbridge.runtime.config.models import LocalRuntimeConfig
 from langbridge.runtime.embeddings import EmbeddingProvider
 from langbridge.runtime.models import LLMProvider as RuntimeLLMProvider
@@ -12,6 +20,14 @@ from langbridge.runtime.models import LLMProvider as RuntimeLLMProvider
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+async def _client_info(provider: OllamaProvider, **overrides) -> tuple[str, float]:
+    client = provider.create_client(**overrides)
+    try:
+        return str(client.base_url), client.timeout.read
+    finally:
+        await client.aclose()
 
 
 def test_ollama_provider_is_registered() -> None:
@@ -52,20 +68,23 @@ def test_ollama_chat_response_is_normalized() -> None:
         }
     )
     transport = httpx.MockTransport(handler)
-    provider.create_async_client = lambda **_: httpx.AsyncClient(  # type: ignore[method-assign]
+    provider.create_client = lambda **_: httpx.AsyncClient(  # type: ignore[method-assign]
         transport=transport,
         base_url="http://ollama.local",
     )
 
     response = _run(
         provider.ainvoke(
-            [{"role": "user", "content": "hello"}],
-            temperature=0.2,
-            max_tokens=64,
+            LLMRequest(
+                purpose="test.chat",
+                messages=[LLMMessage(role="user", content="hello")],
+                temperature=0.2,
+                max_tokens=64,
+            )
         )
     )
 
-    assert response["text"] == "local answer"
+    assert response.response.text == "local answer"
     assert requests[0].url.path == "/api/chat"
     payload = _json_payload(requests[0])
     assert payload["model"] == "llama3.1"
@@ -92,12 +111,19 @@ def test_ollama_chat_enables_json_mode_for_json_prompts() -> None:
         }
     )
     transport = httpx.MockTransport(handler)
-    provider.create_async_client = lambda **_: httpx.AsyncClient(  # type: ignore[method-assign]
+    provider.create_client = lambda **_: httpx.AsyncClient(  # type: ignore[method-assign]
         transport=transport,
         base_url="http://ollama.local",
     )
 
-    _run(provider.ainvoke([{"role": "user", "content": "Return STRICT JSON only."}]))
+    _run(
+        provider.ainvoke(
+            LLMRequest(
+                purpose="test.chat",
+                messages=[LLMMessage(role="user", content="Return STRICT JSON only.")],
+            )
+        )
+    )
 
     assert _json_payload(requests[0])["format"] == "json"
 
@@ -112,9 +138,12 @@ def test_ollama_client_accepts_api_url_configuration_alias() -> None:
         }
     )
 
-    with provider.create_client(transport=httpx.MockTransport(lambda _: httpx.Response(200))) as client:
-        assert str(client.base_url) == "http://ollama.local"
-        assert client.timeout.read == 300.0
+    base_url, read_timeout = _run(
+        _client_info(provider, transport=httpx.MockTransport(lambda _: httpx.Response(200)))
+    )
+
+    assert base_url == "http://ollama.local"
+    assert read_timeout == 300.0
 
 
 def test_ollama_client_uses_configured_timeout() -> None:
@@ -127,8 +156,11 @@ def test_ollama_client_uses_configured_timeout() -> None:
         }
     )
 
-    with provider.create_client(transport=httpx.MockTransport(lambda _: httpx.Response(200))) as client:
-        assert client.timeout.read == 45.0
+    _, read_timeout = _run(
+        _client_info(provider, transport=httpx.MockTransport(lambda _: httpx.Response(200)))
+    )
+
+    assert read_timeout == 45.0
 
 
 def test_ollama_embedding_response_is_normalized() -> None:
@@ -151,14 +183,18 @@ def test_ollama_embedding_response_is_normalized() -> None:
         }
     )
     transport = httpx.MockTransport(handler)
-    provider.create_async_client = lambda **_: httpx.AsyncClient(  # type: ignore[method-assign]
+    provider.create_client = lambda **_: httpx.AsyncClient(  # type: ignore[method-assign]
         transport=transport,
         base_url="http://ollama.local",
     )
 
-    embeddings = _run(provider.create_embeddings(["one", "two"]))
+    invocation = _run(
+        provider.acreate_embeddings(
+            LLMEmbeddingsRequest(texts=["one", "two"])
+        )
+    )
 
-    assert embeddings == [[0.1, 0.2], [0.3, 0.4]]
+    assert invocation.embeddings == [[0.1, 0.2], [0.3, 0.4]]
     assert requests[0].url.path == "/api/embed"
     assert _json_payload(requests[0]) == {
         "model": "nomic-embed-text",

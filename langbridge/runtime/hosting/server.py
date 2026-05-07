@@ -17,6 +17,8 @@ from langbridge.runtime.hosting.app import (
     create_runtime_api_app,
 )
 
+_DEFAULT_GRACEFUL_SHUTDOWN_SECONDS = 30
+
 
 def run_runtime_api(
     *,
@@ -55,7 +57,7 @@ def run_runtime_api(
             reload=True,
             factory=True,
             log_level="debug" if debug else "info",
-            timeout_graceful_shutdown=3,
+            timeout_graceful_shutdown=_DEFAULT_GRACEFUL_SHUTDOWN_SECONDS,
         )
         return
 
@@ -76,7 +78,7 @@ def run_runtime_api(
             factory=True,
             workers=workers,
             log_level="debug" if debug else "info",
-            timeout_graceful_shutdown=3,
+            timeout_graceful_shutdown=_DEFAULT_GRACEFUL_SHUTDOWN_SECONDS,
         )
         return
 
@@ -94,7 +96,7 @@ def run_runtime_api(
         port=port,
         reload=False,
         log_level="debug" if debug else "info",
-        timeout_graceful_shutdown=3,
+        timeout_graceful_shutdown=_DEFAULT_GRACEFUL_SHUTDOWN_SECONDS,
     )
 
 

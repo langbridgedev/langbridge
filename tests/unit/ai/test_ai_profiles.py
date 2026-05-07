@@ -22,6 +22,7 @@ from langbridge.ai.agents import AnalystAgent
 from langbridge.ai.agents.presentation import PresentationAgent
 from langbridge.ai.tools.charting import ChartingTool
 from langbridge.ai.tools.web_search import WebSearchPolicy, WebSearchResultItem, WebSearchTool
+from tests.unit.structured_llm_stub import StructuredTextLLMStub
 
 
 def _run(coro):
@@ -51,7 +52,7 @@ def _analyst_config(
     )
 
 
-class _FakeLLMProvider:
+class _FakeLLMProvider(StructuredTextLLMStub):
     async def acomplete(self, prompt: str, **kwargs):
         if "Decide Langbridge agent route" in prompt:
             if "Show factory result" in prompt:

@@ -42,6 +42,20 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_workspaces_name'), 'workspaces', ['name'], unique=True)
+    op.create_table('runtime_leases',
+    sa.Column('name', sa.String(length=255), nullable=False),
+    sa.Column('owner_id', sa.String(length=255), nullable=True),
+    sa.Column('leased_until', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('heartbeat_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('metadata_json', sa.JSON(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.PrimaryKeyConstraint('name')
+    )
+    op.create_index(op.f('ix_runtime_leases_heartbeat_at'), 'runtime_leases', ['heartbeat_at'], unique=False)
+    op.create_index('ix_runtime_leases_name_until', 'runtime_leases', ['name', 'leased_until'], unique=False)
+    op.create_index(op.f('ix_runtime_leases_owner_id'), 'runtime_leases', ['owner_id'], unique=False)
+    op.create_index(op.f('ix_runtime_leases_leased_until'), 'runtime_leases', ['leased_until'], unique=False)
     op.create_table('connectors',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('workspace_id', sa.Uuid(), nullable=False),
@@ -737,6 +751,11 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_connectors_id'), table_name='connectors')
     op.drop_index(op.f('ix_connectors_created_by_actor_id'), table_name='connectors')
     op.drop_table('connectors')
+    op.drop_index(op.f('ix_runtime_leases_leased_until'), table_name='runtime_leases')
+    op.drop_index(op.f('ix_runtime_leases_owner_id'), table_name='runtime_leases')
+    op.drop_index('ix_runtime_leases_name_until', table_name='runtime_leases')
+    op.drop_index(op.f('ix_runtime_leases_heartbeat_at'), table_name='runtime_leases')
+    op.drop_table('runtime_leases')
     op.drop_index(op.f('ix_workspaces_name'), table_name='workspaces')
     op.drop_table('workspaces')
     op.drop_index(op.f('ix_threads_workspace_id'), table_name='threads')

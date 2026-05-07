@@ -1,6 +1,5 @@
 """LLM-backed SQL analyst tool for Langbridge AI."""
 import asyncio
-import inspect
 import json
 import logging
 import re
@@ -8,7 +7,7 @@ import time
 from typing import Any
 
 from langbridge.ai.events import AIEventEmitter, AIEventSource
-from langbridge.ai.llm.base import LLMProvider
+from langbridge.ai.llm.base import LLMMessage, LLMProvider, LLMRequest, response_text
 from langbridge.ai.tools.semantic_search import SemanticSearchTool
 from langbridge.ai.tools.sql.interfaces import (
     AnalyticalContext,
@@ -229,10 +228,21 @@ class SqlAnalysisTool(AIEventSource):
 
     async def _generate_sql(self, request: AnalystQueryRequest) -> str:
         prompt = self._build_prompt(request)
-        completion = self._llm.acomplete(prompt, temperature=self.llm_temperature, max_tokens=1200)
-        if inspect.isawaitable(completion):
-            return await completion
-        return str(completion)
+        invocation = await self._llm.ainvoke(
+            LLMRequest(
+                purpose="sql_analysis.generate_sql",
+                messages=[
+                    LLMMessage(
+                        role="user",
+                        kind="instruction",
+                        content=prompt,
+                    )
+                ],
+                temperature=self.llm_temperature,
+                max_tokens=1200,
+            )
+        )
+        return response_text(invocation.response)
 
     def _build_prompt(self, request: AnalystQueryRequest) -> str:
         search_text = ""

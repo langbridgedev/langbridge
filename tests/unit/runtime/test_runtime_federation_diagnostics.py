@@ -203,12 +203,13 @@ async def test_runtime_federation_diagnostics_execution_surface_reports_cache_ti
         execution=handle_two.execution,
     )
 
-    assert diagnostics.summary.cache_hits == 1
+    assert diagnostics.summary.cache_hits == 2
     assert diagnostics.summary.final_rows == 3
     assert diagnostics.summary.final_bytes is not None
     assert diagnostics.stages[0].runtime_ms is not None
     assert diagnostics.stages[0].cache.status == "hit"
     assert "revision freshness matched" in str(diagnostics.stages[0].cache.reason or "").lower()
+    assert diagnostics.stages[1].cache.status == "hit"
     assert diagnostics.stages[0].movement.rows == 3
     assert diagnostics.sources[0].total_rows == 3
     assert diagnostics.sources[0].total_bytes_written is not None

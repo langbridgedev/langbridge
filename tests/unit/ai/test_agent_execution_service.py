@@ -22,13 +22,14 @@ from langbridge.runtime.models import (
 )
 from langbridge.runtime.models.metadata import LifecycleState, ManagementMode
 from langbridge.runtime.services.agents import AgentExecutionService
+from tests.unit.structured_llm_stub import StructuredTextLLMStub
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-class _FakeLLMProvider:
+class _FakeLLMProvider(StructuredTextLLMStub):
     def __init__(self) -> None:
         self.prompts = []
 
@@ -67,7 +68,7 @@ class _FakeLLMProvider:
         return [[1.0] for _ in texts]
 
 
-class _FailingLLMProvider:
+class _FailingLLMProvider(StructuredTextLLMStub):
     async def acomplete(self, prompt: str, **kwargs):
         raise RuntimeError("llm down")
 
@@ -87,7 +88,7 @@ class _ArtifactMarkdownLLMProvider(_FakeLLMProvider):
         return await super().acomplete(prompt, **kwargs)
 
 
-class _SqlLLMProvider:
+class _SqlLLMProvider(StructuredTextLLMStub):
     def __init__(self) -> None:
         self.prompts = []
 
@@ -218,7 +219,7 @@ class _SqlExcludeRetailWholesaleFollowUpLLMProvider(_SqlLLMProvider):
         return await super().acomplete(prompt, **kwargs)
 
 
-class _ClarificationLLMProvider:
+class _ClarificationLLMProvider(StructuredTextLLMStub):
     def __init__(self) -> None:
         self.prompts = []
 
@@ -247,7 +248,7 @@ class _ClarificationLLMProvider:
         return [[1.0] for _ in texts]
 
 
-class _ClarificationThenResearchLLMProvider:
+class _ClarificationThenResearchLLMProvider(StructuredTextLLMStub):
     def __init__(self) -> None:
         self.prompts = []
 

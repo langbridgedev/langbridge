@@ -2,15 +2,16 @@
 
 import logging
 import uuid
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
 
 from langbridge.ai.events import AIEventEmitter, AIEventSource
-from langbridge.ai.llm.base import LLMProvider
-from langbridge.ai.llm.structured import acomplete_structured
+from langbridge.ai.llm.base import LLMMessage, LLMProvider, LLMRequest
 from langbridge.runtime.embeddings import EmbeddingProvider
 from langbridge.runtime.services.semantic_vector_search import SemanticVectorSearchService
+
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 class VectorStoreLike(Protocol):
@@ -84,6 +85,31 @@ class SemanticSearchTool(AIEventSource):
         self._semantic_vector_search_dimension_name = str(semantic_vector_search_dimension_name or "").strip() or None
         self._embedding_provider = embedding_provider
         self._validate_configuration()
+
+    async def _complete_structured(
+        self,
+        prompt: str,
+        *,
+        response_model: type[StructuredModel],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        purpose: str = "semantic_search.structured",
+    ) -> StructuredModel:
+        if self._llm is None:
+            raise ValueError("Semantic search requires an LLM provider.")
+        invocation = await self._llm.ainvoke(
+            LLMRequest[StructuredModel](
+                purpose=purpose,
+                messages=[LLMMessage(role="user", content=prompt)],
+                response_model=response_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+        parsed = invocation.response.parsed
+        if parsed is None:
+            raise ValueError(f"Semantic search LLM response missing parsed {response_model.__name__}.")
+        return parsed
 
     @property
     def name(self) -> str:
@@ -198,12 +224,12 @@ class SemanticSearchTool(AIEventSource):
             "Return STRICT JSON only: {\"entities\":[\"...\"]}\n"
             f"Return at most {top_k} entities. Query: {query}\n"
         )
-        parsed = await acomplete_structured(
-            self._llm,
+        parsed = await self._complete_structured(
             prompt,
             response_model=SemanticEntityExtraction,
             temperature=0.0,
             max_tokens=300,
+            purpose="semantic_search.entity_extraction",
         )
         entities = parsed.entities
         phrases = [str(item).strip() for item in entities if str(item).strip()]

@@ -2,9 +2,26 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from ..base import LLMMessage, LLMProvider, LLMProviderName, LLMResponse, response_text
+from ..base import (
+    LLMEmbeddingsInvocation,
+    LLMEmbeddingsRequest,
+    LLMInvocation,
+    LLMMessage,
+    LLMProvider,
+    LLMProviderName,
+    LLMRequest,
+    LLMResponse,
+    response_text,
+)
 from ..factory import register_provider
-from ..structured import json_schema_for_model, StructuredOutputUnsupportedError, validate_structured_payload
+from ..contracts import (
+    StructuredOutputConfig,
+    StructuredOutputContract,
+    StructuredOutputMode,
+    StructuredOutputSchema,
+    StructuredOutputUnsupportedError,
+)
+from ..structured import StructuredOutputParser
 
 try:  # pragma: no cover - optional dependency
     from anthropic import Anthropic, AsyncAnthropic
@@ -22,11 +39,11 @@ _ALLOWED_CONFIG_KEYS = {
 }
 
 
-def _to_dict(response: Any) -> LLMResponse:
+def _to_dict(response: Any) -> dict[str, Any]:
     if hasattr(response, "model_dump"):
         payload = response.model_dump(mode="json")
     elif isinstance(response, dict):
-        payload = response
+        payload = dict(response)
     else:
         payload = {"raw": response}
     content = payload.get("content")
@@ -45,8 +62,8 @@ def _split_system(messages: list[LLMMessage]) -> tuple[str | None, list[LLMMessa
     system_parts: list[str] = []
     user_messages: list[LLMMessage] = []
     for message in messages:
-        if str(message.get("role") or "") == "system":
-            content = message.get("content")
+        if message.role == "system":
+            content = message.content
             if content is not None:
                 system_parts.append(str(content))
             continue
@@ -60,15 +77,6 @@ class AnthropicProvider(LLMProvider):
     name = LLMProviderName.ANTHROPIC
 
     def create_client(self, **overrides: Any) -> Any:
-        if Anthropic is None:  # pragma: no cover - optional dependency
-            raise RuntimeError(str(_IMPORT_ERROR))
-        params = {key: self.configuration.get(key) for key in _ALLOWED_CONFIG_KEYS if key in self.configuration}
-        params.update(overrides)
-        params = self._clean_kwargs(params)
-        params.setdefault("api_key", self.api_key)
-        return Anthropic(**params)
-
-    def create_async_client(self, **overrides: Any) -> Any:
         if AsyncAnthropic is None:  # pragma: no cover - optional dependency
             raise RuntimeError(str(_IMPORT_ERROR))
         params = {key: self.configuration.get(key) for key in _ALLOWED_CONFIG_KEYS if key in self.configuration}
@@ -77,112 +85,133 @@ class AnthropicProvider(LLMProvider):
         params.setdefault("api_key", self.api_key)
         return AsyncAnthropic(**params)
 
-    def complete(
-        self,
-        prompt: str,
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> str:
-        return response_text(
-            self.invoke(
-                [{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-        )
-
-    async def acomplete(
-        self,
-        prompt: str,
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> str:
-        return response_text(
-            await self.ainvoke(
-                [{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-        )
-
-    def invoke(
-        self,
-        messages: list[LLMMessage],
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> LLMResponse:
-        client = self.create_client()
-        system, user_messages = _split_system(messages)
-        response = client.messages.create(
-            model=self.model_name,
-            messages=user_messages,
-            system=system,
-            temperature=temperature,
-            max_tokens=max_tokens or int(self.configuration.get("max_tokens") or 1024),
-        )
-        return _to_dict(response)
-
     async def ainvoke(
         self,
-        messages: list[LLMMessage],
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> LLMResponse:
-        client = self.create_async_client()
-        system, user_messages = _split_system(messages)
-        response = await client.messages.create(
-            model=self.model_name,
-            messages=user_messages,
-            system=system,
-            temperature=temperature,
-            max_tokens=max_tokens or int(self.configuration.get("max_tokens") or 1024),
-        )
-        return _to_dict(response)
+        request: LLMRequest[BaseModel],
+    ) -> LLMInvocation[BaseModel]:
+        if request.response_model is not None:
+            return await self._invoke_structured(request)
+        response = await self._create_text_response(request)
+        return LLMInvocation(request=request, response=response)
 
-    async def _ainvoke_structured_native(
+    async def _invoke_structured(
         self,
-        messages: list[LLMMessage],
+        request: LLMRequest[BaseModel],
+    ) -> LLMInvocation[BaseModel]:
+        response_model = request.response_model
+        if response_model is None:
+            raise StructuredOutputUnsupportedError("Anthropic structured invocation requires response_model.")
+
+        mode = StructuredOutputConfig.from_mapping(self.configuration).mode
+        if mode in {StructuredOutputMode.auto, StructuredOutputMode.native}:
+            try:
+                response = await self._create_native_structured_response(request, response_model=response_model)
+                return LLMInvocation(request=request, response=response)
+            except StructuredOutputUnsupportedError:
+                if mode == StructuredOutputMode.native:
+                    raise
+
+        text_request = request.model_copy(
+            update={
+                "messages": self._messages_with_output_contract(request.messages, response_model=response_model),
+                "response_model": None,
+            }
+        )
+        text_response = await self._create_text_response(text_request)
+        return LLMInvocation(
+            request=request,
+            response=self._extract_response(text_response, response_model=response_model),
+        )
+
+    async def _create_text_response(
+        self,
+        request: LLMRequest[Any],
+    ) -> LLMResponse[Any]:
+        client = self.create_client()
+        system, user_messages = _split_system(request.messages)
+        response = await client.messages.create(
+            **self._clean_kwargs(
+                {
+                    "model": self.model_name,
+                    "messages": [self._message_payload(message) for message in user_messages],
+                    "system": system,
+                    "temperature": request.temperature,
+                    "max_tokens": request.max_tokens or int(self.configuration.get("max_tokens") or 1024),
+                    **request.provider_options,
+                }
+            )
+        )
+        payload = _to_dict(response)
+        return LLMResponse(raw_response=payload, text=response_text(payload), extract_mode="text")
+
+    async def _create_native_structured_response(
+        self,
+        request: LLMRequest[BaseModel],
         *,
         response_model: type[BaseModel],
-        temperature: float,
-        max_tokens: int | None,
-    ) -> BaseModel:
-        client = self.create_async_client()
-        system, user_messages = _split_system(messages)
+    ) -> LLMResponse[BaseModel]:
+        client = self.create_client()
+        system, user_messages = _split_system(request.messages)
         tool_name = "langbridge_structured_response"
         response = await client.messages.create(
-            model=self.model_name,
-            messages=user_messages,
-            system=system,
-            temperature=temperature,
-            max_tokens=max_tokens or int(self.configuration.get("max_tokens") or 1024),
-            tools=[
+            **self._clean_kwargs(
                 {
-                    "name": tool_name,
-                    "description": f"Return a {response_model.__name__} JSON object.",
-                    "input_schema": json_schema_for_model(response_model),
+                    "model": self.model_name,
+                    "messages": [self._message_payload(message) for message in user_messages],
+                    "system": system,
+                    "temperature": request.temperature,
+                    "max_tokens": request.max_tokens or int(self.configuration.get("max_tokens") or 1024),
+                    "tools": [
+                        {
+                            "name": tool_name,
+                            "description": f"Return a {response_model.__name__} JSON object.",
+                            "input_schema": StructuredOutputSchema(response_model).as_dict(),
+                        }
+                    ],
+                    "tool_choice": {"type": "tool", "name": tool_name},
+                    **request.provider_options,
                 }
-            ],
-            tool_choice={"type": "tool", "name": tool_name},
+            )
         )
         payload = _to_dict(response)
         for item in payload.get("content") or []:
             if not isinstance(item, dict):
                 continue
             if item.get("type") == "tool_use" and item.get("name") == tool_name:
-                return validate_structured_payload(item.get("input"), response_model=response_model)
+                return LLMResponse(
+                    raw_response=payload,
+                    text=response_text(payload),
+                    parsed=StructuredOutputParser(response_model).validate_payload(item.get("input")),
+                    response_model_name=response_model.__name__,
+                    extract_mode="native_structured",
+                )
         raise StructuredOutputUnsupportedError("Anthropic structured response did not include the forced tool call.")
 
-    async def create_embeddings(
+    async def acreate_embeddings(
         self,
-        texts: list[str],
-        embedding_model: str | None = None,
-    ) -> list[list[float]]:
+        request: LLMEmbeddingsRequest,
+    ) -> LLMEmbeddingsInvocation:
+        _ = request
         raise NotImplementedError("Anthropic provider does not support embeddings.")
+
+    @staticmethod
+    def _message_payload(message: LLMMessage) -> dict[str, str]:
+        role = "assistant" if message.role == "assistant" else "user"
+        return {"role": role, "content": message.content}
+
+    @staticmethod
+    def _messages_with_output_contract(
+        messages: list[LLMMessage],
+        *,
+        response_model: type[BaseModel],
+    ) -> list[LLMMessage]:
+        output_contract = LLMMessage(
+            role="system",
+            kind="output_contract",
+            trusted=True,
+            content=StructuredOutputContract(response_model).system_instruction(),
+        )
+        return [output_contract, *messages]
 
 
 __all__ = ["AnthropicProvider"]

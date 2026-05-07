@@ -14,6 +14,7 @@ __all__ = [
     "RuntimeProviders",
     "RuntimeServices",
     "RuntimeCleanupService",
+    "RuntimeLeaseService",
     "SemanticQueryExecutionService",
     "SemanticVectorSearchService",
     "SqlQueryService",
@@ -94,6 +95,10 @@ def __getattr__(name: str) -> Any:
         from langbridge.runtime.services.maintenance import RuntimeCleanupService
 
         return RuntimeCleanupService
+    if name == "RuntimeLeaseService":
+        from langbridge.runtime.services.leases import RuntimeLeaseService
+
+        return RuntimeLeaseService
     if name == "SemanticQueryExecutionService":
         from langbridge.runtime.services.semantic_query_execution_service import (
             SemanticQueryExecutionService,

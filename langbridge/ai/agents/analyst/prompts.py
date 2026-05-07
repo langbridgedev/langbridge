@@ -111,6 +111,8 @@ Return STRICT JSON only:
 Rules:
 - Prefer governed SQL evidence first for internal business metrics.
 - Use multiple governed retrieval steps for diagnostic, relationship, hypothesis, and root-cause questions.
+- When the investigation profile is metric_explanation, plan period-level metric/outcome evidence,
+  a full-period aggregate or summary, and baseline/comparison evidence where available.
 - Do not make clarify the first step solely because a diagnostic question omits the exact metric, KPI definition,
   or timeframe. Plan a governed retrieval that finds or derives the best available proxy and records the assumption.
 - For broad terms like "marketing efficiency", "support load", "underperform", "growth", or "slowdown",
@@ -132,6 +134,9 @@ Conversation memory:
 
 Resolved entity context:
 {resolved_entity_context}
+
+Investigation profile:
+{investigation_profile}
 
 Available SQL tools:
 {sql_tools}
@@ -165,6 +170,8 @@ Decision rules:
 - Prefer governed SQL first when configured SQL tools can answer or partially answer the question.
 - Use multiple governed rounds when the question is diagnostic, hypothesis-based, relational, or
   otherwise needs more than one governed slice of evidence.
+- For metric_explanation workflows, prefer a sequence that inspects period breakdown, aggregate/summary outcome,
+  then available baseline/comparison evidence before synthesis when governed rounds remain.
 - Do not ask clarification before the first governed round for exploratory/diagnostic questions merely because
   the metric, KPI definition, or timeframe is not explicit. Query governed data first, choose the best available
   defensible proxy, and require the final synthesis to state the assumption.
@@ -204,6 +211,9 @@ Conversation memory:
 
 Resolved entity context:
 {resolved_entity_context}
+
+Investigation profile:
+{investigation_profile}
 
 Available SQL tools:
 {sql_tools}
@@ -456,6 +466,8 @@ Rules:
 - Prefer governed evidence for internal metrics, rows, and trends when it is available.
 - Treat the Evidence bundle as the canonical record of all analyst retrievals; use every relevant governed round, not only the latest result.
 - For multi-round governed evidence, compare the rounds at the grain implied by the question before giving the verdict.
+- Validate premise words such as bad, weak, high, low, underperformed, and outperformed against the governed evidence;
+  if the premise is only true in absolute terms or only false relative to an available baseline/comparison, say so directly.
 - Use external sources to add current/external context or to cover gaps not answered by governed evidence.
 - Every finding must cite either `governed_result` or an exact source url or source id from Sources.
 - Do not merge conflicting claims into one finding; call out disagreement or uncertainty.
@@ -470,6 +482,8 @@ Rules:
 - Prefer concise synthesis over source-by-source summaries.
 - Do not include uncited claims.
 - Do not use outside knowledge.
+- If no external sources are provided, do not present macro, market, or causal explanations as facts; label them as
+  inferred context or state that governed data does not contain causal commentary.
 - If no external sources are provided but governed evidence is available, synthesize from governed evidence only.
 
 Question:

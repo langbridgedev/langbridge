@@ -68,7 +68,7 @@ class AnalystEntityReference(BaseModel):
     identifier: str
     supplied_name: str | None = None
     original_text: str
-    source: Literal["parenthesized_identifier", "code_identifier"] = "code_identifier"
+    source: Literal["parenthesized_identifier", "code_identifier", "name_phrase"] = "code_identifier"
 
     @model_validator(mode="after")
     def _normalize_payload(self) -> "AnalystEntityReference":

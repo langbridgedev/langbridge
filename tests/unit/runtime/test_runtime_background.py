@@ -57,6 +57,26 @@ class RecordingDatasetSyncHost:
         return {"status": "queued"}
 
 
+class RecordingLeaseService:
+    def __init__(self, *, acquire: bool = True) -> None:
+        self.acquire_result = acquire
+        self.acquired: list[dict[str, object]] = []
+        self.heartbeats: list[dict[str, object]] = []
+        self.released: list[dict[str, object]] = []
+
+    async def acquire(self, **kwargs):
+        self.acquired.append(dict(kwargs))
+        return self.acquire_result
+
+    async def heartbeat(self, **kwargs):
+        self.heartbeats.append(dict(kwargs))
+        return True
+
+    async def release(self, **kwargs):
+        self.released.append(dict(kwargs))
+        return True
+
+
 def _build_runtime_host(
     *,
     semantic_vector_search: object | None = None,
@@ -158,6 +178,68 @@ async def test_runtime_background_manager_runs_startup_and_manual_tasks() -> Non
 
 
 @pytest.mark.anyio
+async def test_runtime_background_manager_skips_task_when_distributed_lease_is_held() -> None:
+    lease_service = RecordingLeaseService(acquire=False)
+    manager = RuntimeBackgroundTaskManager(
+        runtime_host=_build_runtime_host(),
+        lease_service=lease_service,  # type: ignore[arg-type]
+        owner_id="worker-1",
+    )
+    observed: list[str] = []
+
+    async def _record(context):
+        observed.append(context.task_name)
+
+    manager.register_default_task(
+        RuntimeBackgroundTaskDefinition.default(
+            name="semantic-refresh",
+            handler=_record,
+        )
+    )
+
+    await manager._execute_definition_by_name("semantic-refresh")
+
+    assert observed == []
+    assert lease_service.acquired == [
+        {
+            "name": "background-task:semantic-refresh",
+            "owner_id": "worker-1",
+            "lease_seconds": 120,
+            "metadata": {"task_name": "semantic-refresh", "kind": "default"},
+        }
+    ]
+    assert lease_service.released == []
+
+
+@pytest.mark.anyio
+async def test_runtime_background_manager_releases_distributed_lease_after_task() -> None:
+    lease_service = RecordingLeaseService()
+    manager = RuntimeBackgroundTaskManager(
+        runtime_host=_build_runtime_host(),
+        lease_service=lease_service,  # type: ignore[arg-type]
+        owner_id="worker-1",
+    )
+    observed: list[str] = []
+
+    async def _record(context):
+        observed.append(context.task_name)
+
+    manager.register_default_task(
+        RuntimeBackgroundTaskDefinition.default(
+            name="semantic-refresh",
+            handler=_record,
+        )
+    )
+
+    await manager._execute_definition_by_name("semantic-refresh")
+
+    assert observed == ["semantic-refresh"]
+    assert lease_service.released == [
+        {"name": "background-task:semantic-refresh", "owner_id": "worker-1"}
+    ]
+
+
+@pytest.mark.anyio
 async def test_semantic_vector_refresh_default_task_uses_runtime_host_refresh() -> None:
     semantic_vector_search = RecordingSemanticVectorSearchService()
     runtime_host = _build_runtime_host(
@@ -234,6 +316,20 @@ def test_runtime_api_app_disables_background_scheduler_for_multi_worker_hosts() 
         assert client.app.state.runtime_workers == 4
 
     assert observed == []
+
+
+def test_runtime_api_app_rejects_explicit_multi_worker_background_tasks_without_lease() -> None:
+    runtime_host = _build_runtime_host()
+
+    with pytest.raises(
+        ValueError,
+        match="metadata_store is sqlite or postgres",
+    ):
+        _create_runtime_app(
+            runtime_host=runtime_host,  # type: ignore[arg-type]
+            workers=4,
+            background_tasks_enabled=True,
+        )
 
 
 def test_runtime_api_app_registers_semantic_vector_refresh_task_when_service_exists() -> None:

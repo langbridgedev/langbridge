@@ -249,11 +249,15 @@ class AgentRunResponseBuilder:
         keys = (
             "agent_mode",
             "mode_decision",
+            "investigation_profile",
+            "investigation_trace",
+            "entity_resolution",
             "selected_tool",
             "selected_query_scope",
             "weak_evidence",
             "governed_attempt_count",
             "governed_tools_tried",
+            "evidence_plan",
             "evidence_bundle_assessment",
             "research_steps",
         )

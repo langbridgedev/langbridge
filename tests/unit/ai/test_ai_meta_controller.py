@@ -28,6 +28,7 @@ from langbridge.ai.orchestration.planner import ExecutionPlan, PlannerAgent, Pla
 from langbridge.ai.orchestration.verification import VerificationOutcome
 from langbridge.ai.tools.charting import ChartingTool
 from langbridge.ai.tools.web_search import WebSearchResultItem, WebSearchTool
+from tests.unit.structured_llm_stub import StructuredTextLLMStub
 
 
 def _run(coro):
@@ -49,7 +50,7 @@ def _analyst_config(*, research_enabled: bool = False, web_search_enabled: bool 
     )
 
 
-class _FakeLLMProvider:
+class _FakeLLMProvider(StructuredTextLLMStub):
     async def acomplete(self, prompt: str, **kwargs):
         if "Decide Langbridge agent route" in prompt:
             if "Dependency ordered request" in prompt:

@@ -84,6 +84,7 @@ from langbridge.runtime.services.agents import (
 from langbridge.runtime.services.dataset_query import DatasetQueryService
 from langbridge.runtime.services.dataset_sync import ConnectorSyncRuntime
 from langbridge.runtime.services.jobs import RuntimeJobService
+from langbridge.runtime.services.leases import RuntimeLeaseService
 from langbridge.runtime.services.maintenance import RuntimeCleanupService
 from langbridge.runtime.services.runtime_host import (
     RuntimeHost,
@@ -114,6 +115,7 @@ def build_local_runtime(
     dataset_revision_repository: DatasetRevisionRepository | None = None,
     lineage_edge_repository: LineageEdgeRepository | None = None,
     job_repository: JobRepository | None = None,
+    lease_repository: object | None = None,
     sql_job_result_artifact_repository: SqlJobResultArtifactRepository | None = None,
     agent_definition_repository: AgentRepository | None = None,
     llm_repository: LLMConnectionRepository | None = None,
@@ -304,6 +306,11 @@ def build_local_runtime(
         else None
     )
     job_service = RuntimeJobService(repository=job_repository) if job_repository is not None else None
+    lease_service = (
+        RuntimeLeaseService(repository=lease_repository)
+        if lease_repository is not None
+        else None
+    )
     semantic_sql_query_service = SemanticSqlQueryService()
     cleanup_service = RuntimeCleanupService(
         federation_artifact_store=ArtifactStore(
@@ -354,6 +361,7 @@ def build_local_runtime(
             dataset_sync=dataset_sync_runtime,
             agent_execution=agent_execution_service,
             jobs=job_service,
+            leases=lease_service,
             semantic_sql_query=semantic_sql_query_service,
             cleanup=cleanup_service,
         ),

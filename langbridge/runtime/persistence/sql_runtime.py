@@ -256,6 +256,16 @@ def build_sql_runtime_resources(
             "upsert_task",
         },
     )
+    raw_lease_repository = _RuntimeSessionRepositoryProxy(
+        controller=controller,
+        repository_attr="lease_repository",
+        write_methods={
+            "acquire_lease",
+            "heartbeat_lease",
+            "release_lease",
+            "cleanup_expired",
+        },
+    )
     raw_agent_repository = _RuntimeSessionRepositoryProxy(
         controller=controller,
         repository_attr="agent_repository",
@@ -294,6 +304,7 @@ def build_sql_runtime_resources(
         dataset_revision_repository=raw_dataset_revision_repository,
         lineage_edge_repository=raw_lineage_edge_repository,
         job_repository=raw_job_repository,
+        lease_repository=raw_lease_repository,
         agent_definition_repository=raw_agent_repository,
         llm_repository=raw_llm_repository,
         thread_repository=raw_thread_repository,
