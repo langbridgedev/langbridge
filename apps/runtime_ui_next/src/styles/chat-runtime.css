@@ -868,6 +868,97 @@
   min-height: 260px;
 }
 
+.chart-tooltip {
+  position: absolute;
+  z-index: 12;
+  display: grid;
+  gap: 5px;
+  width: max-content;
+  max-width: min(260px, calc(100% - 24px));
+  padding: 10px 12px 11px;
+  border: 1px solid color-mix(in srgb, var(--chart-tooltip-accent, var(--accent)) 34%, var(--border));
+  border-radius: 14px;
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--chart-tooltip-accent, var(--accent)) 12%, transparent),
+      transparent 42%
+    ),
+    color-mix(in srgb, var(--surface) 94%, var(--surface-muted));
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18);
+  color: var(--text);
+  font-size: 0.78rem;
+  line-height: 1.32;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 12px));
+}
+
+.chart-tooltip--cursor {
+  transform: translate(14px, -50%);
+}
+
+.chart-tooltip--left {
+  transform: translate(calc(-100% - 14px), -50%);
+}
+
+.chart-tooltip--below {
+  transform: translate(14px, 12px);
+}
+
+.chart-tooltip--left.chart-tooltip--below {
+  transform: translate(calc(-100% - 14px), 12px);
+}
+
+.chart-tooltip--above {
+  transform: translate(14px, calc(-100% - 12px));
+}
+
+.chart-tooltip--left.chart-tooltip--above {
+  transform: translate(calc(-100% - 14px), calc(-100% - 12px));
+}
+
+.chart-tooltip::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--chart-tooltip-accent, var(--accent));
+}
+
+.chart-tooltip > * {
+  margin-left: 8px;
+}
+
+.chart-tooltip-eyebrow {
+  color: color-mix(in srgb, var(--chart-tooltip-accent, var(--accent)) 76%, var(--muted));
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chart-tooltip strong {
+  font-size: 0.88rem;
+  font-weight: 800;
+  letter-spacing: -0.015em;
+}
+
+.chart-tooltip-value {
+  color: var(--text);
+  font-weight: 760;
+}
+
+.chart-tooltip-details {
+  display: grid;
+  gap: 3px;
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  color: var(--muted);
+}
+
 .artifact-markdown-card--chart .chart-visual-region {
   min-height: 0;
 }
