@@ -53,6 +53,7 @@ from langbridge.ai.agents.analyst.research_workflow import (
 )
 from langbridge.ai.agents.presentation.guidance import PresentationGuidance
 from langbridge.ai.llm.base import LLMMessage, LLMProvider, LLMRequest
+from langbridge.ai.llm.structured import StructuredOutputError
 from langbridge.ai.modes import (
     AnalystAgentMode,
     analyst_output_contract_for_task_input,
@@ -1040,18 +1041,38 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 result=json.dumps(context_result, default=str),
             )
         )
-        parsed = (
-            await self._complete_structured(
-                prompt,
-                response_model=AnalystContextAnalysisOutput,
-                temperature=0.2,
-                max_tokens=self._detail_token_limit(task.question, standard=800, detailed=1200),
-                purpose="analyst.context_analysis",
-            )
-        ).model_dump(mode="json")
+        diagnostics: dict[str, Any] = {
+            "agent_mode": AnalystAgentMode.context_analysis.value,
+            "mode_decision": mode_decision,
+        }
+        try:
+            parsed = (
+                await self._complete_structured(
+                    prompt,
+                    response_model=AnalystContextAnalysisOutput,
+                    temperature=0.2,
+                    max_tokens=self._detail_token_limit(task.question, standard=800, detailed=1200),
+                    purpose="analyst.context_analysis",
+                )
+            ).model_dump(mode="json")
+        except (StructuredOutputError, ValueError) as exc:
+            parsed = {
+                "analysis": self._fallback_context_analysis(result=context_result),
+                "result": context_result,
+            }
+            diagnostics["context_analysis_fallback"] = {
+                "reason": "structured_output_invalid",
+                "message": str(exc),
+            }
+
         result = parsed.get("result")
         if not isinstance(result, dict):
-            raise ValueError("Analyst LLM response missing object field: result.")
+            result = context_result
+            parsed["result"] = context_result
+            diagnostics["context_analysis_fallback"] = {
+                "reason": "result_not_object",
+                "message": "Analyst LLM response missing object field: result.",
+            }
         artifacts = self._build_context_result_artifacts(result=result)
         return self.build_result(
             task=task,
@@ -1064,7 +1085,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 "review_hints": self._build_context_analysis_review_hints(result=result),
             },
             artifacts=artifacts,
-            diagnostics={"agent_mode": AnalystAgentMode.context_analysis.value, "mode_decision": mode_decision},
+            diagnostics=diagnostics,
         )
 
     async def _select_sql_tool(
@@ -2623,6 +2644,30 @@ class AnalystAgent(AIEventSource, BaseAgent):
             provenance={"source": "context_analysis"},
         )
         return {artifact["id"]: artifact} if artifact is not None else {}
+
+    @staticmethod
+    def _fallback_context_analysis(*, result: dict[str, Any]) -> str:
+        columns = [str(column) for column in result.get("columns") or []]
+        rows = result.get("rows") if isinstance(result.get("rows"), list) else []
+        row_count = result.get("rowcount")
+        if row_count is None:
+            row_count = result.get("rowCount")
+        if row_count is None:
+            row_count = len(rows)
+
+        if not rows:
+            if columns:
+                return (
+                    "The provided result context is empty, so there are no rows to compare. "
+                    f"The available fields are: {', '.join(columns)}."
+                )
+            return "The provided result context is empty, so there is no verified row data to analyze."
+
+        field_summary = f" across {len(columns)} field(s)" if columns else ""
+        return (
+            f"The verified result contains {row_count} row(s){field_summary}. "
+            "Use the attached result table for the grounded values."
+        )
 
     @staticmethod
     def _build_result_table_artifact(

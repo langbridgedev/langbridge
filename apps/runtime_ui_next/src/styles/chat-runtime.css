@@ -1083,6 +1083,28 @@
   place-items: center;
   padding: 24px;
   background: rgba(0, 0, 0, 0.42);
+  color: var(--text);
+}
+
+.artifact-modal-overlay[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #212121;
+  --surface: #2f2f2f;
+  --surface-muted: #262626;
+  --hover: #2b2b2b;
+  --active: #303030;
+  --code-bg: #0f0f0f;
+  --code-text: #f3eee8;
+  --code-border: rgba(255, 255, 255, 0.12);
+  --border: rgba(255, 255, 255, 0.11);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text: #ececec;
+  --muted: #b4b4b4;
+  --subtle: #858585;
+  --accent-soft: rgba(16, 163, 127, 0.16);
+  --accent-border: rgba(16, 163, 127, 0.34);
+  --accent-text: #7ee4c5;
+  --shadow: 0 18px 42px -32px rgba(0, 0, 0, 0.75);
 }
 
 .artifact-modal-dialog {
@@ -1093,7 +1115,14 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 22px;
-  background: var(--surface);
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--surface-muted) 46%, transparent),
+      transparent 36%
+    ),
+    var(--surface);
+  color: var(--text);
   box-shadow: var(--shadow);
 }
 
@@ -1125,24 +1154,65 @@
 
 .artifact-modal-body {
   display: grid;
+  grid-auto-rows: max-content;
   gap: 14px;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
   padding: 16px;
 }
 
 .artifact-modal-body .chart-panel {
-  min-height: 360px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+  background: color-mix(in srgb, var(--surface) 92%, var(--surface-muted));
 }
 
 .artifact-modal-body .chart-visual-region {
-  min-height: 320px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.artifact-modal-body .chart-canvas-shell,
+.artifact-modal-body .chart-pie-layout {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.artifact-modal-body .chart-canvas {
+  display: block;
+  width: 100%;
+  max-height: min(320px, 42vh);
+}
+
+.artifact-modal-body .chart-pie {
+  display: block;
+  width: 100%;
+  max-height: min(300px, 40vh);
+}
+
+.artifact-modal-body .chart-legend,
+.artifact-modal-body .chart-pie-legend,
+.artifact-modal-body .chart-axis-labels {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.artifact-modal-body .chart-tooltip {
+  z-index: 3;
 }
 
 .artifact-modal-body .table-wrap {
+  max-width: 100%;
   max-height: 58vh;
+  overflow: auto;
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: 14px;
+  background: var(--surface);
 }
 
 .artifact-modal-body .result-table th {

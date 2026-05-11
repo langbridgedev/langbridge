@@ -15,7 +15,7 @@ class MeasureAggregation(str, Enum):
 
 
 class DimensionVectorStore(BaseModel):
-    type: Literal["managed_faiss", "connector"] = "managed_faiss"
+    type: Literal["managed_faiss", "managed_qdrant", "connector"] = "managed_faiss"
     connector_name: str | None = None
     index_name: str | None = None
 
@@ -26,8 +26,10 @@ class DimensionVectorStore(BaseModel):
             return value
         if isinstance(value, str):
             normalized_value = value.strip()
-            if not normalized_value or normalized_value == "managed_faiss":
-                return {"type": "managed_faiss"}
+            if not normalized_value:
+                return None
+            if normalized_value in {"managed_qdrant", "managed_faiss"}:
+                return {"type": normalized_value}
             return {
                 "type": "connector",
                 "connector_name": normalized_value,

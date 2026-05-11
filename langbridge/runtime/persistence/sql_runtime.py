@@ -152,7 +152,7 @@ def build_sql_runtime_resources(
     dataset_columns: dict[uuid.UUID, list[DatasetColumnMetadata]],
     dataset_policies: dict[uuid.UUID, DatasetPolicyMetadata],
     secret_provider_registry: SecretProviderRegistry,
-) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController]:
+) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController]:
     from langbridge.runtime.bootstrap.runtime_factory import build_local_runtime
     from langbridge.runtime.persistence import (
         RepositoryConversationMemoryStore,
@@ -322,6 +322,7 @@ def build_sql_runtime_resources(
         raw_lineage_edge_repository,
         RepositoryConnectorSyncStateStore(repository=raw_connector_sync_state_repository),
         raw_job_repository,
+        raw_llm_repository,
         RepositoryThreadStore(repository=raw_thread_repository),
         RepositoryThreadMessageStore(repository=raw_thread_message_repository),
         controller,

@@ -241,6 +241,8 @@ Return STRICT JSON only:
 }}
 
 Rules:
+- The top-level response must be a JSON object with exactly the required shape above; never return a bare array,
+  column list, row list, or the result object by itself.
 - Do not invent rows, columns, metrics, or source facts.
 - Do not alter the result object. Put interpretation, caveats, and derived observations in analysis.
 - State limits when the result is empty, truncated, aggregated too coarsely, or too narrow.

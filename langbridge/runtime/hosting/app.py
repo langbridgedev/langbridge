@@ -68,6 +68,11 @@ from langbridge.runtime.hosting.api_models import (
     RuntimeJobCreateRequest,
     RuntimeJobListResponse,
     RuntimeJobResponse,
+    RuntimeLLMConnectionCreateRequest,
+    RuntimeLLMConnectionListResponse,
+    RuntimeLLMConnectionSummary,
+    RuntimeLLMConnectionTestResponse,
+    RuntimeLLMConnectionUpdateRequest,
     RuntimeSemanticModelCreateRequest,
     RuntimeSemanticModelListResponse,
     RuntimeSemanticModelUpdateRequest,
@@ -873,6 +878,93 @@ def create_runtime_api_app(
         configured_host = await _resolve_request_host(request)
         try:
             return await configured_host.get_agent(agent_ref=agent_ref)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/runtime/v1/llm-connections", response_model=RuntimeLLMConnectionListResponse)
+    async def list_llm_connections(request: Request) -> RuntimeLLMConnectionListResponse:
+        configured_host = await _resolve_request_host(request)
+        items = await configured_host.list_llm_connections()
+        return RuntimeLLMConnectionListResponse(items=items, total=len(items))
+
+    @app.get(
+        "/api/runtime/v1/llm-connections/{connection_ref}",
+        response_model=RuntimeLLMConnectionSummary,
+    )
+    async def get_llm_connection(
+        request: Request,
+        connection_ref: str,
+    ) -> RuntimeLLMConnectionSummary:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return RuntimeLLMConnectionSummary.model_validate(
+                await configured_host.get_llm_connection(connection_ref=connection_ref)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post(
+        "/api/runtime/v1/llm-connections",
+        response_model=RuntimeLLMConnectionSummary,
+        status_code=201,
+    )
+    async def create_llm_connection(
+        request: Request,
+        body: RuntimeLLMConnectionCreateRequest,
+    ) -> RuntimeLLMConnectionSummary:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return RuntimeLLMConnectionSummary.model_validate(
+                await configured_host.create_llm_connection(request=body)
+            )
+        except (ValueError, ApplicationError) as exc:
+            raise HTTPException(
+                status_code=_runtime_mutation_status_code(str(exc)),
+                detail=str(exc),
+            ) from exc
+
+    @app.patch(
+        "/api/runtime/v1/llm-connections/{connection_ref}",
+        response_model=RuntimeLLMConnectionSummary,
+    )
+    async def update_llm_connection(
+        request: Request,
+        connection_ref: str,
+        body: RuntimeLLMConnectionUpdateRequest,
+    ) -> RuntimeLLMConnectionSummary:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return RuntimeLLMConnectionSummary.model_validate(
+                await configured_host.update_llm_connection(connection_ref=connection_ref, request=body)
+            )
+        except (ValueError, ApplicationError) as exc:
+            detail = str(exc)
+            status_code = 404 if _is_missing_runtime_resource(detail) else _runtime_mutation_status_code(detail)
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    @app.delete("/api/runtime/v1/llm-connections/{connection_ref}")
+    async def delete_llm_connection(request: Request, connection_ref: str) -> dict[str, Any]:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return await configured_host.delete_llm_connection(connection_ref=connection_ref)
+        except (ValueError, ApplicationError) as exc:
+            detail = str(exc)
+            status_code = 404 if _is_missing_runtime_resource(detail) else _runtime_mutation_status_code(detail)
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    @app.post(
+        "/api/runtime/v1/llm-connections/{connection_ref}/test",
+        response_model=RuntimeLLMConnectionTestResponse,
+    )
+    async def test_llm_connection(
+        request: Request,
+        connection_ref: str,
+    ) -> RuntimeLLMConnectionTestResponse:
+        configured_host = await _resolve_request_host(request)
+        try:
+            return RuntimeLLMConnectionTestResponse.model_validate(
+                await configured_host.test_llm_connection(connection_ref=connection_ref)
+            )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

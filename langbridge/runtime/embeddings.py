@@ -43,7 +43,7 @@ class EmbeddingProvider:
         self._batch_size = int(self.configuration.get("embedding_batch_size", 1000))
 
     @classmethod
-    def from_llm_connection(cls, connection: Any) -> "EmbeddingProvider":
+    def from_llm_connection(cls, connection) -> "EmbeddingProvider":
         provider = getattr(connection, "provider", None)
         provider_value = getattr(provider, "value", provider)
         return cls(

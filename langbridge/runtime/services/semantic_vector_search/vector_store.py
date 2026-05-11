@@ -45,6 +45,20 @@ class SemanticVectorStoreResolver:
                 },
                 logger=self._logger,
             )
+        if target == SemanticVectorStoreTarget.MANAGED_QDRANT:
+            connector_class = self.vector_factory.get_managed_vector_db_class_reference(
+                ConnectorRuntimeType.QDRANT
+            )
+            return await connector_class.create_managed_instance(
+                {
+                    "index_name": index_metadata.vector_index_name,
+                    "host": settings.runtime_settings.MANAGED_QDRANT_HOST,
+                    "port": settings.runtime_settings.MANAGED_QDRANT_PORT,
+                    "api_key": settings.runtime_settings.MANAGED_QDRANT_API_KEY,
+                    "https": settings.runtime_settings.MANAGED_QDRANT_HTTPS,
+                },
+                logger=self._logger,
+            )
 
         connector = await self.load_connector_for_index(
             workspace_id=workspace_id,

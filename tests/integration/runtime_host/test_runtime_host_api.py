@@ -2230,6 +2230,91 @@ def test_runtime_host_api_create_endpoints_do_not_override_config_managed_resour
     assert semantic_detail.json()["managed"] is True
 
 
+def test_runtime_host_api_manages_runtime_llm_connections(
+    tmp_path: Path,
+) -> None:
+    runtime = _build_runtime(tmp_path)
+    client = TestClient(_create_runtime_app(runtime))
+
+    initial_connections = {
+        item["name"]: item
+        for item in client.get("/api/runtime/v1/llm-connections").json()["items"]
+    }
+    assert initial_connections["local_openai"]["management_mode"] == "config_managed"
+    assert initial_connections["local_openai"]["credential_state"] == "configured"
+    assert initial_connections["local_openai"]["agent_count"] == 1
+    assert "api_key" not in initial_connections["local_openai"]
+
+    duplicate = client.post(
+        "/api/runtime/v1/llm-connections",
+        json={
+            "name": "local_openai",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "api_key": "test-key",
+        },
+    )
+    assert duplicate.status_code == 409
+
+    created = client.post(
+        "/api/runtime/v1/llm-connections",
+        json={
+            "name": "runtime_openai",
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "description": "Runtime OpenAI",
+            "api_key": "runtime-key",
+            "configuration": {
+                "structured_outputs": "native",
+                "base_url": "https://api.openai.com/v1",
+            },
+            "default": True,
+        },
+    )
+    assert created.status_code == 201
+    created_payload = created.json()
+    assert created_payload["name"] == "runtime_openai"
+    assert created_payload["management_mode"] == "runtime_managed"
+    assert created_payload["credential_state"] == "configured"
+    assert created_payload["default"] is True
+    assert "api_key" not in created_payload
+
+    refreshed_connections = {
+        item["name"]: item
+        for item in client.get("/api/runtime/v1/llm-connections").json()["items"]
+    }
+    assert refreshed_connections["runtime_openai"]["default"] is True
+    assert refreshed_connections["local_openai"]["default"] is False
+
+    updated = client.patch(
+        "/api/runtime/v1/llm-connections/runtime_openai",
+        json={
+            "model": "gpt-4.1",
+            "description": "Updated runtime OpenAI",
+            "configuration": {"structured_outputs": "auto"},
+            "is_active": True,
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["model"] == "gpt-4.1"
+    assert updated.json()["description"] == "Updated runtime OpenAI"
+    assert updated.json()["configuration"]["structured_outputs"] == "auto"
+
+    config_update = client.patch(
+        "/api/runtime/v1/llm-connections/local_openai",
+        json={"model": "gpt-4.1"},
+    )
+    assert config_update.status_code == 400
+
+    config_delete = client.delete("/api/runtime/v1/llm-connections/local_openai")
+    assert config_delete.status_code == 400
+
+    deleted = client.delete("/api/runtime/v1/llm-connections/runtime_openai")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert client.get("/api/runtime/v1/llm-connections/runtime_openai").status_code == 404
+
+
 def test_runtime_host_api_updates_and_deletes_runtime_managed_resources(
     tmp_path: Path,
 ) -> None:

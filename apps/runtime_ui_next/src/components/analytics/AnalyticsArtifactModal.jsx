@@ -30,6 +30,13 @@ export function ArtifactActions({ children }) {
   return <div className="artifact-markdown-actions">{children}</div>;
 }
 
+function currentRuntimeTheme() {
+  if (typeof document === "undefined") {
+    return "light";
+  }
+  return document.querySelector(".app-shell")?.dataset?.theme || "light";
+}
+
 export async function copyArtifactText({ key, text, onCopied }) {
   const copied = await copyText(text);
   if (!copied) {
@@ -94,9 +101,15 @@ export function AnalyticsArtifactModal({
       })
     : "";
   const diagnosticsJson = artifactDiagnostics ? renderJson(artifactDiagnostics) : "";
+  const theme = currentRuntimeTheme();
 
   return createPortal(
-    <div className="artifact-modal-overlay" role="presentation" onClick={onClose}>
+    <div
+      className="artifact-modal-overlay"
+      data-theme={theme}
+      role="presentation"
+      onClick={onClose}
+    >
       <div
         className="artifact-modal-dialog"
         role="dialog"

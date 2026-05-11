@@ -88,6 +88,14 @@ class _ArtifactMarkdownLLMProvider(_FakeLLMProvider):
         return await super().acomplete(prompt, **kwargs)
 
 
+class _InvalidContextAnalysisLLMProvider(_FakeLLMProvider):
+    async def acomplete(self, prompt: str, **kwargs):
+        self.prompts.append(prompt)
+        if "Analyze verified Langbridge result data" in prompt:
+            return '["region","revenue"]'
+        return await super().acomplete(prompt, **kwargs)
+
+
 class _SqlLLMProvider(StructuredTextLLMStub):
     def __init__(self) -> None:
         self.prompts = []
@@ -624,6 +632,26 @@ def test_agent_execution_service_runs_new_ai_flow_and_persists_message() -> None
     assert result.thread.metadata["continuation_state"]["analysis_state"]["dimensions"] == ["region"]
     assert result.thread.metadata["continuation_state"]["analysis_state"]["dimension_value_samples"] == {"region": ["US"]}
     assert result.assistant_message.content["metadata"]["continuation_state"]["result"]["rows"] == [["US", 2200]]
+
+
+def test_agent_execution_service_falls_back_when_context_analysis_returns_array() -> None:
+    ids = _ids()
+    service, _message_store = _service(ids, _InvalidContextAnalysisLLMProvider())
+
+    result = _run(
+        service.execute(
+            job_id=ids.job_id,
+            request=_request(ids),
+            event_emitter=CollectingAgentEventEmitter(),
+        )
+    )
+
+    assert result.ai_run.status == "completed"
+    step_result = result.ai_run.step_results[0]
+    assert step_result["status"] == "succeeded"
+    assert step_result["output"]["result"]["rows"] == [["US", 2200]]
+    assert step_result["diagnostics"]["context_analysis_fallback"]["reason"] == "structured_output_invalid"
+    assert result.response["diagnostics"]["ai_run"]["status"] == "completed"
 
 
 def test_agent_execution_service_persists_answer_markdown_and_artifacts() -> None:

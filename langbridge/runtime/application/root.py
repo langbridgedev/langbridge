@@ -6,6 +6,7 @@ from .agents import AgentApplication
 from .connectors import ConnectorApplication
 from .datasets import DatasetApplication
 from .jobs import JobApplication
+from .llm_connections import LLMConnectionApplication
 from .semantic import SemanticApplication
 from .sql import SqlApplication
 from .threads import ThreadApplication
@@ -21,6 +22,7 @@ class ConfiguredRuntimeApplications:
     sql: SqlApplication
     jobs: JobApplication
     agents: AgentApplication
+    llm_connections: LLMConnectionApplication
     threads: ThreadApplication
     connectors: ConnectorApplication
 
@@ -32,6 +34,7 @@ def build_runtime_applications(host: "ConfiguredLocalRuntimeHost") -> Configured
         sql=SqlApplication(host),
         jobs=JobApplication(host),
         agents=AgentApplication(host),
+        llm_connections=LLMConnectionApplication(host),
         threads=ThreadApplication(host),
         connectors=ConnectorApplication(host),
     )
