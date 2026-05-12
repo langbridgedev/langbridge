@@ -393,6 +393,71 @@ def test_presentation_inlines_visualization_artifact_for_chart_follow_up() -> No
     assert artifacts_by_id["primary_visualization"]["data_ref"]["artifact_id"] == "primary_result"
 
 
+def test_presentation_promotes_follow_up_chart_plan_input_to_visualization_artifact() -> None:
+    class _PlanChartFollowUpLLMProvider(StructuredTextLLMStub):
+        async def acomplete(self, prompt: str, **kwargs):
+            assert '"chart_type": "pie"' in prompt
+            assert "primary_visualization" in prompt
+            return (
+                '{"answer_markdown":"Here is the requested pie chart.",'
+                '"artifact_ids":[],'
+                '"diagnostics":{"mode":"final"}}'
+            )
+
+    provider = _PlanChartFollowUpLLMProvider()
+    agent = PresentationAgent(
+        llm_provider=provider,
+        charting_tool=ChartingTool(llm_provider=provider),
+    )
+
+    response = _run(
+        agent.compose(
+            question="Can you show this in a pie chart?",
+            context={
+                "plan": {
+                    "steps": [
+                        {
+                            "step_id": "step-1",
+                            "input": {
+                                "agent_mode": "context_analysis",
+                                "reuse_last_result": True,
+                                "follow_up_intent": "visualize_prior_result",
+                                "follow_up_chart_type": "pie",
+                            },
+                        }
+                    ]
+                },
+                "step_results": [
+                    {
+                        "agent_name": "analyst",
+                        "output": {
+                            "analysis": "Paid Social led both requested metrics.",
+                            "result": {
+                                "columns": [
+                                    "order_channel",
+                                    "monthly_net_revenue",
+                                    "monthly_gross_margin",
+                                ],
+                                "rows": [
+                                    ["Paid Social", 9139.54, 4912.33],
+                                    ["Organic Search", 8237.29, 4651.32],
+                                    ["Affiliate", 8080.02, 4471.85],
+                                ],
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    assert "{{artifact:primary_visualization}}" in response["answer_markdown"]
+    artifacts_by_id = {artifact["id"]: artifact for artifact in response["artifacts"]}
+    assert artifacts_by_id["primary_visualization"]["payload"]["chart_type"] == "pie"
+    assert artifacts_by_id["primary_visualization"]["payload"]["x"] == "order_channel"
+    assert artifacts_by_id["primary_visualization"]["payload"]["y"] == "monthly_net_revenue"
+
+
 def test_presentation_returns_typed_chart_table_sql_and_diagnostic_artifacts() -> None:
     class _ArtifactMarkdownLLMProvider(StructuredTextLLMStub):
         async def acomplete(self, prompt: str, **kwargs):

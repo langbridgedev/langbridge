@@ -10,10 +10,12 @@ import {
 } from "../../lib/runtimeApi";
 import { getErrorMessage, getRuntimeTimestamp } from "../../lib/format";
 import {
+  AUTO_AGENT_SELECTION_VALUE,
   CHAT_STARTERS,
   RUNTIME_AGENT_MODE_OPTIONS,
   formatRelativeTime,
   formatRuntimeAgentModeLabel,
+  normalizeRuntimeAgentSelection,
   normalizeRuntimeAgentMode,
 } from "../../lib/runtimeUi";
 
@@ -50,7 +52,7 @@ export function ChatIndexPage() {
     return rightTime - leftTime;
   });
   const latestThread = sortedThreads[0] || null;
-  const [selectedAgentName, setSelectedAgentName] = useState("");
+  const [selectedAgentName, setSelectedAgentName] = useState(AUTO_AGENT_SELECTION_VALUE);
   const [selectedAgentMode, setSelectedAgentMode] = useState(getInitialAgentMode);
   const [prompt, setPrompt] = useState("");
   const [asking, setAsking] = useState(false);
@@ -71,17 +73,15 @@ export function ChatIndexPage() {
     if (agents.length === 0) {
       return;
     }
-    const hasSelectedAgent = agents.some((item) => item.name === selectedAgentName);
-    if (!selectedAgentName || !hasSelectedAgent) {
-      setSelectedAgentName(agents.find((item) => item.default)?.name || agents[0].name);
+    const normalized = normalizeRuntimeAgentSelection(selectedAgentName, agents);
+    if (normalized !== selectedAgentName) {
+      setSelectedAgentName(normalized);
     }
   }, [agents, selectedAgentName]);
 
   useEffect(() => {
     try {
-      if (selectedAgentName) {
-        window.localStorage.setItem("runtime-ask-agent", selectedAgentName);
-      }
+      window.localStorage.setItem("runtime-ask-agent", selectedAgentName);
     } catch {}
   }, [selectedAgentName]);
 
@@ -102,7 +102,7 @@ export function ChatIndexPage() {
 
   async function handleAsk(event) {
     event.preventDefault();
-    if (!selectedAgentName || !prompt.trim()) {
+    if (!prompt.trim()) {
       return;
     }
     await handleCreateThread(prompt.trim(), buildPromptTitle(prompt));
@@ -120,9 +120,7 @@ export function ChatIndexPage() {
         if (seedMessage) {
           window.sessionStorage.setItem(`runtime-thread-draft:${createdThread.id}`, seedMessage);
         }
-        if (selectedAgentName) {
-          window.localStorage.setItem(`runtime-thread-agent:${createdThread.id}`, selectedAgentName);
-        }
+        window.localStorage.setItem(`runtime-thread-agent:${createdThread.id}`, selectedAgentName);
         window.localStorage.setItem(
           `runtime-thread-agent-mode:${createdThread.id}`,
           normalizeRuntimeAgentMode(selectedAgentMode),
@@ -213,6 +211,7 @@ export function ChatIndexPage() {
                     onChange={(event) => setSelectedAgentName(event.target.value)}
                     disabled={asking || agents.length === 0}
                   >
+                    <option value={AUTO_AGENT_SELECTION_VALUE}>Auto-select</option>
                     {agents.map((item) => (
                       <option key={item.id || item.name} value={item.name}>
                         {item.name}
@@ -247,7 +246,7 @@ export function ChatIndexPage() {
                 <button
                   className="thread-composer-send chat-home-send-button"
                   type="submit"
-                  disabled={asking || !selectedAgentName || !prompt.trim()}
+                  disabled={asking || agents.length === 0 || !prompt.trim()}
                   aria-label={asking ? "Asking runtime" : "Ask runtime"}
                   title={asking ? "Asking runtime..." : "Ask runtime"}
                 >

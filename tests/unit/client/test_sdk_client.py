@@ -980,15 +980,12 @@ ai:
     - name: commerce_analyst
       llm:
         llm_connection: local_openai
-      scope:
+      data_scope:
         semantic_models: [commerce_performance]
-      prompts:
+      instructions:
         system: You are a commerce analytics agent.
-      access:
-        allowed_connectors: [commerce_demo]
-        denied_connectors: []
-      execution:
-        max_iterations: 3
+      orchestration:
+        policy: balanced_governed
 """.strip(),
         encoding="utf-8",
     )

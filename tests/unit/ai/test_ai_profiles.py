@@ -16,7 +16,7 @@ from langbridge.ai import (
     MetaControllerAgent,
     PlanReviewAction,
     build_ai_profiles_from_definition,
-    build_execution_from_definition,
+    resolve_orchestration_from_definition,
 )
 from langbridge.ai.agents import AnalystAgent
 from langbridge.ai.agents.presentation import PresentationAgent
@@ -41,13 +41,15 @@ def _analyst_config(
     return AnalystAgentConfig.model_validate(
         {
             "name": name,
-            "analyst_scope": {
+            "data_scope": {
                 "semantic_models": semantic_models or ["commerce"],
                 "datasets": datasets or ["orders"],
                 "query_policy": query_policy,
             },
-            "research_scope": {"enabled": research_enabled, "max_sources": 3},
-            "web_search_scope": {"enabled": web_search_enabled},
+            "capabilities": {
+                "research": {"enabled": research_enabled, "max_sources": 3},
+                "web_search": {"enabled": web_search_enabled},
+            },
         }
     )
 
@@ -135,35 +137,27 @@ def _presentation(llm: _FakeLLMProvider) -> PresentationAgent:
     return PresentationAgent(llm_provider=llm, charting_tool=ChartingTool(llm_provider=llm))
 
 
-def test_build_ai_profiles_from_definition_supports_legacy_tool_shape() -> None:
-    profiles = build_ai_profiles_from_definition(
-        name="commerce_analyst",
-        description="Commerce analyst",
-        definition={
-            "features": {"deep_research_enabled": True},
-            "prompt": {"system_prompt": "You are commerce analyst."},
-            "tools": [
-                {
-                    "name": "commerce_semantic_sql",
-                    "tool_type": "sql",
-                    "description": "Governed commerce semantic model.",
-                    "config": {"semantic_model_ids": ["commerce_performance"]},
-                },
-                {
-                    "name": "docs_search",
-                    "tool_type": "web_search",
-                    "config": {"provider": "duckduckgo", "allowed_domains": ["docs.langbridge.dev"]},
-                },
-            ],
-            "access_policy": {"allowed_connectors": ["commerce_warehouse"]},
-        },
-    )
-
-    assert len(profiles) == 1
-    assert profiles[0].name == "commerce_semantic_sql"
-    assert profiles[0].research_scope.enabled is True
-    assert profiles[0].web_search_scope.provider == "duckduckgo"
-    assert profiles[0].access.allowed_connectors == ["commerce_warehouse"]
+def test_build_ai_profiles_from_definition_rejects_legacy_tool_shape() -> None:
+    try:
+        build_ai_profiles_from_definition(
+            name="commerce_analyst",
+            description="Commerce analyst",
+            definition={
+                "features": {"deep_research_enabled": True},
+                "tools": [
+                    {
+                        "name": "commerce_semantic_sql",
+                        "tool_type": "sql",
+                        "description": "Governed commerce semantic model.",
+                        "config": {"semantic_model_ids": ["commerce_performance"]},
+                    }
+                ],
+            },
+        )
+    except ValueError as exc:
+        assert "data_scope" in str(exc) or "extra_forbidden" in str(exc)
+    else:
+        raise AssertionError("Legacy agent tool definitions must not be accepted.")
 
 
 def test_factory_profile_runtime_routes_to_scoped_analyst() -> None:
@@ -171,8 +165,8 @@ def test_factory_profile_runtime_routes_to_scoped_analyst() -> None:
         {
             "name": "commerce_semantic_sql",
             "description": "Commerce revenue and order analytics.",
-            "scope": {"semantic_models": ["commerce_performance"], "query_policy": "semantic_only"},
-            "execution": {"max_iterations": 4},
+            "data_scope": {"semantic_models": ["commerce_performance"], "query_policy": "semantic_only"},
+            "orchestration": {"policy": "strict_governed"},
         }
     )
     runtime = LangbridgeAIFactory(llm_provider=_FakeLLMProvider()).create_profile_runtime(profile)
@@ -214,38 +208,35 @@ def test_ai_factory_builds_meta_controller_without_runtime_wiring() -> None:
     assert run.final_result["answer_markdown"] == "Profile runtime answer.\n\n{{artifact:primary_result}}"
 
 
-def test_ai_profile_parses_alias_shape() -> None:
+def test_ai_profile_parses_runtime_schema() -> None:
     profile = AiAgentProfile.from_config(
         {
             "name": "support_analyst",
             "description": "Support ticket analyst.",
-            "scope": {"datasets": ["support_tickets"], "query_policy": "dataset_only"},
-            "research": {"enabled": True, "extended_thinking": True},
-            "web_search": {"enabled": True, "provider": "duckduckgo"},
-            "prompts": {"system": "You are support analyst.", "presentation": "Be concise."},
-            "exposure": {"runtime": True, "mcp": True},
+            "availability": {"runtime": True, "mcp": True},
+            "data_scope": {"datasets": ["support_tickets"], "query_policy": "dataset_only"},
+            "capabilities": {
+                "research": {"enabled": True, "extended_thinking": True},
+                "web_search": {"enabled": True, "provider": "duckduckgo"},
+            },
+            "instructions": {"system": "You are support analyst.", "presentation": "Be concise."},
         }
     )
 
     assert profile.available_via_runtime is True
     assert profile.available_via_mcp is True
-    assert profile.analyst_scope.datasets == ["support_tickets"]
-    assert profile.research_scope.extended_thinking_enabled is True
-    assert profile.prompts.system_prompt == "You are support analyst."
-    assert profile.prompts.presentation_prompt == "Be concise."
+    assert profile.data_scope.datasets == ["support_tickets"]
+    assert profile.capabilities.research.extended_thinking is True
+    assert profile.instructions.system == "You are support analyst."
+    assert profile.instructions.presentation == "Be concise."
 
 
-def test_profile_to_analyst_config_preserves_execution_budgets() -> None:
+def test_profile_to_analyst_config_resolves_orchestration_budgets() -> None:
     profile = AiAgentProfile.from_config(
         {
             "name": "ops_analyst",
-            "scope": {"datasets": ["ops_metrics"], "query_policy": "dataset_only"},
-            "execution": {
-                "max_evidence_rounds": 4,
-                "max_governed_attempts": 3,
-                "max_external_augmentations": 0,
-                "final_review_enabled": False,
-            },
+            "data_scope": {"datasets": ["ops_metrics"], "query_policy": "dataset_only"},
+            "orchestration": {"policy": "research_heavy"},
         }
     )
 
@@ -253,60 +244,36 @@ def test_profile_to_analyst_config_preserves_execution_budgets() -> None:
 
     assert analyst_config.max_evidence_rounds == 4
     assert analyst_config.max_governed_attempts == 3
-    assert analyst_config.max_external_augmentations == 0
-    assert analyst_config.final_review_enabled is False
+    assert analyst_config.max_external_augmentations == 3
+    assert analyst_config.final_review_enabled is True
 
 
-def test_build_execution_from_definition_aggregates_extended_execution_fields() -> None:
-    execution = build_ai_profiles_from_definition(
+def test_resolve_orchestration_from_definition_aggregates_policy_budgets() -> None:
+    aggregated = resolve_orchestration_from_definition(
         name="support_runtime",
         description="Support runtime",
         definition={
             "profiles": [
                 {
                     "name": "support_primary",
-                    "scope": {"datasets": ["support_tickets"], "query_policy": "dataset_only"},
-                    "execution": {
-                        "max_iterations": 2,
-                        "max_replans": 1,
-                        "max_step_retries": 1,
-                        "max_evidence_rounds": 3,
-                        "max_governed_attempts": 2,
-                        "max_external_augmentations": 1,
-                        "final_review_enabled": False,
-                    },
+                    "data_scope": {"datasets": ["support_tickets"], "query_policy": "dataset_only"},
+                    "orchestration": {"policy": "fast_sql"},
                 },
                 {
                     "name": "support_secondary",
-                    "scope": {"datasets": ["support_tickets"], "query_policy": "dataset_only"},
-                    "execution": {
-                        "max_iterations": 5,
-                        "max_replans": 2,
-                        "max_step_retries": 2,
-                        "max_evidence_rounds": 4,
-                        "max_governed_attempts": 3,
-                        "max_external_augmentations": 5,
-                        "final_review_enabled": True,
-                    },
+                    "data_scope": {"datasets": ["support_tickets"], "query_policy": "dataset_only"},
+                    "orchestration": {"policy": "research_heavy"},
                 },
             ]
         },
     )
 
-    aggregated = build_execution_from_definition(
-        name="support_runtime",
-        description="Support runtime",
-        definition={
-            "profiles": [profile.model_dump(mode="json") for profile in execution],
-        },
-    )
-
-    assert aggregated.max_iterations == 5
+    assert aggregated.max_iterations == 6
     assert aggregated.max_replans == 2
-    assert aggregated.max_step_retries == 2
+    assert aggregated.max_step_retries == 1
     assert aggregated.max_evidence_rounds == 4
     assert aggregated.max_governed_attempts == 3
-    assert aggregated.max_external_augmentations == 5
+    assert aggregated.max_external_augmentations == 3
     assert aggregated.final_review_enabled is True
 
 
@@ -347,9 +314,11 @@ def test_analyst_research_uses_context_sources() -> None:
         config=AnalystAgentConfig.model_validate(
             {
                 "name": "growth_research",
-                "analyst_scope": {},
-                "research_scope": {"enabled": True, "max_sources": 3, "require_sources": True},
-                "web_search_scope": {"enabled": True, "provider": "duckduckgo"},
+                "data_scope": {},
+                "capabilities": {
+                    "research": {"enabled": True, "max_sources": 3, "require_sources": True},
+                    "web_search": {"enabled": True, "provider": "duckduckgo"},
+                },
             }
         ),
     )

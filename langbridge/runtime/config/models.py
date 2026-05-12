@@ -249,42 +249,56 @@ class LocalRuntimeLLMConnectionConfig(BaseModel):
         return self
 
 
-class LocalRuntimeAiProfileAnalystScopeConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
+class LocalRuntimeAiProfileAvailabilityConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runtime: bool = Field(
+        default=True,
+        description="Whether the profile is available through the runtime API and UI.",
+    )
+    mcp: bool = Field(
+        default=False,
+        description="Whether the profile is exposed through the runtime MCP endpoint.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_availability(self) -> "LocalRuntimeAiProfileAvailabilityConfig":
+        if self.mcp and not self.runtime:
+            raise ValueError("AI profile availability cannot enable mcp when runtime is disabled.")
+        return self
+
+
+class LocalRuntimeAiProfileDataScopeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
     semantic_models: list[str] = Field(
         default_factory=list,
-        description="Semantic model ids available to the analyst for semantic scope querying.",
+        description="Semantic model names available to the agent for governed semantic querying.",
     )
     datasets: list[str] = Field(
         default_factory=list,
-        description="Dataset ids available to the analyst for dataset scope querying.",
+        description="Dataset names available to the agent for dataset-scope querying.",
     )
     query_policy: Literal["semantic_preferred", "dataset_preferred", "semantic_only", "dataset_only"] = Field(
         default="semantic_preferred",
         description="Policy that controls whether semantic or dataset scope is attempted first, or exclusively.",
     )
-    allow_source_scope: bool = Field(
-        default=False,
-        description="Allow explicit source-scope querying when expert/debug bindings add that scope.",
-    )
 
     @model_validator(mode="after")
-    def _validate_query_policy(self) -> "LocalRuntimeAiProfileAnalystScopeConfig":
+    def _validate_query_policy(self) -> "LocalRuntimeAiProfileDataScopeConfig":
         has_semantic_models = bool(self.semantic_models)
         has_datasets = bool(self.datasets)
         if self.query_policy in {"semantic_only", "semantic_preferred"} and not has_semantic_models and has_datasets:
             raise ValueError(
-                "Analyst scope with semantic-only or semantic-preferred query policy must define semantic_models."
+                "AI profile data_scope with semantic-only or semantic-preferred query policy must define semantic_models."
             )
         if self.query_policy in {"dataset_only", "dataset_preferred"} and not has_datasets and has_semantic_models:
-            raise ValueError(
-                "Analyst scope with dataset-only or dataset-preferred query policy must define datasets."
-            )
+            raise ValueError("AI profile data_scope with dataset-only or dataset-preferred query policy must define datasets.")
         return self
-            
-class LocalRuntimeAiProfileLLMScopeConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
+
+
+class LocalRuntimeAiProfileLLMConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
     llm_connection: str | None = Field(
         default=None,
@@ -297,23 +311,24 @@ class LocalRuntimeAiProfileLLMScopeConfig(BaseModel):
     max_completion_tokens: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
-    def _validate_shape(self) -> "LocalRuntimeAiProfileLLMScopeConfig":
+    def _validate_shape(self) -> "LocalRuntimeAiProfileLLMConfig":
         if str(self.llm_connection or "").strip():
             return self
         if str(self.provider or "").strip() and str(self.model or "").strip():
             return self
-        raise ValueError("AI profile llm scope must define llm_connection or provider + model.")
+        raise ValueError("AI profile llm must define llm_connection or provider + model.")
 
-class LocalRuntimeAiProfileResearchScopeConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
+
+class LocalRuntimeAiProfileResearchCapabilityConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(
         default=False,
-        description="Whether research capabilities are enabled in the research scope.",
+        description="Whether research capabilities are enabled.",
     )
-    extended_thinking_enabled: bool = Field(
+    extended_thinking: bool = Field(
         default=False,
-        description="Whether extended thinking capabilities are enabled in the research scope. Extended thinking includes capabilities that go beyond retrieval-augmented generation, such as multi-hop reasoning, iterative retrieval, and synthesis of information from multiple sources.",
+        description="Whether extended thinking is enabled for research workflows.",
     )
     max_sources: int = Field(
         default=5,
@@ -324,22 +339,13 @@ class LocalRuntimeAiProfileResearchScopeConfig(BaseModel):
         description="Whether to require at least one source for research queries. If True, research queries that do not return any sources will be considered failed.",
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_aliases(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        normalized = dict(value)
-        if normalized.get("extended_thinking_enabled") is None and normalized.get("extended_thinking") is not None:
-            normalized["extended_thinking_enabled"] = normalized.get("extended_thinking")
-        return normalized
 
-class LocalRuntimeAiProfileWebSearchScopeConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
+class LocalRuntimeAiProfileWebSearchCapabilityConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(
         default=False,
-        description="Whether web search capabilities are enabled in the research scope.",
+        description="Whether web search capabilities are enabled.",
     )
     provider: str | None = Field(
         default=None,
@@ -363,115 +369,75 @@ class LocalRuntimeAiProfileWebSearchScopeConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_web_search_policy(self) -> "LocalRuntimeAiProfileWebSearchScopeConfig":
+    def _validate_web_search_policy(self) -> "LocalRuntimeAiProfileWebSearchCapabilityConfig":
         if self.require_allowed_domain and not self.allowed_domains:
-            raise ValueError(
-                "Web search scope with require_allowed_domain must define allowed_domains."
-            )
+            raise ValueError("AI profile web_search capability with require_allowed_domain must define allowed_domains.")
         return self
 
-class LocalRuntimeAiProfilePromptsConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
-    system_prompt: str | None = Field(
+class LocalRuntimeAiProfileCapabilitiesConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_sql: bool = Field(
+        default=False,
+        description="Allow expert source-scope SQL tools when those tools are explicitly available.",
+    )
+    research: LocalRuntimeAiProfileResearchCapabilityConfig = Field(
+        default_factory=LocalRuntimeAiProfileResearchCapabilityConfig
+    )
+    web_search: LocalRuntimeAiProfileWebSearchCapabilityConfig = Field(
+        default_factory=LocalRuntimeAiProfileWebSearchCapabilityConfig
+    )
+
+
+class LocalRuntimeAiProfileInstructionsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    system: str | None = Field(
         default=None,
         description="System prompt to use for the profile. This prompt will be prepended to all queries made under the profile.",
     )
-    user_prompt: str | None = Field(
+    user: str | None = Field(
         default=None,
         description="User prompt to use for the profile. This prompt will be used as the initial prompt for all queries made under the profile, and can include instructions or examples for the analyst.",
     )
-    response_format_prompt: str | None = Field(
+    response_format: str | None = Field(
         default=None,
         description="Response format prompt to use for the profile. This prompt will be used to instruct the LLM on the desired format of the response, such as JSON or a specific schema.",
     )
-    planning_prompt: str | None = Field(default=None)
-    presentation_prompt: str | None = Field(default=None)
+    planning: str | None = Field(default=None)
+    presentation: str | None = Field(default=None)
 
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_aliases(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        normalized = dict(value)
-        aliases = {
-            "system": "system_prompt",
-            "user": "user_prompt",
-            "response_format": "response_format_prompt",
-            "planning": "planning_prompt",
-            "presentation": "presentation_prompt",
-        }
-        for source, target in aliases.items():
-            if normalized.get(target) is None and normalized.get(source) is not None:
-                normalized[target] = normalized.get(source)
-        return normalized
 
-class LocalRuntimeAiProfileAccessConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
+class LocalRuntimeAiProfileOrchestrationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    allowed_connectors: list[str] = Field(
-        default_factory=list,
-        description="List of connector names that the profile is allowed to access. If empty, the profile is allowed to access all connectors.",
-    )
-    denied_connectors: list[str] = Field(
-        default_factory=list,
-        description="List of connector names that the profile is denied access to. If empty, the profile is not denied access to any connectors.",
+    policy: Literal["balanced_governed", "fast_sql", "strict_governed", "research_heavy"] = Field(
+        default="balanced_governed",
+        description="High-level orchestration policy used to resolve internal execution budgets.",
     )
 
-
-class LocalRuntimeAiProfileExecutionConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    max_iterations: int = Field(default=3, ge=1)
-    max_replans: int = Field(default=2, ge=0)
-    max_step_retries: int = Field(default=1, ge=0)
 
 class LocalRuntimeAiProfileConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     name: str
     description: str | None = None
     default: bool = False
-    enabled: bool = True
-    mcp_enabled: bool = False
-    analyst_scope: LocalRuntimeAiProfileAnalystScopeConfig = Field(default_factory=LocalRuntimeAiProfileAnalystScopeConfig)
-    llm_scope: LocalRuntimeAiProfileLLMScopeConfig | None = None
-    research_scope: LocalRuntimeAiProfileResearchScopeConfig = Field(default_factory=LocalRuntimeAiProfileResearchScopeConfig)
-    web_search_scope: LocalRuntimeAiProfileWebSearchScopeConfig = Field(default_factory=LocalRuntimeAiProfileWebSearchScopeConfig)
-    prompts: LocalRuntimeAiProfilePromptsConfig = Field(default_factory=LocalRuntimeAiProfilePromptsConfig)
-    access: LocalRuntimeAiProfileAccessConfig = Field(default_factory=LocalRuntimeAiProfileAccessConfig)
-    execution: LocalRuntimeAiProfileExecutionConfig = Field(default_factory=LocalRuntimeAiProfileExecutionConfig)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_aliases(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        normalized = dict(value)
-        aliases = {
-            "scope": "analyst_scope",
-            "research": "research_scope",
-            "web_search": "web_search_scope",
-            "llm": "llm_scope",
-        }
-        for source, target in aliases.items():
-            if normalized.get(target) is None and normalized.get(source) is not None:
-                normalized[target] = normalized.get(source)
-        exposure = normalized.get("exposure")
-        if isinstance(exposure, dict):
-            if normalized.get("enabled") is None and exposure.get("runtime") is not None:
-                normalized["enabled"] = bool(exposure.get("runtime"))
-            if normalized.get("mcp_enabled") is None and exposure.get("mcp") is not None:
-                normalized["mcp_enabled"] = bool(exposure.get("mcp"))
-        return normalized
+    availability: LocalRuntimeAiProfileAvailabilityConfig = Field(default_factory=LocalRuntimeAiProfileAvailabilityConfig)
+    data_scope: LocalRuntimeAiProfileDataScopeConfig = Field(default_factory=LocalRuntimeAiProfileDataScopeConfig)
+    capabilities: LocalRuntimeAiProfileCapabilitiesConfig = Field(default_factory=LocalRuntimeAiProfileCapabilitiesConfig)
+    llm: LocalRuntimeAiProfileLLMConfig | None = None
+    instructions: LocalRuntimeAiProfileInstructionsConfig = Field(default_factory=LocalRuntimeAiProfileInstructionsConfig)
+    orchestration: LocalRuntimeAiProfileOrchestrationConfig = Field(
+        default_factory=LocalRuntimeAiProfileOrchestrationConfig
+    )
 
     @model_validator(mode="after")
     def _validate_runtime_shape(self) -> "LocalRuntimeAiProfileConfig":
-        has_data_scope = bool(self.analyst_scope.semantic_models or self.analyst_scope.datasets)
-        if not has_data_scope and not self.web_search_scope.enabled:
-            raise ValueError(
-                "AI profile must define analyst scope datasets/semantic models or enable web search."
-            )
+        has_data_scope = bool(self.data_scope.semantic_models or self.data_scope.datasets)
+        if not has_data_scope and not self.capabilities.web_search.enabled:
+            raise ValueError("AI profile must define data_scope datasets/semantic models or enable web_search.")
         return self
 
 

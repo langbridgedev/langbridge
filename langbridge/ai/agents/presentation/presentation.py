@@ -270,17 +270,74 @@ class PresentationAgent(AIEventSource, BaseAgent):
         context: dict[str, Any],
         *payloads: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
-        candidates = [context.get("visualization_recommendation"), context.get("recommended_visualization")]
+        candidates = [
+            context.get("visualization_recommendation"),
+            context.get("recommended_visualization"),
+        ]
         for payload in payloads:
             if isinstance(payload, dict):
                 candidates.extend(
                     payload.get(key)
                     for key in ("visualization_recommendation", "recommended_visualization")
                 )
+        candidates.append(PresentationAgent._follow_up_visualization_recommendation(context))
         for candidate in candidates:
             if isinstance(candidate, dict) and candidate:
                 return candidate
         return None
+
+    @staticmethod
+    def _follow_up_visualization_recommendation(context: dict[str, Any]) -> dict[str, Any] | None:
+        """Promote a chart follow-up plan input into the presentation chart contract."""
+
+        chart_type = PresentationAgent._follow_up_chart_type(context)
+        if not chart_type:
+            return None
+        return {
+            "recommendation": "required",
+            "should_visualize": True,
+            "chart_type": chart_type,
+            "rationale": "User requested a visualization of the prior verified result.",
+        }
+
+    @staticmethod
+    def _follow_up_chart_type(context: dict[str, Any]) -> str | None:
+        resolution = context.get("follow_up_resolution")
+        if isinstance(resolution, dict):
+            chart_type = PresentationAgent._normalize_chart_type(resolution.get("chart_type"))
+            if chart_type:
+                return chart_type
+
+        plan = context.get("plan")
+        steps = plan.get("steps") if isinstance(plan, dict) else None
+        if isinstance(steps, list):
+            for step in reversed(steps):
+                if not isinstance(step, dict):
+                    continue
+                step_input = step.get("input")
+                if not isinstance(step_input, dict):
+                    continue
+                chart_type = PresentationAgent._normalize_chart_type(step_input.get("follow_up_chart_type"))
+                if chart_type:
+                    return chart_type
+        return None
+
+    @staticmethod
+    def _normalize_chart_type(value: Any) -> str | None:
+        text = str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
+        if not text:
+            return None
+        aliases = {
+            "pie-chart": "pie",
+            "bar-chart": "bar",
+            "line-chart": "line",
+            "area-chart": "area",
+            "scatter-plot": "scatter",
+            "scatter-chart": "scatter",
+            "table-chart": "table",
+        }
+        normalized = aliases.get(text, text)
+        return normalized if normalized in {"bar", "line", "area", "scatter", "pie", "table", "stacked-bar"} else None
 
     @staticmethod
     def _recommendation_requests_no_visual(recommendation: dict[str, Any]) -> bool:

@@ -542,66 +542,63 @@ ai:
       description: Operator-focused commerce analyst for order mix, revenue, refunds, and product profitability.
       llm:
         llm_connection: self_hosted_openai
-      scope:
+      availability:
+        runtime: true
+        mcp: true
+      data_scope:
         semantic_models: [commerce_performance]
         datasets: [sales_orders, order_line_items, customer_profiles]
-      prompts:
+      capabilities:
+        source_sql: false
+        research:
+          enabled: true
+          extended_thinking: true
+          max_sources: 8
+          require_sources: false
+        web_search:
+          enabled: true
+          provider: duckduckgo
+          require_allowed_domain: false
+          max_results: 10
+          timebox_seconds: 10
+      instructions:
         system: You are a Langbridge commerce analyst embedded in a self-hosted analytics runtime.
         user: |
           Prioritize sales, margin, refunds, fulfillment region, and product mix analysis.
           Stay inside the commerce domain unless the user explicitly asks for customer segmentation context.
           When comparing periods, point out the main operational driver behind the change.
         presentation: Explain tradeoffs between efficiency and scale, and separate proven findings from inference. Please format all numbers with commas and no decimal places unless the number is less than 1,000. And with the currency (which is GBP)
-      research:
-        enabled: true
-        extended_thinking: true
-        max_sources: 8
-        require_sources: false
-
-      web_search:
-        enabled: true
-        provider: duckduckgo
-        require_allowed_domain: false
-        max_results: 10
-        timebox_seconds: 10
-      exposure:
-        runtime: true
-        mcp: true
-      access:
-        allowed_connectors: [commerce_warehouse, growth_warehouse]
-        denied_connectors: [planning_files]
-      execution:
-        max_iterations: 10
+      orchestration:
+        policy: research_heavy
 
     - name: growth_analyst
       description: Growth and customer operations analyst for acquisition, spend efficiency, and lifecycle conversion.
       llm:
         llm_connection: self_hosted_openai
-      scope:
+      availability:
+        runtime: true
+        mcp: true
+      data_scope:
         semantic_models: [growth_performance]
         datasets: [customer_month_revenue, campaign_attribution, channel_spend_targets, customer_month_support, customer_profiles]
         query_policy: semantic_preferred
-      research:
-        enabled: true
-      web_search:
-        enabled: true
-        provider: duckduckgo
-        allowed_domains: [shopify.com, stripe.com, nrf.com, census.gov]
-        require_allowed_domain: true
-        max_results: 5
-        timebox_seconds: 10
-      prompts:
+      capabilities:
+        source_sql: false
+        research:
+          enabled: true
+        web_search:
+          enabled: true
+          provider: duckduckgo
+          allowed_domains: [shopify.com, stripe.com, nrf.com, census.gov]
+          require_allowed_domain: true
+          max_results: 5
+          timebox_seconds: 10
+      instructions:
         system: You are a Langbridge growth analyst embedded in a self-hosted analytics runtime.
         user: |
           Focus on campaign efficiency, influenced pipeline, segment performance, customer conversion, and support burden.
           Prefer the growth semantic model for governed answers and fall back to scoped dataset SQL only when needed.
           Treat spend, pipeline, and revenue as one joined story and call out data grain when it matters.
         presentation: Explain tradeoffs between efficiency and scale, and separate proven findings from inference. Please format all numbers with commas and no decimal places unless the number is less than 1,000. Please add the curreny symbol (which is £) to all revenue and spend figures.
-      exposure:
-        runtime: true
-        mcp: true
-      access:
-        allowed_connectors: [commerce_warehouse, growth_warehouse, planning_files]
-        denied_connectors: []
-      execution:
-        max_iterations: 4
+      orchestration:
+        policy: balanced_governed

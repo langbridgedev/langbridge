@@ -3,16 +3,18 @@ import { normalizeRuntimeAgentMode } from "../../lib/runtimeUi.js";
 export function normalizeAgentWorkspace(resourceOrPayload = {}) {
   const raw = resourceOrPayload?.rawPayload || resourceOrPayload || {};
   const definition = objectValue(raw.definition);
-  const analystScope = objectValue(definition.analyst_scope || raw.analyst_scope);
-  const prompts = normalizePrompts(definition.prompts || raw.prompts, raw.instructions);
-  const llmScope = objectValue(definition.llm_scope || raw.llm_scope);
-  const execution = objectValue(definition.execution || raw.execution);
-  const researchScope = objectValue(definition.research_scope || raw.research_scope);
-  const webSearchScope = objectValue(definition.web_search_scope || raw.web_search_scope);
-  const access = objectValue(definition.access || raw.access);
+  const availability = objectValue(definition.availability || raw.availability);
+  const dataScope = objectValue(definition.data_scope || raw.data_scope);
+  const capabilities = objectValue(definition.capabilities || raw.capabilities);
+  const research = objectValue(capabilities.research);
+  const webSearch = objectValue(capabilities.web_search);
+  const instructions = objectValue(definition.instructions || raw.instructions);
+  const llm = objectValue(definition.llm || raw.llm);
+  const orchestration = objectValue(definition.orchestration || raw.orchestration);
+  const effectiveAccess = objectValue(definition.effective_access || raw.effective_access);
   const tools = toArray(raw.tools || definition.tools);
-  const semanticModels = toStringList(raw.semantic_models || analystScope.semantic_models);
-  const datasets = toStringList(raw.datasets || analystScope.datasets);
+  const semanticModels = toStringList(raw.semantic_models || dataScope.semantic_models);
+  const datasets = toStringList(raw.datasets || dataScope.datasets);
 
   return {
     id: String(raw.id || resourceOrPayload?.id || ""),
@@ -21,46 +23,52 @@ export function normalizeAgentWorkspace(resourceOrPayload = {}) {
     status: raw.default ? "Default" : "Ready",
     default: Boolean(raw.default),
     management: resourceOrPayload?.management || "config_managed",
-    llm: {
-      connection: stringValue(raw.llm_connection || llmScope.llm_connection),
-      provider: stringValue(llmScope.provider),
-      model: stringValue(llmScope.model),
-      temperature: numberOrNull(llmScope.temperature),
-      reasoningEffort: stringValue(llmScope.reasoning_effort),
-      maxCompletionTokens: numberOrNull(llmScope.max_completion_tokens),
+    availability: {
+      runtime: availability.runtime !== false,
+      mcp: Boolean(availability.mcp),
     },
-    analystScope: {
+    llm: {
+      connection: stringValue(raw.llm_connection || llm.llm_connection),
+      provider: stringValue(llm.provider),
+      model: stringValue(llm.model),
+      temperature: numberOrNull(llm.temperature),
+      reasoningEffort: stringValue(llm.reasoning_effort),
+      maxCompletionTokens: numberOrNull(llm.max_completion_tokens),
+    },
+    dataScope: {
       semanticModels,
       datasets,
-      queryPolicy: stringValue(analystScope.query_policy || "semantic_preferred"),
-      allowSourceScope: Boolean(analystScope.allow_source_scope),
+      queryPolicy: stringValue(dataScope.query_policy || "semantic_preferred"),
     },
-    prompts,
-    execution: {
-      maxIterations: numberOrNull(execution.max_iterations),
-      maxReplans: numberOrNull(execution.max_replans),
-      maxStepRetries: numberOrNull(execution.max_step_retries),
-      maxEvidenceRounds: numberOrNull(execution.max_evidence_rounds),
-      maxGovernedAttempts: numberOrNull(execution.max_governed_attempts),
-      finalReviewEnabled: execution.final_review_enabled,
+    capabilities: {
+      sourceSql: Boolean(capabilities.source_sql),
+      research: {
+        enabled: Boolean(research.enabled),
+        extendedThinking: Boolean(research.extended_thinking),
+        maxSources: numberOrNull(research.max_sources),
+        requireSources: Boolean(research.require_sources),
+      },
+      webSearch: {
+        enabled: Boolean(webSearch.enabled),
+        provider: stringValue(webSearch.provider),
+        allowedDomains: toStringList(webSearch.allowed_domains),
+        requireAllowedDomain: Boolean(webSearch.require_allowed_domain),
+        maxResults: numberOrNull(webSearch.max_results),
+        timeboxSeconds: numberOrNull(webSearch.timebox_seconds),
+      },
     },
-    research: {
-      enabled: Boolean(researchScope.enabled),
-      extendedThinking: Boolean(researchScope.extended_thinking_enabled ?? researchScope.extended_thinking),
-      maxSources: numberOrNull(researchScope.max_sources),
-      requireSources: Boolean(researchScope.require_sources),
+    instructions: {
+      system: stringValue(instructions.system),
+      user: stringValue(instructions.user || raw.instructions),
+      planning: stringValue(instructions.planning),
+      presentation: stringValue(instructions.presentation),
+      responseFormat: stringValue(instructions.response_format),
     },
-    webSearch: {
-      enabled: Boolean(webSearchScope.enabled),
-      provider: stringValue(webSearchScope.provider),
-      allowedDomains: toStringList(webSearchScope.allowed_domains),
-      requireAllowedDomain: Boolean(webSearchScope.require_allowed_domain),
-      maxResults: numberOrNull(webSearchScope.max_results),
-      timeboxSeconds: numberOrNull(webSearchScope.timebox_seconds),
+    orchestration: {
+      policy: stringValue(orchestration.policy || "balanced_governed"),
     },
-    access: {
-      allowedConnectors: toStringList(access.allowed_connectors),
-      deniedConnectors: toStringList(access.denied_connectors),
+    effectiveAccess: {
+      connectors: toStringList(effectiveAccess.connectors),
     },
     tools: tools.map(normalizeTool),
     raw,
@@ -90,21 +98,15 @@ export function buildAgentTestPayload({ agent, message, agentMode = "auto", titl
 export function agentWorkspaceStats(agent) {
   const model = normalizeAgentWorkspace(agent);
   return {
-    semanticModels: model.analystScope.semanticModels.length,
-    datasets: model.analystScope.datasets.length,
-    tools: model.tools.length,
-    prompts: Object.values(model.prompts).filter(Boolean).length,
-  };
-}
-
-function normalizePrompts(value, fallbackUserPrompt = "") {
-  const prompts = objectValue(value);
-  return {
-    system: stringValue(prompts.system_prompt || prompts.system),
-    user: stringValue(prompts.user_prompt || prompts.user || fallbackUserPrompt),
-    planning: stringValue(prompts.planning_prompt || prompts.planning),
-    presentation: stringValue(prompts.presentation_prompt || prompts.presentation),
-    responseFormat: stringValue(prompts.response_format_prompt || prompts.response_format),
+    semanticModels: model.dataScope.semanticModels.length,
+    datasets: model.dataScope.datasets.length,
+    capabilities: [
+      model.capabilities.sourceSql,
+      model.capabilities.research.enabled,
+      model.capabilities.webSearch.enabled,
+      model.availability.mcp,
+    ].filter(Boolean).length,
+    instructions: Object.values(model.instructions).filter(Boolean).length,
   };
 }
 
@@ -115,7 +117,7 @@ function normalizeTool(tool) {
   return {
     name: stringValue(tool.name || tool.label || tool.id || tool.tool_name || "tool"),
     description: stringValue(tool.description),
-    kind: stringValue(tool.kind || tool.type || tool.task_kind),
+    kind: stringValue(tool.kind || tool.type || tool.task_kind || tool.tool_type),
   };
 }
 

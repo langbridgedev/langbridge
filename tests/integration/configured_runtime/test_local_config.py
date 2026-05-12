@@ -84,20 +84,17 @@ ai:
   profiles:
     - name: analyst
       default: true
-      scope:
+      data_scope:
         semantic_models: [commerce]
         query_policy: semantic_only
       llm:
         llm_connection: local_openai
-      prompts:
+      instructions:
         system: You are a local analytics agent.
         user: Answer analytical questions.
         presentation: Keep answers concise and clearly grounded in query results.
-      access:
-        allowed_connectors: [local_demo]
-        denied_connectors: []
-      execution:
-        max_iterations: 3
+      orchestration:
+        policy: balanced_governed
 """.strip(),
         encoding="utf-8",
     )
@@ -1260,7 +1257,7 @@ ai:
   profiles:
     - name: analyst
       default: true
-      scope:
+      data_scope:
         semantic_models: [commerce]
         query_policy: semantic_only
       llm:
@@ -1336,7 +1333,7 @@ ai:
   profiles:
     - name: analyst
       default: true
-      scope:
+      data_scope:
         semantic_models: [commerce]
         query_policy: semantic_only
       llm:
@@ -1432,27 +1429,17 @@ ai:
   profiles:
     - name: analyst
       default: true
-      scope:
+      data_scope:
         semantic_models: [commerce, customers_model]
         datasets: [orders, customers]
         query_policy: semantic_preferred
       llm:
         llm_connection: local_openai
-      prompts:
+      instructions:
         system: You are a local analytics agent.
         presentation: Keep answers concise and clearly grounded in query results.
-      access:
-        allowed_connectors: [local_demo]
-        denied_connectors: []
-      execution:
-        max_iterations: 3
-      guardrails:
-        moderation_enabled: true
-      observability:
-        log_level: info
-        emit_traces: false
-        capture_prompts: false
-        audit_fields: []
+      orchestration:
+        policy: balanced_governed
 """.strip(),
             encoding="utf-8",
         )
@@ -1463,7 +1450,7 @@ ai:
     datasets = runtime._datasets
     connector_id = str(runtime._connectors["local_demo"].id)
 
-    assert definition["analyst_scope"] == {
+    assert definition["data_scope"] == {
         "semantic_models": [
             str(semantic_models["commerce"].id),
             str(semantic_models["customers_model"].id),
@@ -1473,12 +1460,8 @@ ai:
             str(datasets["customers"].id),
         ],
         "query_policy": "semantic_preferred",
-        "allow_source_scope": False,
     }
-    assert definition["access"] == {
-        "allowed_connectors": [connector_id],
-        "denied_connectors": [],
-    }
+    assert definition["effective_access"] == {"connectors": [connector_id]}
 
 
 def test_build_configured_local_runtime_builds_agents_from_ai_profiles() -> None:
@@ -1534,26 +1517,26 @@ ai:
     - name: commerce_agent
       description: Commerce analyst
       default: true
-      scope:
+      availability:
+        runtime: true
+        mcp: true
+      data_scope:
         semantic_models: [commerce]
         datasets: [orders]
         query_policy: semantic_preferred
       llm:
         llm_connection: local_openai
-      research:
-        enabled: true
-      web_search:
-        enabled: true
-        provider: duckduckgo
-      prompts:
+      capabilities:
+        research:
+          enabled: true
+        web_search:
+          enabled: true
+          provider: duckduckgo
+      instructions:
         system: You are commerce analyst.
         presentation: Keep answers concise.
-      access:
-        allowed_connectors: [local_demo]
-      execution:
-        max_iterations: 4
-        max_replans: 3
-        max_step_retries: 2
+      orchestration:
+        policy: research_heavy
 """.strip(),
             encoding="utf-8",
         )
@@ -1566,24 +1549,17 @@ ai:
 
     assert runtime._default_agent is not None
     assert runtime._default_agent.config.name == "commerce_agent"
-    assert definition["analyst_scope"] == {
+    assert definition["availability"] == {"runtime": True, "mcp": True}
+    assert definition["data_scope"] == {
         "semantic_models": [semantic_model_id],
         "datasets": [dataset_id],
         "query_policy": "semantic_preferred",
-        "allow_source_scope": False,
     }
-    assert definition["web_search_scope"]["provider"] == "duckduckgo"
-    assert definition["prompts"]["system_prompt"] == "You are commerce analyst."
-    assert definition["prompts"]["presentation_prompt"] == "Keep answers concise."
-    assert definition["access"] == {
-        "allowed_connectors": [connector_id],
-        "denied_connectors": [],
-    }
-    assert definition["execution"] == {
-        "max_iterations": 4,
-        "max_replans": 3,
-        "max_step_retries": 2,
-    }
+    assert definition["capabilities"]["web_search"]["provider"] == "duckduckgo"
+    assert definition["instructions"]["system"] == "You are commerce analyst."
+    assert definition["instructions"]["presentation"] == "Keep answers concise."
+    assert definition["effective_access"] == {"connectors": [connector_id]}
+    assert definition["orchestration"] == {"policy": "research_heavy"}
 
 
 def test_build_configured_local_runtime_supports_file_backed_datasets() -> None:

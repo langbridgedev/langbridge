@@ -19,31 +19,36 @@ test("normalizeAgentWorkspace reads detailed analyst setup", () => {
     instructions: "Prefer semantic models first.",
     tools: [{ name: "commerce_sql", description: "Run governed SQL" }],
     definition: {
-      llm_scope: {
+      llm: {
         model: "gpt-5.4",
         reasoning_effort: "medium",
       },
-      analyst_scope: {
+      availability: {
+        runtime: true,
+        mcp: true,
+      },
+      data_scope: {
         query_policy: "semantic_only",
-        allow_source_scope: true,
       },
-      prompts: {
-        system_prompt: "You are an analyst.",
-        presentation_prompt: "Keep answers concise.",
+      capabilities: {
+        source_sql: true,
+        research: {
+          enabled: false,
+        },
+        web_search: {
+          enabled: true,
+          allowed_domains: ["example.com"],
+        },
       },
-      execution: {
-        max_iterations: 4,
-        max_replans: 2,
+      instructions: {
+        system: "You are an analyst.",
+        presentation: "Keep answers concise.",
       },
-      research_scope: {
-        enabled: false,
+      orchestration: {
+        policy: "strict_governed",
       },
-      web_search_scope: {
-        enabled: true,
-        allowed_domains: ["example.com"],
-      },
-      access: {
-        allowed_connectors: ["warehouse"],
+      effective_access: {
+        connectors: ["warehouse"],
       },
     },
   });
@@ -52,15 +57,16 @@ test("normalizeAgentWorkspace reads detailed analyst setup", () => {
   assert.equal(agent.default, true);
   assert.equal(agent.llm.connection, "local_openai");
   assert.equal(agent.llm.model, "gpt-5.4");
-  assert.equal(agent.analystScope.queryPolicy, "semantic_only");
-  assert.equal(agent.analystScope.allowSourceScope, true);
-  assert.deepEqual(agent.analystScope.semanticModels, ["commerce_performance"]);
-  assert.deepEqual(agent.analystScope.datasets, ["sales_orders"]);
-  assert.equal(agent.prompts.user, "Prefer semantic models first.");
-  assert.equal(agent.prompts.system, "You are an analyst.");
-  assert.equal(agent.execution.maxIterations, 4);
-  assert.deepEqual(agent.webSearch.allowedDomains, ["example.com"]);
-  assert.deepEqual(agent.access.allowedConnectors, ["warehouse"]);
+  assert.equal(agent.availability.mcp, true);
+  assert.equal(agent.dataScope.queryPolicy, "semantic_only");
+  assert.deepEqual(agent.dataScope.semanticModels, ["commerce_performance"]);
+  assert.deepEqual(agent.dataScope.datasets, ["sales_orders"]);
+  assert.equal(agent.capabilities.sourceSql, true);
+  assert.equal(agent.instructions.user, "Prefer semantic models first.");
+  assert.equal(agent.instructions.system, "You are an analyst.");
+  assert.equal(agent.orchestration.policy, "strict_governed");
+  assert.deepEqual(agent.capabilities.webSearch.allowedDomains, ["example.com"]);
+  assert.deepEqual(agent.effectiveAccess.connectors, ["warehouse"]);
   assert.equal(agent.tools[0].name, "commerce_sql");
 });
 
@@ -71,9 +77,9 @@ test("normalizeAgentWorkspace tolerates summary-only payloads", () => {
   });
 
   assert.equal(agent.name, "summary_agent");
-  assert.equal(agent.analystScope.queryPolicy, "semantic_preferred");
-  assert.deepEqual(agent.analystScope.semanticModels, []);
-  assert.equal(agent.prompts.user, "");
+  assert.equal(agent.dataScope.queryPolicy, "semantic_preferred");
+  assert.deepEqual(agent.dataScope.semanticModels, []);
+  assert.equal(agent.instructions.user, "");
 });
 
 test("buildAgentTestPayload creates ask API payloads", () => {
@@ -121,8 +127,8 @@ test("agentWorkspaceStats counts visible setup sections", () => {
     {
       semanticModels: 1,
       datasets: 2,
-      tools: 1,
-      prompts: 1,
+      capabilities: 0,
+      instructions: 1,
     },
   );
 });

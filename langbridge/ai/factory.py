@@ -8,7 +8,7 @@ from langbridge.ai.base import BaseAgent
 from langbridge.ai.events import AIEventEmitter
 from langbridge.ai.llm.base import LLMProvider
 from langbridge.ai.orchestration.meta_controller import MetaControllerAgent
-from langbridge.ai.profiles import AiAgentExecutionConfig, AiAgentProfile, AnalystAgentConfig
+from langbridge.ai.profiles import AiAgentProfile, AnalystAgentConfig, ResolvedAgentOrchestrationConfig
 from langbridge.ai.registry import AgentRegistry
 from langbridge.ai.tools.charting import ChartingTool
 from langbridge.ai.tools.semantic_search import SemanticSearchTool
@@ -84,13 +84,13 @@ class LangbridgeAIFactory:
         self,
         profile: AiAgentProfile | Sequence[AiAgentProfile],
         *,
-        execution: AiAgentExecutionConfig | None = None,
+        orchestration: ResolvedAgentOrchestrationConfig | None = None,
         sql_analysis_tools: Mapping[str, list[SqlAnalysisTool]] | None = None,
         semantic_search_tools: Mapping[str, list[SemanticSearchTool]] | None = None,
         web_search_providers: Mapping[str, WebSearchProvider] | None = None,
     ) -> AiProfileRuntime:
         profiles = [profile] if isinstance(profile, AiAgentProfile) else list(profile)
-        resolved_execution = execution or AiAgentExecutionConfig()
+        resolved_orchestration = orchestration or ResolvedAgentOrchestrationConfig()
         bundles = [
             AnalystToolBundle(
                 config=item.to_analyst_config(),
@@ -126,10 +126,10 @@ class LangbridgeAIFactory:
                 charting_tool=ChartingTool(llm_provider=self._llm, event_emitter=self._event_emitter),
                 event_emitter=self._event_emitter,
             ),
-            final_review_enabled=resolved_execution.final_review_enabled,
-            max_iterations=resolved_execution.max_iterations,
-            max_replans=resolved_execution.max_replans,
-            max_step_retries=resolved_execution.max_step_retries,
+            final_review_enabled=resolved_orchestration.final_review_enabled,
+            max_iterations=resolved_orchestration.max_iterations,
+            max_replans=resolved_orchestration.max_replans,
+            max_step_retries=resolved_orchestration.max_step_retries,
             event_emitter=self._event_emitter,
         )
         return AiProfileRuntime(

@@ -486,8 +486,8 @@ function normalizeAgent(item) {
   const name = item.name || item.id || "agent";
   const agent = normalizeAgentWorkspace(item);
   const toolLabels = agent.tools.map((tool) => tool.name).filter(Boolean);
-  const semanticModels = agent.analystScope.semanticModels;
-  const datasets = agent.analystScope.datasets;
+  const semanticModels = agent.dataScope.semanticModels;
+  const datasets = agent.dataScope.datasets;
   return {
     id: stableId(item, name),
     ref: item.id || name,
@@ -502,9 +502,10 @@ function normalizeAgent(item) {
     lastUpdated: "Live",
     runtimeState: compactRows([
       ["LLM connection", agent.llm.connection || agent.llm.model],
-      ["Query policy", agent.analystScope.queryPolicy],
+      ["Query policy", agent.dataScope.queryPolicy],
       ["Semantic models", semanticModels.length],
       ["Datasets", datasets.length],
+      ["Orchestration", agent.orchestration.policy],
       ["Tools", item.tool_count ?? agent.tools.length],
       ["Default", yesNo(item.default)],
     ]),
@@ -512,7 +513,8 @@ function normalizeAgent(item) {
       ["Name", name],
       ["Description", item.description],
       ["LLM", agent.llm.connection || [agent.llm.provider, agent.llm.model].filter(Boolean).join(" ")],
-      ["Query policy", agent.analystScope.queryPolicy],
+      ["Query policy", agent.dataScope.queryPolicy],
+      ["Availability", agent.availability.mcp ? "Runtime + MCP" : "Runtime"],
       ["Tools", toolLabels.join(", ")],
     ]),
     relationships: compactList([
@@ -526,7 +528,7 @@ function normalizeAgent(item) {
       Definition: item.definition || {},
       "Semantic models": semanticModels,
       Datasets: datasets,
-      Instructions: agent.prompts.user || "n/a",
+      Instructions: agent.instructions.user || "n/a",
     },
   };
 }

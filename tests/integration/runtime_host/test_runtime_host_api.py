@@ -115,22 +115,18 @@ ai:
   profiles:
     - name: commerce_analyst
       default: true
-      scope:
+      availability:
+        runtime: true
+        mcp: true
+      data_scope:
         semantic_models: [commerce_performance]
         query_policy: semantic_only
       llm:
         llm_connection: local_openai
-      prompts:
+      instructions:
         system: You are a commerce analytics agent.
-      access:
-        allowed_connectors: [commerce_demo]
-        denied_connectors: []
-      execution:
-        max_iterations: 3
-        log_level: info
-        emit_traces: false
-        capture_prompts: false
-        audit_fields: []
+      orchestration:
+        policy: balanced_governed
 """.strip(),
         encoding="utf-8",
     )
@@ -769,7 +765,15 @@ def test_runtime_host_api_returns_500_for_unexpected_agent_errors(
     app = _create_runtime_app(runtime)
     client = TestClient(app)
 
-    async def _boom(self, *, prompt: str, agent_name: str | None = None, thread_id=None, title=None):  # type: ignore[no-untyped-def]
+    async def _boom(  # type: ignore[no-untyped-def]
+        self,
+        *,
+        prompt: str,
+        agent_name: str | None = None,
+        agent_selection: str | None = None,
+        thread_id=None,
+        title=None,
+    ):
         raise RuntimeError("'NoneType' object is not callable")
 
     monkeypatch.setattr(ConfiguredLocalRuntimeHost, "ask_agent", _boom)
@@ -2985,7 +2989,10 @@ def test_runtime_host_api_exposes_semantic_models_agents_and_threads(tmp_path: P
     agents = client.get("/api/runtime/v1/agents")
     assert agents.status_code == 200
     assert agents.json()["total"] == 1
-    agent_id = agents.json()["items"][0]["id"]
+    agent_summary = agents.json()["items"][0]
+    agent_id = agent_summary["id"]
+    assert agent_summary["data_scope"]["semantic_models"] == ["commerce_performance"]
+    assert agent_summary["effective_access"]["connectors"]
 
     agent = client.get(f"/api/runtime/v1/agents/{agent_id}")
     assert agent.status_code == 200

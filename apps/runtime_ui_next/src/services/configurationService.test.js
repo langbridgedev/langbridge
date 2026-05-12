@@ -78,6 +78,7 @@ test("listConfigurationResources normalizes analyst agent setup", async () => {
       ["Query policy", "semantic_only"],
       ["Semantic models", "1"],
       ["Datasets", "1"],
+      ["Orchestration", "balanced_governed"],
       ["Tools", "1"],
       ["Default", "Yes"],
     ]);
@@ -93,7 +94,7 @@ test("listConfigurationResources normalizes analyst agent setup", async () => {
         datasets: ["sales_orders"],
         tools: [{ name: "commerce_sql" }],
         definition: {
-          analyst_scope: {
+          data_scope: {
             query_policy: "semantic_only",
           },
         },

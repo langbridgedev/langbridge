@@ -20,6 +20,34 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def _analyst_config(
+    *,
+    name: str = "commerce",
+    semantic_models: list[str] | None = None,
+    query_policy: str = "semantic_preferred",
+    research: dict | None = None,
+    web_search: dict | None = None,
+    orchestration_policy: str = "balanced_governed",
+) -> AnalystAgentConfig:
+    capabilities: dict[str, object] = {}
+    if research is not None:
+        capabilities["research"] = research
+    if web_search is not None:
+        capabilities["web_search"] = web_search
+    payload: dict[str, object] = {
+        "name": name,
+        "data_scope": {
+            "semantic_models": semantic_models or ["commerce"],
+            "datasets": ["orders"],
+            "query_policy": query_policy,
+        },
+        "orchestration": {"policy": orchestration_policy},
+    }
+    if capabilities:
+        payload["capabilities"] = capabilities
+    return AnalystAgentConfig.model_validate(payload)
+
+
 class _FakeLLMProvider(StructuredTextLLMStub):
     async def acomplete(self, prompt: str, **kwargs):
         if "Choose the single best SQL analysis tool" in prompt:
@@ -514,16 +542,7 @@ def _empty_dataset_response() -> AnalystQueryResponse:
 def test_analyst_falls_back_from_semantic_to_dataset_scope() -> None:
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "semantic_preferred",
-                },
-            }
-        ),
+        config=_analyst_config(query_policy="semantic_preferred"),
         sql_analysis_tools=[
             _FakeSqlTool(
                 name="semantic-orders",
@@ -565,16 +584,7 @@ def test_analyst_falls_back_from_semantic_to_dataset_scope() -> None:
 def test_analyst_falls_back_from_semantic_to_dataset_scope_when_literal_filter_error_is_only_in_text() -> None:
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "semantic_preferred",
-                },
-            }
-        ),
+        config=_analyst_config(query_policy="semantic_preferred"),
         sql_analysis_tools=[
             _FakeSqlTool(
                 name="semantic-orders",
@@ -613,17 +623,10 @@ def test_analyst_falls_back_from_semantic_to_dataset_scope_when_literal_filter_e
 def test_analyst_sql_can_augment_with_web_sources() -> None:
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-                "research_scope": {"enabled": True},
-                "web_search_scope": {"enabled": True},
-            }
+        config=_analyst_config(
+            query_policy="dataset_preferred",
+            research={"enabled": True},
+            web_search={"enabled": True},
         ),
         sql_analysis_tools=[
             _FakeSqlTool(
@@ -663,18 +666,11 @@ def test_analyst_sql_can_augment_with_web_sources() -> None:
 def test_analyst_sql_respects_external_augmentation_budget() -> None:
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-                "research_scope": {"enabled": True},
-                "web_search_scope": {"enabled": True},
-                "execution": {"max_external_augmentations": 0},
-            }
+        config=_analyst_config(
+            query_policy="dataset_preferred",
+            research={"enabled": True},
+            web_search={"enabled": True},
+            orchestration_policy="strict_governed",
         ),
         sql_analysis_tools=[
             _FakeSqlTool(
@@ -713,16 +709,7 @@ def test_analyst_sql_respects_external_augmentation_budget() -> None:
 def test_analyst_sql_empty_result_marks_weak_evidence() -> None:
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-            }
-        ),
+        config=_analyst_config(query_policy="dataset_preferred"),
         sql_analysis_tools=[
             _FakeSqlTool(
                 name="dataset-orders",
@@ -762,16 +749,7 @@ def test_analyst_resolves_identifier_before_metric_query() -> None:
     )
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "semantic_preferred",
-                },
-            }
-        ),
+        config=_analyst_config(query_policy="semantic_preferred"),
         sql_analysis_tools=[tool],
     )
 
@@ -806,16 +784,7 @@ def test_analyst_entity_resolution_trusts_identifier_when_name_mismatches() -> N
     )
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "semantic_preferred",
-                },
-            }
-        ),
+        config=_analyst_config(query_policy="semantic_preferred"),
         sql_analysis_tools=[tool],
     )
 
@@ -857,16 +826,7 @@ def test_analyst_entity_resolution_accepts_multiple_rows_for_same_identifier() -
     )
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "semantic_preferred",
-                },
-            }
-        ),
+        config=_analyst_config(query_policy="semantic_preferred"),
         sql_analysis_tools=[tool],
     )
 
@@ -908,16 +868,7 @@ def test_analyst_entity_resolution_follow_up_all_retries_prior_ambiguity() -> No
     )
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "semantic_preferred",
-                },
-            }
-        ),
+        config=_analyst_config(query_policy="semantic_preferred"),
         sql_analysis_tools=[tool],
     )
 
@@ -959,16 +910,7 @@ def test_analyst_entity_resolution_clarifies_unknown_identifier() -> None:
     )
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "semantic_preferred",
-                },
-            }
-        ),
+        config=_analyst_config(query_policy="semantic_preferred"),
         sql_analysis_tools=[tool],
     )
 
@@ -998,17 +940,7 @@ def test_analyst_research_reuses_resolved_entity_for_governed_round() -> None:
     )
     agent = AnalystAgent(
         llm_provider=_EntityResearchLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "semantic_preferred",
-                },
-                "research_scope": {"enabled": True},
-            }
-        ),
+        config=_analyst_config(query_policy="semantic_preferred", research={"enabled": True}),
         sql_analysis_tools=[tool],
     )
 
@@ -1045,20 +977,12 @@ def test_analyst_research_resolves_name_only_entity_and_uses_performance_playboo
     )
     agent = AnalystAgent(
         llm_provider=_PerformanceExplanationLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "product_performance",
-                "analyst_scope": {
-                    "semantic_models": ["product_performance"],
-                    "datasets": ["orders"],
-                    "query_policy": "semantic_preferred",
-                },
-                "research_scope": {"enabled": True},
-                "execution": {
-                    "max_governed_attempts": 3,
-                    "max_evidence_rounds": 3,
-                },
-            }
+        config=_analyst_config(
+            name="product_performance",
+            semantic_models=["product_performance"],
+            query_policy="semantic_preferred",
+            research={"enabled": True},
+            orchestration_policy="research_heavy",
         ),
         sql_analysis_tools=[tool],
     )
@@ -1104,20 +1028,7 @@ def test_analyst_sql_retries_with_alternative_governed_tool_before_clarifying() 
     )
     agent = AnalystAgent(
         llm_provider=_AlternativeGovernedLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-                "execution": {
-                    "max_governed_attempts": 2,
-                    "max_evidence_rounds": 2,
-                },
-            }
-        ),
+        config=_analyst_config(query_policy="dataset_preferred", orchestration_policy="balanced_governed"),
         sql_analysis_tools=[dataset_tool, semantic_tool],
     )
 
@@ -1157,20 +1068,7 @@ def test_analyst_sql_respects_governed_attempt_budget_before_clarifying() -> Non
     )
     agent = AnalystAgent(
         llm_provider=_AlternativeGovernedLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-                "execution": {
-                    "max_governed_attempts": 2,
-                    "max_evidence_rounds": 1,
-                },
-            }
-        ),
+        config=_analyst_config(query_policy="dataset_preferred", orchestration_policy="fast_sql"),
         sql_analysis_tools=[dataset_tool, semantic_tool],
     )
 
@@ -1201,17 +1099,10 @@ def test_analyst_research_mode_uses_governed_seed_before_external_sources() -> N
     )
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-                "research_scope": {"enabled": True, "max_sources": 3},
-                "web_search_scope": {"enabled": True},
-            }
+        config=_analyst_config(
+            query_policy="dataset_preferred",
+            research={"enabled": True, "max_sources": 3},
+            web_search={"enabled": True},
         ),
         sql_analysis_tools=[dataset_tool],
     )
@@ -1257,16 +1148,9 @@ def test_analyst_research_mode_allows_governed_only_evidence_when_sources_requir
     )
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-                "research_scope": {"enabled": True, "require_sources": True},
-            }
+        config=_analyst_config(
+            query_policy="dataset_preferred",
+            research={"enabled": True, "require_sources": True},
         ),
         sql_analysis_tools=[dataset_tool],
     )
@@ -1303,17 +1187,7 @@ def test_analyst_research_mode_still_seeds_governed_sql_when_context_result_is_e
     )
     agent = AnalystAgent(
         llm_provider=_FakeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-                "research_scope": {"enabled": True},
-            }
-        ),
+        config=_analyst_config(query_policy="dataset_preferred", research={"enabled": True}),
         sql_analysis_tools=[dataset_tool],
     )
 
@@ -1345,16 +1219,7 @@ def test_analyst_sql_uses_detailed_prompt_for_evidence_heavy_questions() -> None
     )
     agent = AnalystAgent(
         llm_provider=_DetailedAnswerLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-            }
-        ),
+        config=_analyst_config(query_policy="dataset_preferred"),
         sql_analysis_tools=[dataset_tool],
     )
 
@@ -1383,16 +1248,7 @@ def test_analyst_treats_relationship_question_as_detailed() -> None:
     )
     agent = AnalystAgent(
         llm_provider=_DetailedAnswerLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-            }
-        ),
+        config=_analyst_config(query_policy="dataset_preferred"),
         sql_analysis_tools=[dataset_tool],
     )
 
@@ -1420,17 +1276,7 @@ def test_analyst_auto_mode_chooses_sql_for_straightforward_governed_question() -
     )
     agent = AnalystAgent(
         llm_provider=_AutoModeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "commerce",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-                "research_scope": {"enabled": True},
-            }
-        ),
+        config=_analyst_config(query_policy="dataset_preferred", research={"enabled": True}),
         sql_analysis_tools=[dataset_tool],
     )
 
@@ -1460,20 +1306,11 @@ def test_analyst_auto_mode_research_runs_multiple_governed_rounds_before_synthes
     )
     agent = AnalystAgent(
         llm_provider=_AutoModeLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "growth",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-                "research_scope": {"enabled": True},
-                "execution": {
-                    "max_governed_attempts": 3,
-                    "max_evidence_rounds": 3,
-                },
-            }
+        config=_analyst_config(
+            name="growth",
+            query_policy="dataset_preferred",
+            research={"enabled": True},
+            orchestration_policy="research_heavy",
         ),
         sql_analysis_tools=[dataset_tool],
     )
@@ -1519,20 +1356,11 @@ def test_analyst_research_defers_metric_timeframe_clarification_until_after_gove
     )
     agent = AnalystAgent(
         llm_provider=_OverClarifyingResearchLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "growth",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-                "research_scope": {"enabled": True},
-                "execution": {
-                    "max_governed_attempts": 2,
-                    "max_evidence_rounds": 2,
-                },
-            }
+        config=_analyst_config(
+            name="growth",
+            query_policy="dataset_preferred",
+            research={"enabled": True},
+            orchestration_policy="balanced_governed",
         ),
         sql_analysis_tools=[dataset_tool],
     )
@@ -1564,20 +1392,11 @@ def test_analyst_auto_mode_defers_internal_format_clarification_until_after_gove
     )
     agent = AnalystAgent(
         llm_provider=_OverClarifyingModeSelectionLLMProvider(),
-        config=AnalystAgentConfig.model_validate(
-            {
-                "name": "growth",
-                "analyst_scope": {
-                    "semantic_models": ["commerce"],
-                    "datasets": ["orders"],
-                    "query_policy": "dataset_preferred",
-                },
-                "research_scope": {"enabled": True},
-                "execution": {
-                    "max_governed_attempts": 2,
-                    "max_evidence_rounds": 2,
-                },
-            }
+        config=_analyst_config(
+            name="growth",
+            query_policy="dataset_preferred",
+            research={"enabled": True},
+            orchestration_policy="balanced_governed",
         ),
         sql_analysis_tools=[dataset_tool],
     )

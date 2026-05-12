@@ -13,7 +13,7 @@ import { createThread, fetchAgent, fetchAgents } from "../lib/runtimeApi";
 import { formatList, formatValue, getErrorMessage } from "../lib/format";
 import {
   buildItemRef,
-  readAgentAllowedConnectors,
+  readAgentEffectiveConnectors,
   readAgentFeatureFlags,
   readAgentSystemPrompt,
   renderJson,
@@ -52,7 +52,7 @@ export function AgentsPage() {
   const [detailError, setDetailError] = useState("");
   const totalTools = agents.reduce((sum, item) => sum + Number(item.tool_count || 0), 0);
   const enabledFeatureFlags = readAgentFeatureFlags(detail);
-  const allowedConnectors = readAgentAllowedConnectors(detail);
+  const effectiveConnectors = readAgentEffectiveConnectors(detail);
   const systemPrompt = readAgentSystemPrompt(detail);
 
   useEffect(() => {
@@ -121,7 +121,7 @@ export function AgentsPage() {
               <span className="chip">{formatValue(agents.length)} agents</span>
               <span className="chip">{formatValue(totalTools)} tools</span>
               <span className="chip">{formatValue(detail?.tools?.length || 0)} selected tools</span>
-              <span className="chip">{formatValue(allowedConnectors.length)} allowed connectors</span>
+              <span className="chip">{formatValue(effectiveConnectors.length)} effective connectors</span>
             </div>
           </div>
         </div>
@@ -219,7 +219,7 @@ export function AgentsPage() {
               </Panel>
 
               <section className="summary-grid">
-                <Panel title="Prompt and execution" eyebrow="Behavior">
+                <Panel title="Instructions and orchestration" eyebrow="Behavior">
                   {detail ? (
                     <>
                       <div className="callout">
@@ -229,20 +229,20 @@ export function AgentsPage() {
                       <DetailList
                         items={[
                           {
-                            label: "Execution mode",
-                            value: formatValue(detail.definition?.execution?.mode),
+                            label: "Orchestration policy",
+                            value: formatValue(detail.definition?.orchestration?.policy),
                           },
                           {
-                            label: "Response mode",
-                            value: formatValue(detail.definition?.execution?.response_mode),
+                            label: "Runtime availability",
+                            value: formatValue(detail.definition?.availability?.runtime),
                           },
                           {
-                            label: "Max iterations",
-                            value: formatValue(detail.definition?.execution?.max_iterations),
+                            label: "MCP availability",
+                            value: formatValue(detail.definition?.availability?.mcp),
                           },
                           {
-                            label: "Output format",
-                            value: formatValue(detail.definition?.output?.format),
+                            label: "Source SQL",
+                            value: formatValue(detail.definition?.capabilities?.source_sql),
                           },
                         ]}
                       />
@@ -255,7 +255,7 @@ export function AgentsPage() {
                   )}
                 </Panel>
 
-                <Panel title="Access policy" eyebrow="Guardrails">
+                <Panel title="Effective access" eyebrow="Derived">
                   {detail ? (
                     <>
                       {enabledFeatureFlags.length > 0 ? (
@@ -269,26 +269,16 @@ export function AgentsPage() {
                       ) : null}
                       <DetailList
                         items={[
-                          { label: "Allowed connectors", value: formatList(allowedConnectors) },
-                          {
-                            label: "Denied connectors",
-                            value: formatList(detail.definition?.access_policy?.denied_connectors),
-                          },
-                          {
-                            label: "Moderation enabled",
-                            value: formatValue(detail.definition?.guardrails?.moderation_enabled),
-                          },
-                          {
-                            label: "Parallel tools",
-                            value: formatValue(detail.definition?.execution?.allow_parallel_tools),
-                          },
+                          { label: "Connectors", value: formatList(effectiveConnectors) },
+                          { label: "Source SQL", value: formatValue(detail.definition?.capabilities?.source_sql) },
+                          { label: "Orchestration", value: formatValue(detail.definition?.orchestration?.policy) },
                         ]}
                       />
                     </>
                   ) : (
                     <PageEmpty
                       title="No policy detail"
-                      message="Select an agent to inspect access policy."
+                      message="Select an agent to inspect derived data access."
                     />
                   )}
                 </Panel>
@@ -323,10 +313,10 @@ export function AgentsPage() {
                       </small>
                     </article>
                     <article className="detail-card">
-                      <strong>Connector access</strong>
+                      <strong>Effective access</strong>
                       <span>
-                        {allowedConnectors.length > 0
-                          ? allowedConnectors.join(", ")
+                        {effectiveConnectors.length > 0
+                          ? effectiveConnectors.join(", ")
                           : "Unspecified"}
                       </span>
                       <small>

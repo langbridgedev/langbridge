@@ -83,28 +83,12 @@ ai:
     - name: commerce_analyst
       llm:
         llm_connection: local_openai
-      scope:
+      data_scope:
         semantic_models: [commerce_performance]
-      prompts:
+      instructions:
         system: You are a commerce analytics agent.
-      access_policy:
-        allowed_connectors: [commerce_demo]
-        denied_connectors: []
-      execution:
-        mode: iterative
-        response_mode: analyst
-        max_iterations: 3
-        max_steps_per_iteration: 5
-        allow_parallel_tools: false
-      output:
-        format: markdown
-      guardrails:
-        moderation_enabled: true
-      observability:
-        log_level: info
-        emit_traces: false
-        capture_prompts: false
-        audit_fields: []
+      orchestration:
+        policy: balanced_governed
 """.strip(),
         encoding="utf-8",
     )

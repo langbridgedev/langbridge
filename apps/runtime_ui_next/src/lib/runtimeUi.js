@@ -3,6 +3,7 @@ import { parseRuntimeDate, getRuntimeTimestamp } from "./format.js";
 export const SQL_HISTORY_STORAGE_KEY = "langbridge.runtime_ui.sql_history";
 export const SQL_SAVED_STORAGE_KEY = "langbridge.runtime_ui.sql_saved";
 export const DASHBOARD_BUILDER_STORAGE_KEY = "langbridge.runtime_ui_next.dashboard_builder";
+export const AUTO_AGENT_SELECTION_VALUE = "__auto__";
 
 export const CHAT_STARTERS = [
   "What changed recently in this runtime, and where should I focus first?",
@@ -53,6 +54,43 @@ export function formatRuntimeAgentModeLabel(value) {
     RUNTIME_AGENT_MODE_OPTIONS.find((item) => item.value === normalized)?.label ||
     "Auto"
   );
+}
+
+export function isAutoAgentSelection(value) {
+  const normalized = String(value || "").trim();
+  return !normalized || normalized === AUTO_AGENT_SELECTION_VALUE;
+}
+
+export function normalizeRuntimeAgentSelection(value, agents = []) {
+  const normalized = String(value || "").trim();
+  if (isAutoAgentSelection(normalized)) {
+    return AUTO_AGENT_SELECTION_VALUE;
+  }
+  return Array.isArray(agents) && agents.some((item) => item?.name === normalized)
+    ? normalized
+    : AUTO_AGENT_SELECTION_VALUE;
+}
+
+export function formatRuntimeAgentSelectionLabel(value) {
+  return isAutoAgentSelection(value) ? "Auto-select" : String(value || "").trim();
+}
+
+export function buildRuntimeAgentRunPayload({
+  message,
+  selectedAgentName,
+  threadId,
+  agentMode,
+}) {
+  const payload = {
+    message,
+    agent_selection: isAutoAgentSelection(selectedAgentName) ? "auto" : "pinned",
+    thread_id: threadId,
+    agent_mode: normalizeRuntimeAgentMode(agentMode),
+  };
+  if (payload.agent_selection === "pinned") {
+    payload.agent_name = String(selectedAgentName || "").trim();
+  }
+  return payload;
 }
 
 export async function copyTextToClipboard(value) {
@@ -600,6 +638,7 @@ export function deriveRuntimeResultState({
   diagnostics,
   errorMessage,
   errorStatus,
+  answerMarkdown = "",
 }) {
   const normalizedResult = result ? normalizeTabularResult(result) : null;
   const normalizedVisualization = normalizeVisualizationSpec(visualization);
@@ -607,6 +646,7 @@ export function deriveRuntimeResultState({
   const rowCount = Number(normalizedResult?.rowCount ?? normalizedResult?.rows?.length ?? 0);
   const hasRows = rowCount > 0;
   const hasChart = hasRenderableVisualization(normalizedVisualization);
+  const hasAnswerMarkdown = typeof answerMarkdown === "string" && answerMarkdown.trim().length > 0;
   const message =
     String(
       errorMessage ||
@@ -782,6 +822,18 @@ export function deriveRuntimeResultState({
         : "The runtime returned tabular rows for this request.",
       showChart: hasChart,
       showTable: Boolean(normalizedResult),
+    };
+  }
+
+  if (hasAnswerMarkdown) {
+    return {
+      kind: "success_answer",
+      tone: "info",
+      label: "Completed",
+      title: "Answer returned",
+      description: "",
+      showChart: false,
+      showTable: false,
     };
   }
 
@@ -1019,26 +1071,28 @@ export function buildConversationTurns(messages, agents) {
 
 export function readAgentSystemPrompt(detail) {
   return (
-    detail?.definition?.prompt?.system_prompt ||
-    detail?.definition?.prompt?.systemPrompt ||
-    detail?.definition?.system_prompt ||
+    detail?.definition?.instructions?.system ||
     detail?.system_prompt ||
     ""
   );
 }
 
 export function readAgentFeatureFlags(detail) {
-  const features = detail?.definition?.features;
-  if (!features || typeof features !== "object") {
+  const capabilities = detail?.definition?.capabilities;
+  if (!capabilities || typeof capabilities !== "object") {
     return [];
   }
-  return Object.entries(features)
+  return Object.entries({
+    source_sql: capabilities.source_sql,
+    research: capabilities.research?.enabled,
+    web_search: capabilities.web_search?.enabled,
+  })
     .filter(([, enabled]) => Boolean(enabled))
     .map(([name]) => name.replaceAll("_", " "));
 }
 
-export function readAgentAllowedConnectors(detail) {
-  const connectors = detail?.definition?.access_policy?.allowed_connectors;
+export function readAgentEffectiveConnectors(detail) {
+  const connectors = detail?.definition?.effective_access?.connectors;
   return Array.isArray(connectors) ? connectors : [];
 }
 

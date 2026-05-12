@@ -1,6 +1,6 @@
 from datetime import datetime
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, field_serializer, field_validator, model_validator
 
@@ -526,6 +526,7 @@ class RuntimeAgentRunRequest(RuntimeRequestModel):
     message: str = Field(..., min_length=1)
     agent_id: uuid.UUID | None = None
     agent_name: str | None = None
+    agent_selection: Literal["auto", "pinned"] | None = None
     thread_id: uuid.UUID | None = None
     title: str | None = None
     agent_mode: str | None = None
@@ -539,6 +540,7 @@ class RuntimeAgentRunResponse(RuntimeModel):
     job_type: str
     message_id: uuid.UUID
     agent_name: str | None = None
+    agent_selection: Literal["auto", "pinned"] | None = None
     stream_path: str
 
 

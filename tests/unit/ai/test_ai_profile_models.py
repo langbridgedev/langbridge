@@ -1,40 +1,49 @@
 import pytest
 
 from langbridge.ai.profiles import AiAgentProfile, AnalystAgentConfig, build_analyst_configs_from_definition
-from langbridge.runtime.config.models import LocalRuntimeConfig, LocalRuntimeAiProfileConfig
+from langbridge.runtime.config.models import LocalRuntimeAiProfileConfig, LocalRuntimeConfig
 
 
-def test_ai_agent_profile_from_config_parses_simple_shape() -> None:
+def test_ai_agent_profile_from_config_parses_runtime_schema() -> None:
     profile = AiAgentProfile.from_config(
         {
             "name": "commerce",
             "description": "Commerce analyst",
             "default": True,
-            "enabled": True,
-            "mcp_enabled": True,
-            "analyst_scope": {
+            "availability": {"runtime": True, "mcp": True},
+            "data_scope": {
                 "semantic_models": ["commerce"],
                 "datasets": ["sales_orders"],
                 "query_policy": "semantic_preferred",
             },
-            "llm_scope": {"llm_connection": "openai_primary"},
-            "research_scope": {"enabled": True, "extended_thinking_enabled": True},
-            "web_search_scope": {
-                "enabled": True,
-                "provider": "tavily",
-                "allowed_domains": ["docs.langbridge.dev"],
-                "require_allowed_domain": True,
+            "llm": {"llm_connection": "openai_primary"},
+            "capabilities": {
+                "source_sql": True,
+                "research": {"enabled": True, "extended_thinking": True},
+                "web_search": {
+                    "enabled": True,
+                    "provider": "tavily",
+                    "allowed_domains": ["docs.langbridge.dev"],
+                    "require_allowed_domain": True,
+                },
             },
-            "prompts": {"system_prompt": "You are commerce analyst."},
-            "access": {"allowed_connectors": ["warehouse"]},
+            "instructions": {"system": "You are commerce analyst."},
+            "orchestration": {"policy": "strict_governed"},
+            "effective_access": {"connectors": ["warehouse"]},
         }
     )
 
     assert profile.name == "commerce"
-    assert profile.llm_scope is not None
-    assert profile.llm_scope.llm_connection == "openai_primary"
+    assert profile.llm is not None
+    assert profile.llm.llm_connection == "openai_primary"
     assert profile.available_via_runtime is True
     assert profile.available_via_mcp is True
+    assert profile.data_scope.semantic_models == ["commerce"]
+    assert profile.capabilities.source_sql is True
+    assert profile.capabilities.research.extended_thinking is True
+    assert profile.instructions.system == "You are commerce analyst."
+    assert profile.orchestration.policy == "strict_governed"
+    assert profile.effective_access.connectors == ["warehouse"]
 
 
 def test_ai_agent_profile_rejects_invalid_web_search_policy() -> None:
@@ -42,20 +51,32 @@ def test_ai_agent_profile_rejects_invalid_web_search_policy() -> None:
         AiAgentProfile.from_config(
             {
                 "name": "research",
-                "analyst_scope": {"datasets": ["docs_dataset"], "query_policy": "dataset_only"},
-                "web_search_scope": {
-                    "enabled": True,
-                    "require_allowed_domain": True,
+                "data_scope": {"datasets": ["docs_dataset"], "query_policy": "dataset_only"},
+                "capabilities": {
+                    "web_search": {
+                        "enabled": True,
+                        "require_allowed_domain": True,
+                    },
                 },
             }
         )
 
 
-def test_local_runtime_ai_profile_config_validates_scope() -> None:
+def test_ai_agent_profile_rejects_legacy_contract_keys() -> None:
+    with pytest.raises(ValueError):
+        AiAgentProfile.from_config(
+            {
+                "name": "legacy",
+                "scope": {"datasets": ["tickets"], "query_policy": "dataset_only"},
+            }
+        )
+
+
+def test_local_runtime_ai_profile_config_validates_data_scope() -> None:
     profile = LocalRuntimeAiProfileConfig.model_validate(
         {
             "name": "support",
-            "analyst_scope": {
+            "data_scope": {
                 "datasets": ["tickets"],
                 "query_policy": "dataset_only",
             },
@@ -63,7 +84,7 @@ def test_local_runtime_ai_profile_config_validates_scope() -> None:
     )
 
     assert profile.name == "support"
-    assert profile.analyst_scope.datasets == ["tickets"]
+    assert profile.data_scope.datasets == ["tickets"]
 
 
 def test_local_runtime_config_parses_ai_profiles_root() -> None:
@@ -75,12 +96,12 @@ def test_local_runtime_config_parses_ai_profiles_root() -> None:
                     {
                         "name": "commerce",
                         "default": True,
-                        "mcp_enabled": True,
-                        "analyst_scope": {
+                        "availability": {"runtime": True, "mcp": True},
+                        "data_scope": {
                             "semantic_models": ["commerce"],
                             "query_policy": "semantic_only",
                         },
-                        "llm_scope": {"llm_connection": "openai_primary"},
+                        "llm": {"llm_connection": "openai_primary"},
                     }
                 ]
             },
@@ -89,7 +110,7 @@ def test_local_runtime_config_parses_ai_profiles_root() -> None:
 
     assert len(config.ai.profiles) == 1
     assert config.ai.profiles[0].name == "commerce"
-    assert config.ai.profiles[0].mcp_enabled is True
+    assert config.ai.profiles[0].availability.mcp is True
 
 
 def test_analyst_agent_config_from_profile_keeps_narrow_shape() -> None:
@@ -97,19 +118,21 @@ def test_analyst_agent_config_from_profile_keeps_narrow_shape() -> None:
         {
             "name": "commerce",
             "description": "Commerce analyst",
-            "analyst_scope": {
+            "data_scope": {
                 "semantic_models": ["commerce"],
                 "datasets": ["sales_orders"],
                 "query_policy": "semantic_preferred",
             },
-            "research_scope": {"enabled": True, "max_sources": 8},
-            "web_search_scope": {
-                "enabled": True,
-                "provider": "tavily",
-                "allowed_domains": ["docs.langbridge.dev"],
+            "capabilities": {
+                "research": {"enabled": True, "max_sources": 8},
+                "web_search": {
+                    "enabled": True,
+                    "provider": "tavily",
+                    "allowed_domains": ["docs.langbridge.dev"],
+                },
             },
-            "prompts": {"system_prompt": "You are commerce analyst."},
-            "access": {"allowed_connectors": ["warehouse"]},
+            "instructions": {"system": "You are commerce analyst."},
+            "effective_access": {"connectors": ["warehouse"]},
         }
     )
 
@@ -117,26 +140,28 @@ def test_analyst_agent_config_from_profile_keeps_narrow_shape() -> None:
 
     assert analyst_config.name == "commerce"
     assert analyst_config.agent_name == "analyst.commerce"
-    assert analyst_config.analyst_scope.semantic_models == ["commerce"]
-    assert analyst_config.research_scope.max_sources == 8
-    assert analyst_config.web_search_scope.provider == "tavily"
-    assert analyst_config.prompts.system_prompt == "You are commerce analyst."
-    assert analyst_config.access.allowed_connectors == ["warehouse"]
+    assert analyst_config.data_scope.semantic_models == ["commerce"]
+    assert analyst_config.capabilities.research.max_sources == 8
+    assert analyst_config.capabilities.web_search.provider == "tavily"
+    assert analyst_config.instructions.system == "You are commerce analyst."
+    assert analyst_config.effective_access.connectors == ["warehouse"]
 
 
-def test_build_analyst_configs_from_definition_supports_simple_ai_shape() -> None:
+def test_build_analyst_configs_from_definition_supports_runtime_ai_shape() -> None:
     configs = build_analyst_configs_from_definition(
         name="commerce",
         description="Commerce analyst",
         definition={
-            "analyst_scope": {
+            "data_scope": {
                 "semantic_models": ["commerce"],
                 "datasets": ["orders"],
                 "query_policy": "semantic_preferred",
             },
-            "research_scope": {"enabled": True},
-            "web_search_scope": {"enabled": True, "provider": "duckduckgo"},
-            "prompts": {"system_prompt": "Use governed revenue definitions."},
+            "capabilities": {
+                "research": {"enabled": True},
+                "web_search": {"enabled": True, "provider": "duckduckgo"},
+            },
+            "instructions": {"system": "Use governed revenue definitions."},
         },
     )
 

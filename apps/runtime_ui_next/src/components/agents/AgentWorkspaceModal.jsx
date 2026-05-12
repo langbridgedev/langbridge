@@ -131,23 +131,28 @@ function AgentOverview({ agent }) {
     },
     {
       label: "Query policy",
-      value: labelize(agent.analystScope.queryPolicy),
-      detail: agent.analystScope.allowSourceScope ? "Source scope allowed" : "Governed scopes only",
+      value: labelize(agent.dataScope.queryPolicy),
+      detail: agent.capabilities.sourceSql ? "Source SQL enabled" : "Governed scopes only",
     },
     {
       label: "Semantic models",
-      value: String(agent.analystScope.semanticModels.length),
-      detail: firstOrFallback(agent.analystScope.semanticModels, "No semantic model scope"),
+      value: String(agent.dataScope.semanticModels.length),
+      detail: firstOrFallback(agent.dataScope.semanticModels, "No semantic model scope"),
     },
     {
       label: "Datasets",
-      value: String(agent.analystScope.datasets.length),
-      detail: firstOrFallback(agent.analystScope.datasets, "No dataset scope"),
+      value: String(agent.dataScope.datasets.length),
+      detail: firstOrFallback(agent.dataScope.datasets, "No dataset scope"),
     },
     {
-      label: "Tools",
-      value: String(agent.tools.length),
-      detail: firstOrFallback(agent.tools.map((tool) => tool.name), "No tools advertised"),
+      label: "Availability",
+      value: agent.availability.mcp ? "Runtime + MCP" : "Runtime",
+      detail: agent.availability.runtime ? "Available to users" : "Disabled",
+    },
+    {
+      label: "Orchestration",
+      value: labelize(agent.orchestration.policy),
+      detail: "Runtime-managed policy",
     },
     {
       label: "Status",
@@ -203,32 +208,31 @@ function AnalystSetup({ agent }) {
         <AgentDetailBlock title="Query behavior">
           <DefinitionRows
             rows={[
-              ["Query policy", labelize(agent.analystScope.queryPolicy)],
-              ["Source scope", agent.analystScope.allowSourceScope ? "Allowed" : "Disabled"],
-              ["Research", agent.research.enabled ? "Enabled" : "Disabled"],
-              ["Web search", agent.webSearch.enabled ? "Enabled" : "Disabled"],
+              ["Query policy", labelize(agent.dataScope.queryPolicy)],
+              ["Source SQL", agent.capabilities.sourceSql ? "Enabled" : "Disabled"],
+              ["Research", agent.capabilities.research.enabled ? "Enabled" : "Disabled"],
+              ["Web search", agent.capabilities.webSearch.enabled ? "Enabled" : "Disabled"],
             ]}
           />
         </AgentDetailBlock>
-        <AgentDetailBlock title="Execution limits">
+        <AgentDetailBlock title="Availability">
           <DefinitionRows
             rows={[
-              ["Max iterations", agent.execution.maxIterations ?? "n/a"],
-              ["Max replans", agent.execution.maxReplans ?? "n/a"],
-              ["Max step retries", agent.execution.maxStepRetries ?? "n/a"],
-              ["Evidence rounds", agent.execution.maxEvidenceRounds ?? "n/a"],
-              ["Governed attempts", agent.execution.maxGovernedAttempts ?? "n/a"],
+              ["Runtime", agent.availability.runtime ? "Enabled" : "Disabled"],
+              ["MCP", agent.availability.mcp ? "Enabled" : "Disabled"],
+              ["Orchestration", labelize(agent.orchestration.policy)],
+              ["Effective connectors", agent.effectiveAccess.connectors.length],
             ]}
           />
         </AgentDetailBlock>
       </div>
 
       <AgentDetailBlock title="Semantic model scope">
-        <PillList items={agent.analystScope.semanticModels} empty="No semantic models configured." />
+        <PillList items={agent.dataScope.semanticModels} empty="No semantic models configured." />
       </AgentDetailBlock>
 
       <AgentDetailBlock title="Dataset scope">
-        <PillList items={agent.analystScope.datasets} empty="No datasets configured." />
+        <PillList items={agent.dataScope.datasets} empty="No datasets configured." />
       </AgentDetailBlock>
 
       <AgentDetailBlock title="Tools">
@@ -246,34 +250,25 @@ function AnalystSetup({ agent }) {
         )}
       </AgentDetailBlock>
 
-      <AgentDetailBlock title="Connector access">
-        <div className="agent-access-grid">
-          <div>
-            <strong>Allowed</strong>
-            <PillList items={agent.access.allowedConnectors} empty="All connectors unless denied." />
-          </div>
-          <div>
-            <strong>Denied</strong>
-            <PillList items={agent.access.deniedConnectors} empty="No denied connectors." />
-          </div>
-        </div>
+      <AgentDetailBlock title="Effective data access">
+        <PillList items={agent.effectiveAccess.connectors} empty="No connector access derived from this profile." />
       </AgentDetailBlock>
     </div>
   );
 }
 
 function InstructionPanel({ agent }) {
-  const prompts = [
-    ["System", agent.prompts.system],
-    ["User", agent.prompts.user],
-    ["Planning", agent.prompts.planning],
-    ["Presentation", agent.prompts.presentation],
-    ["Response format", agent.prompts.responseFormat],
+  const instructions = [
+    ["System", agent.instructions.system],
+    ["User", agent.instructions.user],
+    ["Planning", agent.instructions.planning],
+    ["Presentation", agent.instructions.presentation],
+    ["Response format", agent.instructions.responseFormat],
   ];
 
   return (
     <div className="config-resource-detail">
-      {prompts.map(([label, value]) => (
+      {instructions.map(([label, value]) => (
         <PromptBlock key={label} label={label} value={value} />
       ))}
     </div>

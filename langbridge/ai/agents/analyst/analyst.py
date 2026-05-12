@@ -315,13 +315,12 @@ class AnalystAgent(AIEventSource, BaseAgent):
                     "semantic_models": self._config.semantic_model_ids,
                     "datasets": self._config.dataset_ids,
                     "query_policy": self._config.query_policy,
-                    "allow_source_scope": self._config.allow_source_scope,
+                    "source_sql_enabled": self._config.source_sql_enabled,
                     "research_enabled": self._config.supports_research,
                     "extended_thinking_enabled": self._config.supports_extended_thinking,
                     "web_search_enabled": self._config.web_search_enabled,
                     "web_search_allowed_domains": self._config.web_search_allowed_domains,
-                    "allowed_connectors": list(self._config.access.allowed_connectors),
-                    "denied_connectors": list(self._config.access.denied_connectors),
+                    "effective_connectors": list(self._config.effective_access.connectors),
                 },
                 "supported_modes": [mode.value for mode in self._supported_modes()],
             },
@@ -332,7 +331,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
         return PresentationGuidance.from_prompt(
             profile_name=self._config.name,
             agent_name=self._config.agent_name,
-            prompt=self._config.prompts.presentation_prompt,
+            prompt=self._config.instructions.presentation,
         )
 
     async def execute(self, task: AgentTask) -> AgentResult:
@@ -2378,7 +2377,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
             tool
             for tool in self._sql_tools
             if tool.query_scope == SqlQueryScope.dataset
-            or (self._config.allow_source_scope and tool.query_scope == SqlQueryScope.source)
+            or (self._config.source_sql_enabled and tool.query_scope == SqlQueryScope.source)
         ]
         if self._config.query_policy == "semantic_only":
             return semantic_tools
@@ -2399,7 +2398,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
             if tool is not current_tool
             and (
                 tool.query_scope == SqlQueryScope.dataset
-                or (self._config.allow_source_scope and tool.query_scope == SqlQueryScope.source)
+                or (self._config.source_sql_enabled and tool.query_scope == SqlQueryScope.source)
             )
         ]
 
@@ -3441,12 +3440,12 @@ class AnalystAgent(AIEventSource, BaseAgent):
 
     def _prompt(self, base_prompt: str) -> str:
         sections = [base_prompt.strip()]
-        if self._config.prompts.system_prompt:
-            sections.append(f"Analyst system guidance:\n{self._config.prompts.system_prompt.strip()}")
-        if self._config.prompts.user_prompt:
-            sections.append(f"Analyst execution guidance:\n{self._config.prompts.user_prompt.strip()}")
-        if self._config.prompts.response_format_prompt:
-            sections.append(f"Analyst response format guidance:\n{self._config.prompts.response_format_prompt.strip()}")
+        if self._config.instructions.system:
+            sections.append(f"Analyst system guidance:\n{self._config.instructions.system.strip()}")
+        if self._config.instructions.user:
+            sections.append(f"Analyst execution guidance:\n{self._config.instructions.user.strip()}")
+        if self._config.instructions.response_format:
+            sections.append(f"Analyst response format guidance:\n{self._config.instructions.response_format.strip()}")
         return "\n\n".join(section for section in sections if section)
 
     @staticmethod

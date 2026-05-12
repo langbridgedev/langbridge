@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -32,6 +32,8 @@ class PreparedAgentRun:
     thread: RuntimeThread
     user_message: RuntimeThreadMessage
     job_id: uuid.UUID
+    agent_selection: str = "pinned"
+    candidate_agent_ids: list[uuid.UUID] = field(default_factory=list)
     created_thread: bool = False
 
 
@@ -62,6 +64,7 @@ class AgentApplication:
         *,
         prompt: str,
         agent_name: str | None = None,
+        agent_selection: str | None = None,
         thread_id: uuid.UUID | None = None,
         title: str | None = None,
         agent_mode: str | None = None,
@@ -71,6 +74,7 @@ class AgentApplication:
         prepared = await self._prepare_agent_run(
             prompt=prompt,
             agent_name=agent_name,
+            agent_selection=agent_selection,
             thread_id=thread_id,
             title=title,
             agent_mode=agent_mode,
@@ -128,6 +132,7 @@ class AgentApplication:
         *,
         prompt: str,
         agent_name: str | None = None,
+        agent_selection: str | None = None,
         thread_id: uuid.UUID | None = None,
         title: str | None = None,
         agent_mode: str | None = None,
@@ -136,6 +141,7 @@ class AgentApplication:
         prepared = await self._prepare_agent_run(
             prompt=prompt,
             agent_name=agent_name,
+            agent_selection=agent_selection,
             thread_id=thread_id,
             title=title,
             agent_mode=agent_mode,
@@ -206,6 +212,7 @@ class AgentApplication:
         *,
         prompt: str,
         agent_name: str | None = None,
+        agent_selection: str | None = None,
         thread_id: uuid.UUID | None = None,
         title: str | None = None,
         agent_mode: str | None = None,
@@ -215,6 +222,7 @@ class AgentApplication:
         prepared = await self._prepare_agent_run(
             prompt=prompt,
             agent_name=agent_name,
+            agent_selection=agent_selection,
             thread_id=thread_id,
             title=title,
             agent_mode=agent_mode,
@@ -229,7 +237,10 @@ class AgentApplication:
             "job_type": AGENT_RUN_JOB_TYPE,
             "thread_id": prepared.thread.id,
             "message_id": prepared.user_message.id,
-            "agent_name": getattr(prepared.agent.config, "name", None),
+            "agent_name": getattr(prepared.agent.config, "name", None)
+            if prepared.agent_selection == "pinned"
+            else None,
+            "agent_selection": prepared.agent_selection,
             "stream_path": f"/api/runtime/v1/jobs/{prepared.job_id}/stream",
         }
 
@@ -297,6 +308,9 @@ class AgentApplication:
         for name, record in self._host._agents.items():
             definition = dict(record.agent_definition.definition or {})
             tools = self._agent_tools(definition)
+            effective_access = definition.get("effective_access")
+            if not isinstance(effective_access, dict):
+                effective_access = {"connectors": []}
             items.append(
                 {
                     "id": record.id,
@@ -304,6 +318,14 @@ class AgentApplication:
                     "description": record.config.description or record.agent_definition.description,
                     "default": self._host._default_agent is not None and self._host._default_agent.id == record.id,
                     "llm_connection": self._agent_llm_connection(record.config),
+                    "availability": record.config.availability.model_dump(mode="json"),
+                    "data_scope": record.config.data_scope.model_dump(mode="json"),
+                    "capabilities": record.config.capabilities.model_dump(mode="json"),
+                    "instructions": record.config.instructions.user,
+                    "orchestration": record.config.orchestration.model_dump(mode="json"),
+                    "effective_access": effective_access,
+                    "semantic_models": list(record.config.data_scope.semantic_models),
+                    "datasets": list(record.config.data_scope.datasets),
                     "tool_count": len(tools),
                     "tools": tools,
                 }
@@ -322,27 +344,56 @@ class AgentApplication:
         return {
             **summary,
             "definition": dict(record.agent_definition.definition or {}),
-            "semantic_models": list(record.config.analyst_scope.semantic_models),
-            "datasets": list(record.config.analyst_scope.datasets),
-            "instructions": record.config.prompts.user_prompt,
+            "semantic_models": list(record.config.data_scope.semantic_models),
+            "datasets": list(record.config.data_scope.datasets),
+            "instructions": record.config.instructions.user,
         }
+
+    def _normalize_agent_selection(self, *, agent_selection: str | None, agent_name: str | None) -> str:
+        selection = str(agent_selection or "").strip().lower()
+        if not selection:
+            return "pinned" if str(agent_name or "").strip() else "auto"
+        if selection not in {"auto", "pinned"}:
+            raise ValueError("agent_selection must be either 'auto' or 'pinned'.")
+        return selection
+
+    def _auto_candidate_agents(self, *, mcp: bool = False) -> list[Any]:
+        candidates = []
+        for record in self._host._agents.values():
+            availability = getattr(record.config, "availability", None)
+            if not bool(getattr(availability, "runtime", True)):
+                continue
+            if mcp and not bool(getattr(availability, "mcp", False)):
+                continue
+            candidates.append(record)
+        if not candidates:
+            surface = "MCP" if mcp else "runtime"
+            raise ValueError(f"No {surface}-available agents are configured for auto selection.")
+        candidates.sort(key=lambda item: (not bool(item is self._host._default_agent), str(item.config.name).lower()))
+        return candidates
 
     async def _prepare_agent_run(
         self,
         *,
         prompt: str,
         agent_name: str | None,
-        thread_id: uuid.UUID | None,
-        title: str | None,
-        agent_mode: str | None,
+        agent_selection: str | None = None,
+        thread_id: uuid.UUID | None = None,
+        title: str | None = None,
+        agent_mode: str | None = None,
         metadata_json: dict[str, Any] | None = None,
         mcp: bool = False,
         queue_name: str = "default",
     ) -> PreparedAgentRun:
+        selection = self._normalize_agent_selection(agent_selection=agent_selection, agent_name=agent_name)
+        candidate_agents = self._auto_candidate_agents(mcp=mcp) if selection == "auto" else []
         agent = self._host._resolve_agent(agent_name)
+        if selection == "pinned" and mcp and not getattr(agent.config.availability, "mcp", False):
+            raise ValueError(f"Agent '{agent.config.name}' is not available through MCP.")
         actor_id = self._host._resolve_actor_id()
         job_id = uuid.uuid4()
         timestamp = datetime.now(timezone.utc)
+        agent_mode_value = str(agent_mode or "auto").strip() or "auto"
         async with self._host._runtime_operation_scope() as uow:
             existing_thread = None
             if thread_id is not None:
@@ -356,7 +407,8 @@ class AgentApplication:
                 thread = RuntimeThread(
                     id=thread_id,
                     workspace_id=self._host.context.workspace_id,
-                    title=str(title or "").strip() or agent.config.name,
+                    title=str(title or "").strip()
+                    or (agent.config.name if selection == "pinned" else "Auto chat"),
                     created_by=actor_id,
                     state=RuntimeThreadState.processing,
                     metadata={
@@ -387,12 +439,14 @@ class AgentApplication:
                 role=RuntimeMessageRole.user,
                 content={
                     "text": str(prompt or "").strip(),
-                    "agent_mode": str(agent_mode or "auto").strip() or "auto",
+                    "agent_mode": agent_mode_value,
+                    "agent_selection": selection,
                     **({"metadata_json": metadata_payload} if metadata_payload is not None else {}),
                     **({"context": {"metadata_json": metadata_payload}} if metadata_payload is not None else {}),
                 },
                 model_snapshot={
-                    "agent_mode": str(agent_mode or "auto").strip() or "auto",
+                    "agent_mode": agent_mode_value,
+                    "agent_selection": selection,
                     **({"metadata_json": metadata_payload} if metadata_payload is not None else {}),
                 },
                 created_at=timestamp,
@@ -411,10 +465,13 @@ class AgentApplication:
                     subject_id=thread.id,
                     payload={
                         "agent_definition_id": str(agent.id),
-                        "agent_name": getattr(agent.config, "name", None),
+                        "router_agent_definition_id": str(agent.id),
+                        "candidate_agent_definition_ids": [str(item.id) for item in candidate_agents],
+                        "agent_name": getattr(agent.config, "name", None) if selection == "pinned" else None,
+                        "agent_selection": selection,
                         "thread_id": str(thread.id),
                         "user_message_id": str(user_message.id),
-                        "agent_mode": str(agent_mode or "auto").strip() or "auto",
+                        "agent_mode": agent_mode_value,
                         "mcp": bool(mcp),
                     },
                 ),
@@ -428,6 +485,8 @@ class AgentApplication:
             thread=thread,
             user_message=user_message,
             job_id=job_id,
+            agent_selection=selection,
+            candidate_agent_ids=[item.id for item in candidate_agents],
             created_thread=existing_thread is None,
         )
 
@@ -437,7 +496,24 @@ class AgentApplication:
         job_id: uuid.UUID,
         payload: dict[str, Any],
     ) -> PreparedAgentRun:
-        agent_ref = str(payload.get("agent_definition_id") or payload.get("agent_name") or "").strip()
+        raw_candidate_ids = payload.get("candidate_agent_definition_ids")
+        candidate_agent_ids = [
+            parsed
+            for parsed in (self._uuid_or_none(item) for item in raw_candidate_ids or [])
+            if parsed is not None
+        ]
+        agent_selection = self._normalize_agent_selection(
+            agent_selection=str(payload.get("agent_selection") or "").strip() or None,
+            agent_name=str(payload.get("agent_name") or "").strip() or None,
+        )
+        if not payload.get("agent_selection") and candidate_agent_ids:
+            agent_selection = "auto"
+        agent_ref = str(
+            payload.get("router_agent_definition_id")
+            or payload.get("agent_definition_id")
+            or payload.get("agent_name")
+            or ""
+        ).strip()
         agent = (
             self._host._resolve_agent_record(agent_ref)
             if agent_ref
@@ -473,8 +549,21 @@ class AgentApplication:
             thread=thread,
             user_message=user_message,
             job_id=job_id,
+            agent_selection=agent_selection,
+            candidate_agent_ids=candidate_agent_ids,
             created_thread=False,
         )
+
+    @staticmethod
+    def _uuid_or_none(value: Any) -> uuid.UUID | None:
+        if value is None:
+            return None
+        if isinstance(value, uuid.UUID):
+            return value
+        try:
+            return uuid.UUID(str(value))
+        except (TypeError, ValueError):
+            return None
 
     async def _execute_prepared_agent_run(
         self,
@@ -510,6 +599,9 @@ class AgentApplication:
                     actor_id=prepared.actor_id,
                     thread_id=prepared.thread.id,
                     mcp=mcp,
+                    agent_selection=prepared.agent_selection,
+                    router_agent_definition_id=prepared.agent.id,
+                    candidate_agent_definition_ids=prepared.candidate_agent_ids,
                     agent_mode=agent_mode or "auto",
                 ),
                 event_emitter=event_emitter,
@@ -700,31 +792,19 @@ class AgentApplication:
 
     @staticmethod
     def _agent_llm_connection(config: Any) -> str | None:
-        llm_scope = getattr(config, "llm_scope", None)
-        if llm_scope is None:
+        llm = getattr(config, "llm", None)
+        if llm is None:
             return None
-        value = getattr(llm_scope, "llm_connection", None)
+        value = getattr(llm, "llm_connection", None)
         return str(value).strip() or None if value is not None else None
 
     @staticmethod
     def _agent_tools(definition: dict[str, Any]) -> list[dict[str, Any]]:
-        tools_payload = definition.get("tools")
-        if isinstance(tools_payload, list):
-            return [
-                {
-                    "name": item.get("name"),
-                    "tool_type": item.get("tool_type"),
-                    "description": item.get("description"),
-                }
-                for item in tools_payload
-                if isinstance(item, dict)
-            ]
-
         tools: list[dict[str, Any]] = []
-        analyst_scope = definition.get("analyst_scope")
-        if isinstance(analyst_scope, dict):
-            semantic_models = analyst_scope.get("semantic_models")
-            datasets = analyst_scope.get("datasets")
+        data_scope = definition.get("data_scope")
+        if isinstance(data_scope, dict):
+            semantic_models = data_scope.get("semantic_models")
+            datasets = data_scope.get("datasets")
             if isinstance(semantic_models, list) and semantic_models:
                 tools.append(
                     {
@@ -741,8 +821,9 @@ class AgentApplication:
                         "description": "Dataset analysis scope.",
                     }
                 )
-        web_search_scope = definition.get("web_search_scope")
-        if isinstance(web_search_scope, dict) and web_search_scope.get("enabled"):
+        capabilities = definition.get("capabilities")
+        web_search = capabilities.get("web_search") if isinstance(capabilities, dict) else None
+        if isinstance(web_search, dict) and web_search.get("enabled"):
             tools.append(
                 {
                     "name": "web_search",

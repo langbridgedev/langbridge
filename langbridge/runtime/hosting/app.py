@@ -978,15 +978,21 @@ def create_runtime_api_app(
         body: RuntimeAgentRunRequest,
     ) -> RuntimeAgentRunResponse:
         configured_host = await _resolve_request_host(request)
-        agent_name = _resolve_agent_name(
-            configured_host,
-            agent_id=body.agent_id,
-            agent_name=body.agent_name,
+        agent_selection = body.agent_selection or ("pinned" if body.agent_id or body.agent_name else "auto")
+        agent_name = (
+            _resolve_agent_name(
+                configured_host,
+                agent_id=body.agent_id,
+                agent_name=body.agent_name,
+            )
+            if agent_selection == "pinned" and (body.agent_id or body.agent_name)
+            else None
         )
         try:
             run_kwargs = {
                 "prompt": body.message,
                 "agent_name": agent_name,
+                "agent_selection": agent_selection,
                 "thread_id": body.thread_id,
                 "title": body.title,
             }
@@ -1007,15 +1013,21 @@ def create_runtime_api_app(
         body: RuntimeAgentAskRequest,
     ) -> RuntimeAgentAskResponse:
         configured_host = await _resolve_request_host(request)
-        agent_name = _resolve_agent_name(
-            configured_host,
-            agent_id=body.agent_id,
-            agent_name=body.agent_name,
+        agent_selection = body.agent_selection or ("pinned" if body.agent_id or body.agent_name else "auto")
+        agent_name = (
+            _resolve_agent_name(
+                configured_host,
+                agent_id=body.agent_id,
+                agent_name=body.agent_name,
+            )
+            if agent_selection == "pinned" and (body.agent_id or body.agent_name)
+            else None
         )
         try:
             ask_kwargs = {
                 "prompt": body.message,
                 "agent_name": agent_name,
+                "agent_selection": agent_selection,
                 "thread_id": body.thread_id,
                 "title": body.title,
             }
@@ -1053,14 +1065,20 @@ def create_runtime_api_app(
         body: RuntimeAgentAskRequest,
     ) -> StreamingResponse:
         configured_host = await _resolve_request_host(request)
-        agent_name = _resolve_agent_name(
-            configured_host,
-            agent_id=body.agent_id,
-            agent_name=body.agent_name,
+        agent_selection = body.agent_selection or ("pinned" if body.agent_id or body.agent_name else "auto")
+        agent_name = (
+            _resolve_agent_name(
+                configured_host,
+                agent_id=body.agent_id,
+                agent_name=body.agent_name,
+            )
+            if agent_selection == "pinned" and (body.agent_id or body.agent_name)
+            else None
         )
         stream_kwargs = {
             "prompt": body.message,
             "agent_name": agent_name,
+            "agent_selection": agent_selection,
             "thread_id": body.thread_id,
             "title": body.title,
             "agent_mode": body.agent_mode,

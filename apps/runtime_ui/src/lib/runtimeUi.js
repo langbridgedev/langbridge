@@ -1152,26 +1152,28 @@ export function buildConversationTurns(messages, agents) {
 
 export function readAgentSystemPrompt(detail) {
   return (
-    detail?.definition?.prompt?.system_prompt ||
-    detail?.definition?.prompt?.systemPrompt ||
-    detail?.definition?.system_prompt ||
+    detail?.definition?.instructions?.system ||
     detail?.system_prompt ||
     ""
   );
 }
 
 export function readAgentFeatureFlags(detail) {
-  const features = detail?.definition?.features;
-  if (!features || typeof features !== "object") {
+  const capabilities = detail?.definition?.capabilities;
+  if (!capabilities || typeof capabilities !== "object") {
     return [];
   }
-  return Object.entries(features)
+  return Object.entries({
+    source_sql: capabilities.source_sql,
+    research: capabilities.research?.enabled,
+    web_search: capabilities.web_search?.enabled,
+  })
     .filter(([, enabled]) => Boolean(enabled))
     .map(([name]) => name.replaceAll("_", " "));
 }
 
-export function readAgentAllowedConnectors(detail) {
-  const connectors = detail?.definition?.access_policy?.allowed_connectors;
+export function readAgentEffectiveConnectors(detail) {
+  const connectors = detail?.definition?.effective_access?.connectors;
   return Array.isArray(connectors) ? connectors : [];
 }
 

@@ -1,5 +1,4 @@
 """Shared continuation-state and follow-up resolution helpers."""
-
 from __future__ import annotations
 
 import re
@@ -684,7 +683,8 @@ class ContinuationStateBuilder:
         ):
             return None
         executed_step = cls.executed_plan_step(run_payload)
-        resolved_question = str(executed_step.question or "").strip() or cls.resolved_question_from_run(run_payload)
+        executed_question = str(executed_step.question or "").strip() if executed_step is not None else ""
+        resolved_question = executed_question or cls.resolved_question_from_run(run_payload)
         active_filters = cls.active_filters_from_run(run_payload)
         state = ContinuationState(
             question=user_query,
@@ -699,7 +699,9 @@ class ContinuationStateBuilder:
             chartable=is_tabular_result(result_payload),
             status=run_status or None,
             selected_agent=str(
-                executed_step.agent_name or cls.selected_agent_from_diagnostics(diagnostics) or ""
+                (executed_step.agent_name if executed_step is not None else None)
+                or cls.selected_agent_from_diagnostics(diagnostics)
+                or ""
             ).strip()
             or None,
             analysis_state=cls.build_analysis_state(
@@ -785,7 +787,7 @@ class ContinuationStateBuilder:
     @classmethod
     def resolved_question_from_run(cls, run_payload: Mapping[str, Any]) -> str | None:
         step = cls.executed_plan_step(run_payload)
-        if step.question:
+        if step is not None and step.question:
             return str(step.question).strip() or None
         plan = run_payload.get("plan")
         if not isinstance(plan, Mapping):
