@@ -136,6 +136,7 @@ class RuntimeBackgroundTaskManager:
         owner_id: str | None = None,
         lease_ttl_seconds: int = 120,
         heartbeat_interval_seconds: float | None = None,
+        task_timeout_seconds: float | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self.runtime_host = runtime_host
@@ -151,6 +152,9 @@ class RuntimeBackgroundTaskManager:
             float(heartbeat_interval_seconds)
             if heartbeat_interval_seconds is not None
             else default_heartbeat_interval,
+        )
+        self._task_timeout_seconds: float | None = (
+            float(task_timeout_seconds) if task_timeout_seconds is not None and task_timeout_seconds > 0 else None
         )
         self._default_tasks: dict[str, RuntimeBackgroundTaskDefinition] = {}
         self._custom_tasks: dict[str, RuntimeBackgroundTaskDefinition] = {}
@@ -259,12 +263,11 @@ class RuntimeBackgroundTaskManager:
         if not self._scheduler.running:
             self._scheduler.start()
         self._started = True
-        startup_tasks: list[asyncio.Task[Any]] = []
+        # Fire startup tasks as background asyncio.Tasks so the host can accept
+        # requests immediately rather than waiting for potentially long syncs.
         for task in self.list_tasks():
             if task.enabled and task.run_on_startup:
-                startup_tasks.append(self._run_definition_as_task(task))
-        if startup_tasks:
-            await asyncio.gather(*startup_tasks)
+                self._run_definition_as_task(task)
 
     async def stop(self) -> None:
         if not self._started:
@@ -415,10 +418,18 @@ class RuntimeBackgroundTaskManager:
                 return None
             heartbeat_task = self._start_lease_heartbeat(context)
             try:
-                result = handler(context)
-                if inspect.isawaitable(result):
-                    return await result
-                return result
+                if inspect.iscoroutinefunction(handler):
+                    coro: Any = handler(context)
+                else:
+                    # Sync handlers may block; run them in a thread to avoid
+                    # stalling the event loop. Async handlers should be used
+                    # when the handler needs to call runtime async methods.
+                    loop = asyncio.get_running_loop()
+                    coro = loop.run_in_executor(None, handler, context)
+
+                if self._task_timeout_seconds is not None:
+                    return await asyncio.wait_for(coro, timeout=self._task_timeout_seconds)
+                return await coro
             finally:
                 if heartbeat_task is not None:
                     heartbeat_task.cancel()

@@ -22,9 +22,12 @@ connectors:
       shop_domain:
         provider_type: env
         identifier: SHOPIFY_SHOP_DOMAIN
-      access_token:
+      client_id:
         provider_type: env
-        identifier: SHOPIFY_ACCESS_TOKEN
+        identifier: SHOPIFY_CLIENT_ID
+      client_secret:
+        provider_type: env
+        identifier: SHOPIFY_CLIENT_SECRET
 
 datasets:
   - name: shopify_customers

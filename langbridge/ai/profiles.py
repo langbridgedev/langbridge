@@ -104,6 +104,14 @@ class AiAgentCapabilitiesConfig(BaseModel):
     research: AiAgentResearchCapabilityConfig = Field(default_factory=AiAgentResearchCapabilityConfig)
     web_search: AiAgentWebSearchCapabilityConfig = Field(default_factory=AiAgentWebSearchCapabilityConfig)
 
+    @model_validator(mode="after")
+    def _validate_capabilities(self) -> "AiAgentCapabilitiesConfig":
+        if self.research.require_sources and not self.web_search.enabled:
+            raise ValueError(
+                "AI agent capabilities: research.require_sources is true but web_search is not enabled."
+            )
+        return self
+
 
 class AiAgentInstructionsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")

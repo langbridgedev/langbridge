@@ -201,6 +201,10 @@ class AnalystEvidencePlanStep(BaseModel):
         return self
 
 
+class SearchQueryReformulation(BaseModel):
+    query: str
+
+
 class AnalystEvidencePlan(BaseModel):
     """Internal analyst-owned plan for evidence retrieval and synthesis."""
 
@@ -244,5 +248,6 @@ __all__ = [
     "AnalystSqlSummaryOutput",
     "AnalystSqlSynthesisOutput",
     "AnalystSqlToolSelection",
+    "SearchQueryReformulation",
     "VisualizationRecommendation",
 ]

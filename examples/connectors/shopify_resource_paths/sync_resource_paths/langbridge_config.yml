@@ -15,8 +15,7 @@ runtime:
 connectors:
   - name: shopify_demo
     type: shopify
-    description: Shopify synced dataset example using explicit resource paths.
-    connection: {}
+    description: Shopify analytics-safe synced dataset example using explicit REST resource paths.
     secrets:
       shop_domain:
         provider_type: env
@@ -26,21 +25,36 @@ connectors:
         identifier: SHOPIFY_ACCESS_TOKEN
 
 datasets:
-  - name: shopify_synced_customers
-    description: Synced parent dataset for customers with explicit 1:1 address flattening.
+  # ---------------------------------------------------------------------------
+  # Catalog / product data
+  # ---------------------------------------------------------------------------
+
+  - name: shopify_products
+    description: Synced parent dataset for Shopify products.
     connector: shopify_demo
     source:
       kind: resource
-      resource: customers
-      flatten:
-        - default_address
+      resource: products
     materialization:
       mode: synced
       sync:
-        strategy: INCREMENTAL
+        strategy: FULL_REFRESH
+        sync_on_start: true
 
-  - name: shopify_synced_product_options
-    description: Synced explicit child dataset for the 1:many `products.options` path.
+  - name: shopify_product_variants
+    description: Synced child dataset for product variants from `products.variants`.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: products.variants
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  - name: shopify_product_options
+    description: Synced child dataset for product options from `products.options`.
     connector: shopify_demo
     source:
       kind: resource
@@ -48,10 +62,83 @@ datasets:
     materialization:
       mode: synced
       sync:
-        strategy: INCREMENTAL
+        strategy: FULL_REFRESH
+        sync_on_start: true
 
-  - name: shopify_synced_price_rules
-    description: Synced dynamic Shopify resource using an explicit dataset-owned resource path.
+  - name: shopify_product_images
+    description: Synced child dataset for product images from `products.images`.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: products.images
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  # ---------------------------------------------------------------------------
+  # Collections
+  # ---------------------------------------------------------------------------
+
+  - name: shopify_custom_collections
+    description: Synced dataset for Shopify custom collections.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: custom_collections
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  - name: shopify_smart_collections
+    description: Synced dataset for Shopify smart collections.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: smart_collections
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  - name: shopify_collects
+    description: Synced dataset mapping products to custom collections.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: collects
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  # ---------------------------------------------------------------------------
+  # Inventory / locations
+  # ---------------------------------------------------------------------------
+
+  - name: shopify_locations
+    description: Synced dataset for Shopify locations.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: locations
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  # ---------------------------------------------------------------------------
+  # Discounts / pricing
+  # ---------------------------------------------------------------------------
+
+  - name: shopify_price_rules
+    description: Synced dataset for Shopify price rules.
     connector: shopify_demo
     source:
       kind: resource
@@ -60,3 +147,493 @@ datasets:
       mode: synced
       sync:
         strategy: FULL_REFRESH
+        sync_on_start: true
+
+semantic_models:
+  - name: shopify_catalog_performance
+    description: Semantic model for synced Shopify catalog, collection, inventory, and pricing data.
+    default: true
+    datasets:
+      - shopify_products
+      - shopify_product_variants
+      - shopify_product_options
+      - shopify_product_images
+      - shopify_custom_collections
+      - shopify_smart_collections
+      - shopify_collects
+      - shopify_locations
+      - shopify_price_rules
+    model:
+      version: "1"
+      name: shopify_catalog_performance
+      description: Governed Shopify model for catalog health, variant inventory, collections, locations, and price rules.
+      sql_instructions: |
+        Shopify REST fields such as variant price and price rule value may arrive as strings.
+        Use the numeric semantic measures for price and discount calculations instead of querying those raw fields directly.
+      datasets:
+        shopify_products:
+          relation_name: shopify_products
+          description: Product-level catalog records synced from Shopify products.
+          dimensions:
+            - name: product_id
+              expression: id
+              type: number
+              primary_key: true
+              synonyms: [id]
+            - name: product_title
+              expression: title
+              type: string
+              synonyms: [product, name]
+            - name: vendor
+              expression: vendor
+              type: string
+              synonyms: [brand, supplier]
+            - name: product_type
+              expression: product_type
+              type: string
+              synonyms: [category, type]
+            - name: status
+              expression: status
+              type: string
+            - name: handle
+              expression: handle
+              type: string
+            - name: tags
+              expression: tags
+              type: string
+            - name: created_at
+              expression: created_at
+              type: time
+            - name: updated_at
+              expression: updated_at
+              type: time
+            - name: published_at
+              expression: published_at
+              type: time
+          measures:
+            - name: product_count
+              expression: id
+              type: number
+              aggregation: count
+              synonyms: [products]
+        shopify_product_variants:
+          relation_name: shopify_product_variants
+          description: Product variant records expanded from products.variants.
+          dimensions:
+            - name: variant_id
+              expression: id
+              type: number
+              primary_key: true
+              synonyms: [id]
+            - name: product_id
+              expression: _parent_id
+              type: number
+            - name: variant_title
+              expression: title
+              type: string
+              synonyms: [variant, name]
+            - name: sku
+              expression: sku
+              type: string
+            - name: barcode
+              expression: barcode
+              type: string
+            - name: option1
+              expression: option1
+              type: string
+            - name: option2
+              expression: option2
+              type: string
+            - name: option3
+              expression: option3
+              type: string
+            - name: inventory_policy
+              expression: inventory_policy
+              type: string
+            - name: inventory_management
+              expression: inventory_management
+              type: string
+            - name: fulfillment_service
+              expression: fulfillment_service
+              type: string
+            - name: taxable
+              expression: taxable
+              type: boolean
+            - name: requires_shipping
+              expression: requires_shipping
+              type: boolean
+            - name: weight_unit
+              expression: weight_unit
+              type: string
+            - name: created_at
+              expression: created_at
+              type: time
+            - name: updated_at
+              expression: updated_at
+              type: time
+          measures:
+            - name: variant_count
+              expression: id
+              type: number
+              aggregation: count
+              synonyms: [variants]
+            - name: total_inventory_quantity
+              expression: inventory_quantity
+              type: number
+              aggregation: sum
+              synonyms: [inventory, stock, quantity on hand]
+            - name: average_variant_price
+              expression: CAST(shopify_product_variants.price AS DOUBLE)
+              type: number
+              aggregation: avg
+              synonyms: [average price, avg price]
+            - name: maximum_variant_price
+              expression: CAST(shopify_product_variants.price AS DOUBLE)
+              type: number
+              aggregation: max
+              synonyms: [highest price, max price]
+            - name: minimum_variant_price
+              expression: CAST(shopify_product_variants.price AS DOUBLE)
+              type: number
+              aggregation: min
+              synonyms: [lowest price, min price]
+            - name: total_variant_weight
+              expression: weight
+              type: number
+              aggregation: sum
+              synonyms: [weight]
+        shopify_product_options:
+          relation_name: shopify_product_options
+          description: Product option records expanded from products.options.
+          dimensions:
+            - name: option_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: product_id
+              expression: _parent_id
+              type: number
+            - name: option_name
+              expression: name
+              type: string
+              synonyms: [option, variant option]
+            - name: position
+              expression: position
+              type: number
+          measures:
+            - name: option_count
+              expression: id
+              type: number
+              aggregation: count
+        shopify_product_images:
+          relation_name: shopify_product_images
+          description: Product image records expanded from products.images.
+          dimensions:
+            - name: image_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: product_id
+              expression: _parent_id
+              type: number
+            - name: alt_text
+              expression: alt
+              type: string
+            - name: image_url
+              expression: src
+              type: string
+            - name: position
+              expression: position
+              type: number
+            - name: created_at
+              expression: created_at
+              type: time
+            - name: updated_at
+              expression: updated_at
+              type: time
+          measures:
+            - name: image_count
+              expression: id
+              type: number
+              aggregation: count
+            - name: average_image_width
+              expression: width
+              type: number
+              aggregation: avg
+            - name: average_image_height
+              expression: height
+              type: number
+              aggregation: avg
+        shopify_custom_collections:
+          relation_name: shopify_custom_collections
+          description: Manually curated Shopify custom collections.
+          dimensions:
+            - name: collection_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: collection_title
+              expression: title
+              type: string
+              synonyms: [collection, custom collection]
+            - name: handle
+              expression: handle
+              type: string
+            - name: sort_order
+              expression: sort_order
+              type: string
+            - name: published
+              expression: published
+              type: boolean
+            - name: updated_at
+              expression: updated_at
+              type: time
+            - name: published_at
+              expression: published_at
+              type: time
+          measures:
+            - name: custom_collection_count
+              expression: id
+              type: number
+              aggregation: count
+        shopify_smart_collections:
+          relation_name: shopify_smart_collections
+          description: Rule-driven Shopify smart collections.
+          dimensions:
+            - name: collection_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: collection_title
+              expression: title
+              type: string
+              synonyms: [collection, smart collection]
+            - name: handle
+              expression: handle
+              type: string
+            - name: sort_order
+              expression: sort_order
+              type: string
+            - name: disjunctive
+              expression: disjunctive
+              type: boolean
+            - name: updated_at
+              expression: updated_at
+              type: time
+            - name: published_at
+              expression: published_at
+              type: time
+          measures:
+            - name: smart_collection_count
+              expression: id
+              type: number
+              aggregation: count
+        shopify_collects:
+          relation_name: shopify_collects
+          description: Product-to-custom-collection membership records.
+          dimensions:
+            - name: collect_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: collection_id
+              expression: collection_id
+              type: number
+            - name: product_id
+              expression: product_id
+              type: number
+            - name: featured
+              expression: featured
+              type: boolean
+            - name: position
+              expression: position
+              type: number
+            - name: sort_value
+              expression: sort_value
+              type: string
+            - name: created_at
+              expression: created_at
+              type: time
+            - name: updated_at
+              expression: updated_at
+              type: time
+          measures:
+            - name: collect_count
+              expression: id
+              type: number
+              aggregation: count
+              synonyms: [collection memberships]
+        shopify_locations:
+          relation_name: shopify_locations
+          description: Shopify fulfillment and inventory locations.
+          dimensions:
+            - name: location_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: location_name
+              expression: name
+              type: string
+              synonyms: [location, warehouse]
+            - name: city
+              expression: city
+              type: string
+            - name: province
+              expression: province
+              type: string
+            - name: country
+              expression: country
+              type: string
+            - name: zip
+              expression: zip
+              type: string
+            - name: active
+              expression: active
+              type: boolean
+            - name: created_at
+              expression: created_at
+              type: time
+            - name: updated_at
+              expression: updated_at
+              type: time
+          measures:
+            - name: location_count
+              expression: id
+              type: number
+              aggregation: count
+        shopify_price_rules:
+          relation_name: shopify_price_rules
+          description: Shopify discount and price rule configuration.
+          dimensions:
+            - name: price_rule_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: title
+              expression: title
+              type: string
+              synonyms: [discount, price rule, promotion]
+            - name: value_type
+              expression: value_type
+              type: string
+            - name: target_type
+              expression: target_type
+              type: string
+            - name: target_selection
+              expression: target_selection
+              type: string
+            - name: allocation_method
+              expression: allocation_method
+              type: string
+            - name: customer_selection
+              expression: customer_selection
+              type: string
+            - name: once_per_customer
+              expression: once_per_customer
+              type: boolean
+            - name: created_at
+              expression: created_at
+              type: time
+            - name: updated_at
+              expression: updated_at
+              type: time
+            - name: starts_at
+              expression: starts_at
+              type: time
+            - name: ends_at
+              expression: ends_at
+              type: time
+          measures:
+            - name: price_rule_count
+              expression: id
+              type: number
+              aggregation: count
+              synonyms: [discount count, promotions]
+            - name: average_discount_value
+              expression: CAST(shopify_price_rules.value AS DOUBLE)
+              type: number
+              aggregation: avg
+              synonyms: [average discount]
+            - name: maximum_discount_value
+              expression: CAST(shopify_price_rules.value AS DOUBLE)
+              type: number
+              aggregation: max
+              synonyms: [maximum discount, highest discount]
+      relationships:
+        - name: variants_to_products
+          source_dataset: shopify_product_variants
+          source_field: _parent_id
+          target_dataset: shopify_products
+          target_field: id
+          type: many_to_one
+        - name: options_to_products
+          source_dataset: shopify_product_options
+          source_field: _parent_id
+          target_dataset: shopify_products
+          target_field: id
+          type: many_to_one
+        - name: images_to_products
+          source_dataset: shopify_product_images
+          source_field: _parent_id
+          target_dataset: shopify_products
+          target_field: id
+          type: many_to_one
+        - name: collects_to_products
+          source_dataset: shopify_collects
+          source_field: product_id
+          target_dataset: shopify_products
+          target_field: id
+          type: many_to_one
+        - name: collects_to_custom_collections
+          source_dataset: shopify_collects
+          source_field: collection_id
+          target_dataset: shopify_custom_collections
+          target_field: id
+          type: many_to_one
+
+llm_connections:
+  - name: shopify_openai
+    provider: openai
+    model: gpt-5.4
+    default: true
+    api_key_secret:
+      provider_type: env
+      identifier: OPENAI_API_KEY
+
+ai:
+  profiles:
+    - name: shopify_catalog_analyst
+      description: Analyst agent for synced Shopify catalog, collection, inventory, and pricing data.
+      default: true
+      availability:
+        runtime: true
+        mcp: true
+      data_scope:
+        semantic_models: [shopify_catalog_performance]
+        datasets:
+          - shopify_products
+          - shopify_product_variants
+          - shopify_product_options
+          - shopify_product_images
+          - shopify_custom_collections
+          - shopify_smart_collections
+          - shopify_collects
+          - shopify_locations
+          - shopify_price_rules
+        query_policy: semantic_preferred
+      capabilities:
+        source_sql: false
+        research:
+          enabled: false
+        web_search:
+          enabled: false
+      llm:
+        llm_connection: shopify_openai
+      instructions:
+        system: You are a Langbridge analytics agent for Shopify Admin API data.
+        user: |
+          Answer catalog, product variant, inventory, collection, location, and discount questions from governed Shopify runtime data first.
+          Prefer the Shopify semantic model measures and dimensions, and call out when a question requires order, customer, or inventory-level data that this resource-path example does not sync.
+        presentation: Keep answers concise, cite the fields or semantic measures used, and distinguish product catalog data from live operational availability.
+      orchestration:
+        policy: balanced_governed

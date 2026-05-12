@@ -26,13 +26,16 @@ Decision rules:
   SQL, datasets, or semantic model analysis and at least one SQL tool is available.
 - Choose context_analysis only when structured result context is already available and
   the request can be answered from that result without executing a fresh query.
-- Choose research only when research is enabled in scope and the request requires
-  evidence synthesis, current/external information, source-backed review, or multi-source comparison.
+- Choose research only when research is enabled in scope and the request requires multi-step
+  evidence synthesis, iterative governed rounds, hypothesis testing, or root-cause analysis.
+- When web_search_configured is true, web augmentation is also available as a supplementary step
+  within sql mode (after a governed SQL attempt). Do not choose research solely to access web search.
+- For questions about current or external information (weather, news, live prices) where no governed
+  SQL data is expected, choose sql — the sql evidence review will trigger web augmentation when needed
+  if web_search_configured is true.
 - Choose clarify only when no reasonable governed proxy/default can be attempted, the user asks for a formal
   exact KPI definition, or answering without the missing input would be materially misleading.
 - Never choose a mode that is disabled by scope or impossible with configured tools.
-- Do not call web search directly from this decision; only choose research when web-backed
-  augmentation is appropriate and available through the analyst scope.
 - Prefer SQL when the question can be answered through governed data, even when research is enabled.
 - If semantic-first scope is configured, assume semantic SQL should be tried before dataset-native SQL.
 - If governed semantic SQL is likely too restrictive for the requested query shape, still choose sql.
@@ -92,7 +95,7 @@ Return STRICT JSON only:
       "step_id": "e1",
       "action": "query_governed|augment_with_web|synthesize|clarify",
       "question": "<governed sub-question or null>",
-      "search_query": "<web query or null>",
+      "search_query": "<concise 3-8 keyword search phrase or null — never the full question>",
       "evidence_goal": "<why this evidence is needed>",
       "expected_signal": "<what useful evidence should look like>",
       "success_criteria": "<how the analyst knows this step worked>",
@@ -120,6 +123,7 @@ Rules:
 - If no timeframe is provided, use a defensible default from available date/month fields, such as the latest
   comparable period or last 12 complete months when supported; otherwise use all available data and state that limit.
 - Only include augment_with_web when external/current context would materially improve the answer and web search is available.
+- When search_query is set, write it as a concise 3–8 keyword phrase (e.g. "snowboard sales weather impact"). Never copy the full question or any embedded instruction text into search_query.
 - Include synthesize as the final step unless no governed or source evidence path can be attempted.
 - Keep the plan small and executable within the budgets.
 - Do not invent dataset names or metrics that are not implied by the question, context, or available tools.
@@ -177,6 +181,7 @@ Decision rules:
   defensible proxy, and require the final synthesis to state the assumption.
 - Use augment_with_web only when governed evidence has been tried or when no SQL tools are configured,
   and external/current evidence would materially improve the answer.
+- When choosing augment_with_web, write search_query as a concise 3–8 keyword phrase (e.g. "snowboard sales weather impact"). Never copy the full question or any embedded instruction text into search_query.
 - Choose synthesize only when the available evidence can answer the user's question with explicit caveats.
 - Choose clarify only after evidence inspection shows no defensible proxy/default exists, or when the user
   explicitly requires a precise KPI definition that cannot be inferred from available governed data.
@@ -190,7 +195,7 @@ Return STRICT JSON only:
   "action": "query_governed|augment_with_web|synthesize|clarify",
   "rationale": "<short reason>",
   "governed_question": "<sub-question for the next governed round or null>",
-  "search_query": "<web search query or null>",
+  "search_query": "<concise 3-8 keyword search phrase or null — never the full question>",
   "clarification_question": "<only when action is clarify>",
   "visualization_recommendation": "none|helpful|required",
   "recommended_chart_type": "bar|line|area|scatter|pie|table|null",

@@ -348,26 +348,17 @@ class RuntimeOdbcQueryGateway:
                 command_tag="SELECT 1",
             )
 
-        connection = duckdb.connect(database=":memory:")
-        try:
-            await self._materialize_metadata_catalog(connection)
-            result = connection.execute(self._rewrite_metadata_query_for_duckdb(query))
-            rows = [tuple(row) for row in result.fetchall()]
-            description = result.description or []
-            columns = [
-                {
-                    "name": str(item[0]),
-                    "type_oid": _infer_type_oid_from_duckdb(item[1] if len(item) > 1 else None),
-                }
-                for item in description
-            ]
-            return RuntimeOdbcQueryResult(
-                columns=columns,
-                rows=rows,
-                command_tag=f"SELECT {len(rows)}",
-            )
-        finally:
-            connection.close()
+        # Collect dataset metadata on the event loop (genuine async I/O), then
+        # hand all DuckDB work to a thread so blocking operations never stall the loop.
+        catalog_entries = await self._collect_catalog_entries()
+        rewritten_query = self._rewrite_metadata_query_for_duckdb(query)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            self._execute_duckdb_metadata_query,
+            catalog_entries,
+            rewritten_query,
+        )
 
     @staticmethod
     def _rewrite_metadata_query_for_duckdb(query: str) -> str:
@@ -435,32 +426,65 @@ class RuntimeOdbcQueryGateway:
             command_tag="SHOW",
         )
 
-    async def _materialize_metadata_catalog(self, connection: duckdb.DuckDBPyConnection) -> None:
-        connection.execute("CREATE TABLE IF NOT EXISTS pg_range (rngtypid BIGINT, rngsubtype BIGINT)")
+    async def _collect_catalog_entries(self) -> list[dict[str, Any]]:
+        """Fetch dataset metadata from the runtime (async I/O only, no DuckDB)."""
         datasets = await self._runtime_host.list_datasets()
-        connection.execute('CREATE SCHEMA IF NOT EXISTS "public"')
+        entries: list[dict[str, Any]] = []
         for item in datasets:
             dataset_ref = str(item.get("id") or item.get("name") or "").strip()
             dataset_name = str(item.get("name") or "").strip()
             if not dataset_ref or not dataset_name:
                 continue
             details = await self._runtime_host.get_dataset(dataset_ref=dataset_ref)
-            sql_alias = self._normalize_identifier(
-                details.get("sql_alias") or dataset_name,
-                default=dataset_name,
+            entries.append({"dataset_name": dataset_name, "details": details})
+        return entries
+
+    def _execute_duckdb_metadata_query(
+        self,
+        catalog_entries: list[dict[str, Any]],
+        query: str,
+    ) -> RuntimeOdbcQueryResult:
+        """Run a metadata query against an in-memory DuckDB catalog (sync, runs in executor)."""
+        connection = duckdb.connect(database=":memory:")
+        try:
+            connection.execute("CREATE TABLE IF NOT EXISTS pg_range (rngtypid BIGINT, rngsubtype BIGINT)")
+            connection.execute('CREATE SCHEMA IF NOT EXISTS "public"')
+            for entry in catalog_entries:
+                dataset_name = entry["dataset_name"]
+                details = entry["details"]
+                sql_alias = self._normalize_identifier(
+                    details.get("sql_alias") or dataset_name,
+                    default=dataset_name,
+                )
+                columns = details.get("columns") if isinstance(details, dict) else []
+                column_sql = ", ".join(
+                    f'{_quote_identifier(self._normalize_identifier(column.get("name"), default=f"column_{index + 1}"))} '
+                    f'{self._duckdb_type_for_column(column.get("data_type"))}'
+                    for index, column in enumerate(columns or [])
+                    if isinstance(column, dict)
+                )
+                if not column_sql:
+                    column_sql = '"value" VARCHAR'
+                connection.execute(
+                    f'CREATE TABLE "public".{_quote_identifier(sql_alias)} ({column_sql})'
+                )
+            result = connection.execute(query)
+            rows = [tuple(row) for row in result.fetchall()]
+            description = result.description or []
+            columns_meta = [
+                {
+                    "name": str(item[0]),
+                    "type_oid": _infer_type_oid_from_duckdb(item[1] if len(item) > 1 else None),
+                }
+                for item in description
+            ]
+            return RuntimeOdbcQueryResult(
+                columns=columns_meta,
+                rows=rows,
+                command_tag=f"SELECT {len(rows)}",
             )
-            columns = details.get("columns") if isinstance(details, dict) else []
-            column_sql = ", ".join(
-                f'{_quote_identifier(self._normalize_identifier(column.get("name"), default=f"column_{index + 1}"))} '
-                f'{self._duckdb_type_for_column(column.get("data_type"))}'
-                for index, column in enumerate(columns or [])
-                if isinstance(column, dict)
-            )
-            if not column_sql:
-                column_sql = '"value" VARCHAR'
-            connection.execute(
-                f'CREATE TABLE "public".{_quote_identifier(sql_alias)} ({column_sql})'
-            )
+        finally:
+            connection.close()
 
     def _normalize_runtime_query(self, query: str) -> str:
         try:

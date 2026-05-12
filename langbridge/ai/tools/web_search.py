@@ -343,12 +343,15 @@ class DuckDuckGoWebSearchProvider:
             return None
         return cls._SAFE_SEARCH_MAP.get(value.strip().casefold())
 
-    @staticmethod
-    def _clean_query(query: str) -> str:
-        clean = str(query or "").strip()
+    _MAX_QUERY_LENGTH = 200
+
+    @classmethod
+    def _clean_query(cls, query: str) -> str:
+        # Collapse newlines and excess whitespace so multi-line LLM output doesn't leak into the URL
+        clean = re.sub(r"\s+", " ", str(query or "")).strip()
         if not clean:
             raise ValueError("Web search query is required.")
-        return clean
+        return clean[: cls._MAX_QUERY_LENGTH]
 
     @staticmethod
     def _cap_max_results(max_results: int) -> int:

@@ -32,25 +32,25 @@ incremental:
   cursor_type: iso_datetime
 
 resources:
-  - key: orders
-    label: Orders
-    path: /orders.json
-    primary_key: id
-    supports_incremental: true
-    default_sync_mode: INCREMENTAL
-    response_items_field: orders
-    request_params:
-      status: any
-    description: Shopify order records.
+  # - key: orders
+  #   label: Orders
+  #   path: /orders.json
+  #   primary_key: id
+  #   supports_incremental: true
+  #   default_sync_mode: INCREMENTAL
+  #   response_items_field: orders
+  #   request_params:
+  #     status: any
+  #   description: Shopify order records.
 
-  - key: customers
-    label: Customers
-    path: /customers.json
-    primary_key: id
-    supports_incremental: true
-    default_sync_mode: INCREMENTAL
-    response_items_field: customers
-    description: Shopify customer records.
+  # - key: customers
+  #   label: Customers
+  #   path: /customers.json
+  #   primary_key: id
+  #   supports_incremental: true
+  #   default_sync_mode: INCREMENTAL
+  #   response_items_field: customers
+  #   description: Shopify customer records.
 
   - key: products
     label: Products
@@ -60,3 +60,12 @@ resources:
     default_sync_mode: INCREMENTAL
     response_items_field: products
     description: Shopify product records.
+
+  - key: shops
+    label: Shops
+    path: /shop.json
+    primary_key: id
+    supports_incremental: true
+    default_sync_mode: INCREMENTAL
+    response_items_field: shop
+    description: Shopify shops records.

@@ -43,6 +43,7 @@ from langbridge.ai.agents.analyst.contracts import (
     AnalystSqlSummaryOutput,
     AnalystSqlSynthesisOutput,
     AnalystSqlToolSelection,
+    SearchQueryReformulation,
     VisualizationRecommendation,
 )
 from langbridge.ai.agents.analyst.research_workflow import (
@@ -291,6 +292,26 @@ class AnalystAgent(AIEventSource, BaseAgent):
         if parsed is None:
             raise ValueError(f"Analyst LLM response missing parsed {response_model.__name__}.")
         return parsed
+
+    async def _reformulate_search_query(self, question: str) -> str:
+        """Convert a natural-language question into a concise keyword search phrase."""
+        prompt = (
+            "Convert the following question into a concise 3-8 keyword search phrase suitable for a web search engine.\n"
+            "Return only the keyword phrase — no punctuation, no articles, no explanation.\n"
+            "Example: 'Did bad weather in the UK hurt snowboard sales?' → 'UK weather snowboard sales impact'\n\n"
+            f"Question: {question}"
+        )
+        try:
+            result = await self._complete_structured(
+                prompt,
+                response_model=SearchQueryReformulation,
+                max_tokens=30,
+                purpose="analyst.search_query",
+            )
+            clean = str(result.query or "").strip()
+            return clean if clean else question.splitlines()[0].strip()
+        except Exception:
+            return question.splitlines()[0].strip()
 
     @property
     def specification(self) -> AgentSpecification:
@@ -588,7 +609,11 @@ class AnalystAgent(AIEventSource, BaseAgent):
             entity_resolution=entity_resolution,
         )
         if allow_web_augmentation and self._should_augment_sql_with_web(task=task, response=response, review=review):
-            web_result = await self._run_web_search_if_needed(task=task, existing_sources=[])
+            web_result = await self._run_web_search_if_needed(
+                task=task,
+                existing_sources=[],
+                query=await self._reformulate_search_query(task.question),
+            )
             if web_result is not None and web_result.results:
                 sources = [item.to_dict() for item in web_result.results][: self._max_external_augmentations()]
                 synthesis = await self._synthesize_sql_with_sources(
@@ -792,7 +817,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
                     workflow_state.add_note("Web augmentation is not available for this research request.")
                     continue
 
-                search_query = self._optional_string(decision.search_query) or task.question
+                search_query = self._optional_string(decision.search_query) or await self._reformulate_search_query(task.question)
                 web_result = await self._run_web_search_if_needed(
                     task=task,
                     existing_sources=sources,
@@ -1962,7 +1987,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
                 AnalystEvidencePlanStep(
                     step_id="e1",
                     action="augment_with_web",
-                    search_query=task.question,
+                    search_query=None,
                     evidence_goal="Gather source evidence because no governed SQL tool is available.",
                     expected_signal="Relevant source-backed facts that help answer the question.",
                     success_criteria="At least one relevant source is returned.",
@@ -2224,7 +2249,7 @@ class AnalystAgent(AIEventSource, BaseAgent):
             return ResearchStepDecision(
                 action=ResearchDecisionAction.augment_with_web,
                 rationale="Governed evidence exists, but external context may still help complete the answer.",
-                search_query=task.question,
+                search_query=None,
             )
         return ResearchStepDecision(
             action=ResearchDecisionAction.synthesize,
@@ -2247,7 +2272,11 @@ class AnalystAgent(AIEventSource, BaseAgent):
             if task.input.get("force_web_search"):
                 raise RuntimeError("Web search was forced, but no WebSearchTool is configured.")
             return None
-        search_query = self._optional_string(query) or task.question
+        raw_query = self._optional_string(query)
+        if raw_query and ("?" in raw_query or len(raw_query.split()) > 10):
+            search_query = await self._reformulate_search_query(raw_query)
+        else:
+            search_query = raw_query or await self._reformulate_search_query(task.question)
         if not allow_existing_sources and not self._question_requests_web(search_query) and not task.input.get("force_web_search"):
             return None
         return await self._web_search_tool.search(search_query)
@@ -3280,8 +3309,6 @@ class AnalystAgent(AIEventSource, BaseAgent):
         if self._web_search_tool is None:
             return False
         if not self._config.web_search_enabled:
-            return False
-        if not self._config.supports_research and not task.input.get("force_web_search"):
             return False
         return self._max_external_augmentations() > 0
 

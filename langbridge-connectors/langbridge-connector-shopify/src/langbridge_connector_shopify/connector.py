@@ -8,7 +8,7 @@ from langbridge.connectors.saas.declarative import DeclarativeHttpApiConnector
 
 from .config import SHOPIFY_MANIFEST, ShopifyConnectorConfig
 
-SHOPIFY_API_VERSION = "2025-01"
+SHOPIFY_API_VERSION = "2026-01"
 _OAUTH_TOKEN_URL = "https://{shop_domain}/admin/oauth/access_token"
 _RESOURCE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
