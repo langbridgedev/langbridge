@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from langbridge.ai.agents.presentation import PresentationAgent, PresentationGuidance
 from langbridge.ai.agents.presentation.contracts import PresentationLLMOutput
 from langbridge.ai.tools.charting import ChartingTool
+from tests.unit.structured_llm_stub import StructuredTextLLMStub
 
 
 def _run(coro):
@@ -23,7 +24,7 @@ def test_presentation_llm_contract_rejects_legacy_top_level_fields() -> None:
         )
 
 
-class _PromptCheckingLLMProvider:
+class _PromptCheckingLLMProvider(StructuredTextLLMStub):
     async def acomplete(self, prompt: str, **kwargs):
         assert "Compose the final Langbridge response" in prompt
         assert "Return STRICT JSON only with keys: answer_markdown, artifact_ids, diagnostics, metadata." in prompt
@@ -48,7 +49,7 @@ class _PromptCheckingLLMProvider:
         )
 
 
-class _ClarificationPresentationLLMProvider:
+class _ClarificationPresentationLLMProvider(StructuredTextLLMStub):
     async def acomplete(self, prompt: str, **kwargs):
         assert "Compose the final Langbridge response" in prompt
         return (
@@ -58,7 +59,7 @@ class _ClarificationPresentationLLMProvider:
         )
 
 
-class _AutoVisualPresentationLLMProvider:
+class _AutoVisualPresentationLLMProvider(StructuredTextLLMStub):
     async def acomplete(self, prompt: str, **kwargs):
         if "Create a chart specification for verified tabular data." in prompt:
             assert '"chart_type": "scatter"' in prompt
@@ -225,7 +226,7 @@ def test_presentation_auto_adds_visual_for_chartable_relationship_question() -> 
 
 
 def test_presentation_uses_structured_visualization_recommendation_before_charting_tool() -> None:
-    class _RecommendationOnlyLLMProvider:
+    class _RecommendationOnlyLLMProvider(StructuredTextLLMStub):
         async def acomplete(self, prompt: str, **kwargs):
             assert "Visualization recommendation:" in prompt
             return (
@@ -273,7 +274,7 @@ def test_presentation_uses_structured_visualization_recommendation_before_charti
 
 
 def test_charting_preserves_multiple_requested_measures() -> None:
-    class _SingleMeasureChartLLMProvider:
+    class _SingleMeasureChartLLMProvider(StructuredTextLLMStub):
         async def acomplete(self, prompt: str, **kwargs):
             assert '"monthly_net_revenue"' in prompt
             assert '"monthly_gross_margin"' in prompt
@@ -303,7 +304,7 @@ def test_charting_preserves_multiple_requested_measures() -> None:
 
 
 def test_charting_normalizes_friendly_pie_measure_to_available_column() -> None:
-    class _FriendlyPieChartLLMProvider:
+    class _FriendlyPieChartLLMProvider(StructuredTextLLMStub):
         async def acomplete(self, prompt: str, **kwargs):
             return (
                 '{"chart_type":"pie","title":"Q3 net revenue share",'
@@ -332,7 +333,7 @@ def test_charting_normalizes_friendly_pie_measure_to_available_column() -> None:
 
 
 def test_presentation_inlines_visualization_artifact_for_chart_follow_up() -> None:
-    class _ChartFollowUpLLMProvider:
+    class _ChartFollowUpLLMProvider(StructuredTextLLMStub):
         async def acomplete(self, prompt: str, **kwargs):
             assert "primary_visualization" in prompt
             assert "primary_result" in prompt
@@ -392,8 +393,73 @@ def test_presentation_inlines_visualization_artifact_for_chart_follow_up() -> No
     assert artifacts_by_id["primary_visualization"]["data_ref"]["artifact_id"] == "primary_result"
 
 
+def test_presentation_promotes_follow_up_chart_plan_input_to_visualization_artifact() -> None:
+    class _PlanChartFollowUpLLMProvider(StructuredTextLLMStub):
+        async def acomplete(self, prompt: str, **kwargs):
+            assert '"chart_type": "pie"' in prompt
+            assert "primary_visualization" in prompt
+            return (
+                '{"answer_markdown":"Here is the requested pie chart.",'
+                '"artifact_ids":[],'
+                '"diagnostics":{"mode":"final"}}'
+            )
+
+    provider = _PlanChartFollowUpLLMProvider()
+    agent = PresentationAgent(
+        llm_provider=provider,
+        charting_tool=ChartingTool(llm_provider=provider),
+    )
+
+    response = _run(
+        agent.compose(
+            question="Can you show this in a pie chart?",
+            context={
+                "plan": {
+                    "steps": [
+                        {
+                            "step_id": "step-1",
+                            "input": {
+                                "agent_mode": "context_analysis",
+                                "reuse_last_result": True,
+                                "follow_up_intent": "visualize_prior_result",
+                                "follow_up_chart_type": "pie",
+                            },
+                        }
+                    ]
+                },
+                "step_results": [
+                    {
+                        "agent_name": "analyst",
+                        "output": {
+                            "analysis": "Paid Social led both requested metrics.",
+                            "result": {
+                                "columns": [
+                                    "order_channel",
+                                    "monthly_net_revenue",
+                                    "monthly_gross_margin",
+                                ],
+                                "rows": [
+                                    ["Paid Social", 9139.54, 4912.33],
+                                    ["Organic Search", 8237.29, 4651.32],
+                                    ["Affiliate", 8080.02, 4471.85],
+                                ],
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    assert "{{artifact:primary_visualization}}" in response["answer_markdown"]
+    artifacts_by_id = {artifact["id"]: artifact for artifact in response["artifacts"]}
+    assert artifacts_by_id["primary_visualization"]["payload"]["chart_type"] == "pie"
+    assert artifacts_by_id["primary_visualization"]["payload"]["x"] == "order_channel"
+    assert artifacts_by_id["primary_visualization"]["payload"]["y"] == "monthly_net_revenue"
+
+
 def test_presentation_returns_typed_chart_table_sql_and_diagnostic_artifacts() -> None:
-    class _ArtifactMarkdownLLMProvider:
+    class _ArtifactMarkdownLLMProvider(StructuredTextLLMStub):
         async def acomplete(self, prompt: str, **kwargs):
             assert "Available artifacts:" in prompt
             assert "primary_visualization" in prompt
@@ -509,7 +575,7 @@ def test_presentation_returns_typed_chart_table_sql_and_diagnostic_artifacts() -
 
 
 def test_presentation_applies_profile_guidance_to_prompt_and_artifacts() -> None:
-    class _GuidanceAwareLLMProvider:
+    class _GuidanceAwareLLMProvider(StructuredTextLLMStub):
         async def acomplete(self, prompt: str, **kwargs):
             assert "Profile presentation guidance:" in prompt
             assert "Please add the currency symbol" in prompt
@@ -565,7 +631,7 @@ def test_presentation_applies_profile_guidance_to_prompt_and_artifacts() -> None
 
 
 def test_presentation_can_arrange_analyst_owned_artifacts() -> None:
-    class _AnalystArtifactLLMProvider:
+    class _AnalystArtifactLLMProvider(StructuredTextLLMStub):
         async def acomplete(self, prompt: str, **kwargs):
             assert "primary_result" in prompt
             assert "primary_sql" in prompt
@@ -656,7 +722,7 @@ def test_presentation_can_arrange_analyst_owned_artifacts() -> None:
 
 
 def test_presentation_filters_invented_artifact_ids_from_markdown_and_artifact_list() -> None:
-    class _InventedArtifactLLMProvider:
+    class _InventedArtifactLLMProvider(StructuredTextLLMStub):
         async def acomplete(self, prompt: str, **kwargs):
             assert "primary_result" in prompt
             assert "made_up_chart" not in prompt
@@ -694,7 +760,7 @@ def test_presentation_filters_invented_artifact_ids_from_markdown_and_artifact_l
 
 
 def test_table_visualization_recommendation_does_not_create_chart_artifact() -> None:
-    class _TableRecommendationLLMProvider:
+    class _TableRecommendationLLMProvider(StructuredTextLLMStub):
         async def acomplete(self, prompt: str, **kwargs):
             assert '"id": "primary_visualization"' not in prompt
             assert "primary_result" in prompt

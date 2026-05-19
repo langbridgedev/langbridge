@@ -10,6 +10,7 @@ def register_runtime_metadata_models() -> None:
     from . import connector_sync  # noqa: F401
     from . import dataset  # noqa: F401
     from . import job  # noqa: F401
+    from . import lease  # noqa: F401
     from . import lineage  # noqa: F401
     from . import semantic  # noqa: F401
     from . import sql  # noqa: F401

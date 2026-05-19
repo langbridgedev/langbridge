@@ -6,6 +6,7 @@ import { AgentWorkspaceModal } from "../../components/agents/AgentWorkspaceModal
 import { ConnectorConfigurationList } from "../../components/connectors/ConnectorConfigurationList.jsx";
 import { ConnectorWorkspaceModal } from "../../components/connectors/ConnectorWorkspaceModal.jsx";
 import { DatasetWorkspaceModal } from "../../components/datasets/DatasetWorkspaceModal.jsx";
+import { LLMConnectionWorkspaceModal } from "../../components/llm-connections/LLMConnectionWorkspaceModal.jsx";
 import { SemanticModelWorkspaceModal } from "../../components/semantic-models/SemanticModelWorkspaceModal.jsx";
 import { SecurityManagementPage } from "./SecurityManagementPage.jsx";
 import {
@@ -28,7 +29,7 @@ const defaultSection = "connectors";
 
 export function ConfigurationPage({ section = defaultSection, navigate, authStatus, session }) {
   const [sections, setSections] = useState([]);
-  const [resources, setResources] = useState([]);
+  const [resourceCache, setResourceCache] = useState({});
   const [activeSection, setActiveSection] = useState(null);
   const [loadingResources, setLoadingResources] = useState(false);
   const [activeResourceId, setActiveResourceId] = useState(null);
@@ -38,6 +39,10 @@ export function ConfigurationPage({ section = defaultSection, navigate, authStat
   const [resourceListError, setResourceListError] = useState("");
   const [resourceDetailError, setResourceDetailError] = useState("");
   const activeSectionId = activeSection?.id || "";
+  const resources = useMemo(
+    () => (activeSectionId && activeSectionId !== "security" ? resourceCache[activeSectionId] || [] : []),
+    [activeSectionId, resourceCache],
+  );
   const capabilities = useMemo(() => getSectionCapabilities(activeSectionId), [activeSectionId]);
   const createTemplate = useMemo(() => getCreateTemplate(activeSectionId), [activeSectionId]);
   const updateTemplate = useMemo(
@@ -68,21 +73,32 @@ export function ConfigurationPage({ section = defaultSection, navigate, authStat
     setResourceDetailError("");
     setWorkspaceMode(null);
     if (activeSection.id === "security") {
-      setResources([]);
+      setLoadingResources(false);
+      return;
+    }
+    if (Object.hasOwn(resourceCache, activeSection.id)) {
       setLoadingResources(false);
       return;
     }
     void loadResources(activeSection.id);
   }, [activeSection]);
 
-  async function loadResources(targetSection = activeSectionId) {
+  async function loadResources(targetSection = activeSectionId, options = {}) {
+    if (!options.force && Object.hasOwn(resourceCache, targetSection)) {
+      return resourceCache[targetSection];
+    }
     setLoadingResources(true);
     setResourceListError("");
     try {
-      setResources(await listConfigurationResources(targetSection));
+      const loadedResources = await listConfigurationResources(targetSection);
+      setResourceCache((current) => ({
+        ...current,
+        [targetSection]: loadedResources,
+      }));
+      return loadedResources;
     } catch (caughtError) {
-      setResources([]);
       setResourceListError(caughtError?.message || "Unable to load runtime resources.");
+      return [];
     } finally {
       setLoadingResources(false);
     }
@@ -126,7 +142,10 @@ export function ConfigurationPage({ section = defaultSection, navigate, authStat
 
   async function handleCreate(payload) {
     const created = await createConfigurationResource(activeSectionId, payload);
-    setResources((current) => [created, ...current.filter((resource) => resource.id !== created.id)]);
+    setSectionResources(activeSectionId, (current) => [
+      created,
+      ...current.filter((resource) => resource.id !== created.id),
+    ]);
     setActiveResource(created);
     setActiveResourceId(created.id);
     setWorkspaceMode("detail");
@@ -142,7 +161,9 @@ export function ConfigurationPage({ section = defaultSection, navigate, authStat
 
   async function handleDelete() {
     await deleteConfigurationResource(activeSectionId, activeResource);
-    setResources((current) => current.filter((resource) => resource.id !== activeResource.id));
+    setSectionResources(activeSectionId, (current) =>
+      current.filter((resource) => resource.id !== activeResource.id),
+    );
     closeWorkspace();
   }
 
@@ -156,10 +177,68 @@ export function ConfigurationPage({ section = defaultSection, navigate, authStat
   }
 
   function mergeResource(nextResource) {
-    setResources((current) =>
+    setSectionResources(activeSectionId, (current) =>
       current.map((resource) =>
         resource.id === nextResource.id || resource.ref === nextResource.ref ? nextResource : resource,
       ),
+    );
+  }
+
+  function setSectionResources(targetSection, updater) {
+    if (!targetSection) {
+      return;
+    }
+    setResourceCache((current) => {
+      const currentResources = current[targetSection] || [];
+      const nextResources = typeof updater === "function" ? updater(currentResources) : updater;
+      return {
+        ...current,
+        [targetSection]: nextResources,
+      };
+    });
+  }
+
+  async function refreshActiveSection() {
+    if (!activeSectionId || activeSectionId === "security") {
+      return;
+    }
+    await loadResources(activeSectionId, { force: true });
+    closeWorkspace();
+  }
+
+  function openSection(sectionId) {
+    if (sectionId === activeSectionId) {
+      return;
+    }
+    navigate(`/configure/${sectionId}`);
+  }
+
+  function sectionHasLoaded(sectionId) {
+    return Object.hasOwn(resourceCache, sectionId);
+  }
+
+  function sectionResourceCount(sectionId) {
+    const cachedResources = resourceCache[sectionId];
+    return Array.isArray(cachedResources) ? cachedResources.length : null;
+  }
+
+  function tabDescription(item) {
+    return `${item.description}`;
+  }
+
+  function renderRefreshButton() {
+    if (activeSection.id === "security") {
+      return null;
+    }
+    return (
+      <button
+        className="config-refresh-button"
+        type="button"
+        disabled={loadingResources}
+        onClick={() => void refreshActiveSection()}
+      >
+        {loadingResources ? "Refreshing..." : "Refresh"}
+      </button>
     );
   }
 
@@ -176,10 +255,10 @@ export function ConfigurationPage({ section = defaultSection, navigate, authStat
             key={item.id}
             className={classNames("config-nav-item", activeSectionId === item.id && "active")}
             type="button"
-            onClick={() => navigate(`/configure/${item.id}`)}
+            onClick={() => openSection(item.id)}
           >
             <strong>{item.label}</strong>
-            <span>{item.description}</span>
+            <span>{tabDescription(item)}</span>
           </button>
         ))}
       </aside>
@@ -191,9 +270,12 @@ export function ConfigurationPage({ section = defaultSection, navigate, authStat
             <h2>{activeSection?.label || "Resources"}</h2>
           </div>
           {activeSection.id === "security" ? null : (
-            <div className="management-legend">
-              <span><i /> Runtime managed</span>
-              <span><i /> Config managed</span>
+            <div className="config-management-actions">
+              <div className="management-legend">
+                <span><i /> Runtime managed</span>
+                <span><i /> Config managed</span>
+              </div>
+              {renderRefreshButton()}
             </div>
           )}
         </section>
@@ -276,6 +358,22 @@ export function ConfigurationPage({ section = defaultSection, navigate, authStat
           />
         ) : null}
 
+        {workspaceMode && activeSectionId === "llm-connections" ? (
+          <LLMConnectionWorkspaceModal
+            mode={workspaceMode}
+            resource={activeResource}
+            detailLoading={resourceLoading}
+            capabilities={capabilities}
+            actions={resourceActions}
+            detailError={resourceDetailError}
+            onClose={closeWorkspace}
+            onCreate={handleCreate}
+            onUpdate={handleUpdate}
+            onDelete={handleDelete}
+            onAction={handleAction}
+          />
+        ) : null}
+
         {workspaceMode && activeSectionId === "agents" ? (
           <AgentWorkspaceModal
             resource={activeResource}
@@ -287,7 +385,7 @@ export function ConfigurationPage({ section = defaultSection, navigate, authStat
           />
         ) : null}
 
-        {workspaceMode && !["connectors", "datasets", "semantic-models", "agents", "security"].includes(activeSectionId) ? (
+        {workspaceMode && !["connectors", "datasets", "semantic-models", "llm-connections", "agents", "security"].includes(activeSectionId) ? (
           <ResourceWorkspaceModal
             section={activeSection}
             mode={workspaceMode}

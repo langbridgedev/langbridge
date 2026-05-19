@@ -1,5 +1,7 @@
 """Final response presentation agent for Langbridge AI."""
-from typing import Any
+from typing import Any, TypeVar
+
+from pydantic import BaseModel
 
 from langbridge.ai.base import (
     AgentIOContract,
@@ -13,8 +15,7 @@ from langbridge.ai.base import (
     BaseAgent,
 )
 from langbridge.ai.events import AIEventEmitter, AIEventSource
-from langbridge.ai.llm.base import LLMProvider
-from langbridge.ai.llm.structured import acomplete_structured
+from langbridge.ai.llm.base import LLMMessage, LLMProvider, LLMRequest
 from langbridge.ai.agents.presentation.artifacts import (
     build_available_artifacts,
 )
@@ -22,6 +23,8 @@ from langbridge.ai.agents.presentation.contracts import PresentationLLMOutput
 from langbridge.ai.agents.presentation.prompts import build_presentation_prompt
 from langbridge.ai.agents.presentation.response import PresentationResponseAssembler
 from langbridge.ai.tools.charting import ChartSpec, ChartingTool
+
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 class PresentationAgent(AIEventSource, BaseAgent):
@@ -38,6 +41,29 @@ class PresentationAgent(AIEventSource, BaseAgent):
         self._llm = llm_provider
         self._charting_tool = charting_tool
         self._response_assembler = PresentationResponseAssembler()
+
+    async def _complete_structured(
+        self,
+        prompt: str,
+        *,
+        response_model: type[StructuredModel],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        purpose: str = "presentation.structured",
+    ) -> StructuredModel:
+        invocation = await self._llm.ainvoke(
+            LLMRequest[StructuredModel](
+                purpose=purpose,
+                messages=[LLMMessage(role="user", content=prompt)],
+                response_model=response_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+        parsed = invocation.response.parsed
+        if parsed is None:
+            raise ValueError(f"Presentation LLM response missing parsed {response_model.__name__}.")
+        return parsed
 
     @property
     def specification(self) -> AgentSpecification:
@@ -115,12 +141,12 @@ class PresentationAgent(AIEventSource, BaseAgent):
             presentation_guidance=presentation_guidance,
         )
         parsed = (
-            await acomplete_structured(
-                self._llm,
+            await self._complete_structured(
                 prompt,
                 response_model=PresentationLLMOutput,
                 temperature=0.2,
                 max_tokens=2400,
+                purpose="presentation.compose",
             )
         ).model_dump(mode="json", exclude_none=True)
         response = self._response_assembler.assemble(
@@ -244,17 +270,74 @@ class PresentationAgent(AIEventSource, BaseAgent):
         context: dict[str, Any],
         *payloads: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
-        candidates = [context.get("visualization_recommendation"), context.get("recommended_visualization")]
+        candidates = [
+            context.get("visualization_recommendation"),
+            context.get("recommended_visualization"),
+        ]
         for payload in payloads:
             if isinstance(payload, dict):
                 candidates.extend(
                     payload.get(key)
                     for key in ("visualization_recommendation", "recommended_visualization")
                 )
+        candidates.append(PresentationAgent._follow_up_visualization_recommendation(context))
         for candidate in candidates:
             if isinstance(candidate, dict) and candidate:
                 return candidate
         return None
+
+    @staticmethod
+    def _follow_up_visualization_recommendation(context: dict[str, Any]) -> dict[str, Any] | None:
+        """Promote a chart follow-up plan input into the presentation chart contract."""
+
+        chart_type = PresentationAgent._follow_up_chart_type(context)
+        if not chart_type:
+            return None
+        return {
+            "recommendation": "required",
+            "should_visualize": True,
+            "chart_type": chart_type,
+            "rationale": "User requested a visualization of the prior verified result.",
+        }
+
+    @staticmethod
+    def _follow_up_chart_type(context: dict[str, Any]) -> str | None:
+        resolution = context.get("follow_up_resolution")
+        if isinstance(resolution, dict):
+            chart_type = PresentationAgent._normalize_chart_type(resolution.get("chart_type"))
+            if chart_type:
+                return chart_type
+
+        plan = context.get("plan")
+        steps = plan.get("steps") if isinstance(plan, dict) else None
+        if isinstance(steps, list):
+            for step in reversed(steps):
+                if not isinstance(step, dict):
+                    continue
+                step_input = step.get("input")
+                if not isinstance(step_input, dict):
+                    continue
+                chart_type = PresentationAgent._normalize_chart_type(step_input.get("follow_up_chart_type"))
+                if chart_type:
+                    return chart_type
+        return None
+
+    @staticmethod
+    def _normalize_chart_type(value: Any) -> str | None:
+        text = str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
+        if not text:
+            return None
+        aliases = {
+            "pie-chart": "pie",
+            "bar-chart": "bar",
+            "line-chart": "line",
+            "area-chart": "area",
+            "scatter-plot": "scatter",
+            "scatter-chart": "scatter",
+            "table-chart": "table",
+        }
+        normalized = aliases.get(text, text)
+        return normalized if normalized in {"bar", "line", "area", "scatter", "pie", "table", "stacked-bar"} else None
 
     @staticmethod
     def _recommendation_requests_no_visual(recommendation: dict[str, Any]) -> bool:

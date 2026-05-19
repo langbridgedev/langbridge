@@ -87,6 +87,8 @@ def normalize_agent_stream_stage(*, event_type: str, message: str = "", source: 
         return "running_query"
     if "retry" in normalized or "retry" in message_text:
         return "retrying"
+    if "agentautoselection" in normalized or "agentrouting" in normalized:
+        return "selecting_agent"
     if "toolstarted" in normalized or "asset" in message_text or "analyst" in source_text:
         return "selecting_asset"
     if normalized in {"agentruncompleted", "researchcompleted"}:

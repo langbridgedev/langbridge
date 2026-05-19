@@ -5,6 +5,7 @@ const resourceEndpoints = {
   connectors: "/api/runtime/v1/connectors",
   datasets: "/api/runtime/v1/datasets",
   "semantic-models": "/api/runtime/v1/semantic-models",
+  "llm-connections": "/api/runtime/v1/llm-connections",
   agents: "/api/runtime/v1/agents",
 };
 
@@ -12,6 +13,7 @@ const configurationSections = [
   { id: "connectors", label: "Connectors", description: "Data access and credentials" },
   { id: "datasets", label: "Datasets", description: "Governed source tables" },
   { id: "semantic-models", label: "Semantic Models", description: "Business metrics and dimensions" },
+  { id: "llm-connections", label: "LLM Connections", description: "Model providers and structured output" },
   { id: "agents", label: "Analyst Agents", description: "Agent instructions and tools" },
   { id: "security", label: "Security", description: "Users and runtime access" },
 ];
@@ -20,11 +22,12 @@ const configurationCopy = {
   connectors: { title: "Connectors", eyebrow: "Access" },
   datasets: { title: "Datasets", eyebrow: "Governed data" },
   "semantic-models": { title: "Semantic Models", eyebrow: "Business layer" },
+  "llm-connections": { title: "LLM Connections", eyebrow: "Model runtime" },
   agents: { title: "Analyst Agents", eyebrow: "Reasoning" },
   security: { title: "Security", eyebrow: "Governance" },
 };
 
-const mutableSections = new Set(["connectors", "datasets", "semantic-models"]);
+const mutableSections = new Set(["connectors", "datasets", "semantic-models", "llm-connections"]);
 
 export function listConfigurationSections() {
   return Promise.resolve(configurationSections.map((section) => ({ ...section })));
@@ -120,6 +123,12 @@ export async function runConfigurationResourceAction(section, resource, actionId
       body: JSON.stringify({ sync_mode: "FULL_REFRESH", force_full_refresh: true }),
     });
   }
+  if (section === "llm-connections" && actionId === "test_connection") {
+    return langbridgeRequest(`/api/runtime/v1/llm-connections/${encodedRef}/test`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  }
   if (actionId === "refresh_detail") {
     return getConfigurationResource(section, resource);
   }
@@ -167,6 +176,20 @@ export function getCreateTemplate(section) {
       },
     };
   }
+  if (section === "llm-connections") {
+    return {
+      name: "new_openai",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      description: "Runtime-managed LLM connection",
+      api_key: "",
+      configuration: {
+        structured_outputs: "auto",
+      },
+      is_active: true,
+      default: false,
+    };
+  }
   return {};
 }
 
@@ -181,6 +204,15 @@ export function getUpdateTemplate(section, resource) {
     return {
       label: resource.rawPayload?.label || resource.name || "",
       description: resource.rawPayload?.description || "",
+    };
+  }
+  if (section === "llm-connections") {
+    return {
+      description: resource.rawPayload?.description || "",
+      model: resource.rawPayload?.model || "",
+      configuration: resource.rawPayload?.configuration || {},
+      is_active: Boolean(resource.rawPayload?.is_active ?? true),
+      default: Boolean(resource.rawPayload?.default),
     };
   }
   return {};
@@ -223,6 +255,7 @@ export function getResourceActions(section, resource) {
         id: "sync_status",
         label: "Sync status",
         description: "Read dataset sync status when sync is configured.",
+        disabled: !isSynced,
       },
       {
         id: "run_sync",
@@ -235,6 +268,17 @@ export function getResourceActions(section, resource) {
         label: "Full refresh",
         description: "Start a full refresh for synced datasets.",
         disabled: !isSynced,
+      },
+      ...common,
+    ];
+  }
+
+  if (section === "llm-connections") {
+    return [
+      {
+        id: "test_connection",
+        label: "Test structured output",
+        description: "Run a tiny structured response through the configured provider.",
       },
       ...common,
     ];
@@ -262,10 +306,65 @@ function normalizeResource(section, item) {
   if (section === "semantic-models") {
     return normalizeSemanticModel(item);
   }
+  if (section === "llm-connections") {
+    return normalizeLLMConnection(item);
+  }
   if (section === "agents") {
     return normalizeAgent(item);
   }
   return normalizeGenericResource(item);
+}
+
+function normalizeLLMConnection(item) {
+  const name = item.name || item.id || "llm_connection";
+  const agentNames = toArray((item.agents || []).map((agent) => agent.name || agent.id));
+  const provider = String(item.provider || "").toLowerCase();
+  const structuredOutputs = item.structured_outputs || item.configuration?.structured_outputs || "auto";
+  const credentialState = item.credential_state || "missing";
+  const agentUsage = item.agents.map((agent) => {
+      const agentName = agent.name || agent.id || "agent";
+      const agentDesc = agent.description || "";
+      return {
+        name: agentName,
+        description: agentDesc,
+      }    
+  });
+  return {
+    id: stableId(item, name),
+    ref: item.id || name,
+    section: "llm-connections",
+    rawPayload: item,
+    name,
+    description: item.description || "",
+    subtitle: item.description || labelFromParts(provider, item.model, "LLM provider"),
+    status: item.default ? "Default" : credentialState === "configured" || credentialState === "not_required" ? "Ready" : "Missing key",
+    management: normalizeManagementMode(item),
+    owner: "Runtime API",
+    lastUpdated: formatDate(item.updated_at || item.created_at) || "Live",
+    runtimeState: compactRows([
+      ["Provider", provider],
+      ["Model", item.model],
+      ["Structured outputs", structuredOutputs],
+      ["Credentials", credentialState],
+      ["Active", yesNo(item.is_active)],
+      ["Default", yesNo(item.default)],
+      ["Agents", item.agent_count],
+    ]),
+    configDefinition: compactRows([
+      ["Name", name],
+      ["Description", item.description],
+      ["Base URL", item.base_url || item.configuration?.base_url],
+      ["Management mode", item.management_mode],
+      ["Managed", yesNo(item.managed)],
+    ]),
+    relationships: agentNames.length > 0 ? agentNames : ["No agents use this connection"],
+    details: {
+      // "Connection id": item.id || "n/a",
+      // Configuration: item.configuration || {},
+      "Agent usage": agentUsage || [],
+      "Credential state": credentialState,
+    },
+  };
 }
 
 function normalizeConnector(item) {
@@ -330,8 +429,6 @@ function normalizeDataset(item) {
     ]),
     configDefinition: compactRows([
       ["Connector", item.connector],
-      ["Semantic model", item.semantic_model],
-      ["Semantic models", semanticModels.join(", ")],
       ["Source", describeSource(item.source)],
       ["Schema hint", formatObject(item.schema_hint)],
     ]),
@@ -389,8 +486,8 @@ function normalizeAgent(item) {
   const name = item.name || item.id || "agent";
   const agent = normalizeAgentWorkspace(item);
   const toolLabels = agent.tools.map((tool) => tool.name).filter(Boolean);
-  const semanticModels = agent.analystScope.semanticModels;
-  const datasets = agent.analystScope.datasets;
+  const semanticModels = agent.dataScope.semanticModels;
+  const datasets = agent.dataScope.datasets;
   return {
     id: stableId(item, name),
     ref: item.id || name,
@@ -405,9 +502,10 @@ function normalizeAgent(item) {
     lastUpdated: "Live",
     runtimeState: compactRows([
       ["LLM connection", agent.llm.connection || agent.llm.model],
-      ["Query policy", agent.analystScope.queryPolicy],
+      ["Query policy", agent.dataScope.queryPolicy],
       ["Semantic models", semanticModels.length],
       ["Datasets", datasets.length],
+      ["Orchestration", agent.orchestration.policy],
       ["Tools", item.tool_count ?? agent.tools.length],
       ["Default", yesNo(item.default)],
     ]),
@@ -415,7 +513,8 @@ function normalizeAgent(item) {
       ["Name", name],
       ["Description", item.description],
       ["LLM", agent.llm.connection || [agent.llm.provider, agent.llm.model].filter(Boolean).join(" ")],
-      ["Query policy", agent.analystScope.queryPolicy],
+      ["Query policy", agent.dataScope.queryPolicy],
+      ["Availability", agent.availability.mcp ? "Runtime + MCP" : "Runtime"],
       ["Tools", toolLabels.join(", ")],
     ]),
     relationships: compactList([
@@ -429,7 +528,7 @@ function normalizeAgent(item) {
       Definition: item.definition || {},
       "Semantic models": semanticModels,
       Datasets: datasets,
-      Instructions: agent.prompts.user || "n/a",
+      Instructions: agent.instructions.user || "n/a",
     },
   };
 }
@@ -473,6 +572,7 @@ function formatSectionLabel(section, options = {}) {
     connectors: options.singular ? "connector" : "connectors",
     datasets: options.singular ? "dataset" : "datasets",
     "semantic-models": options.singular ? "semantic model" : "semantic models",
+    "llm-connections": options.singular ? "LLM connection" : "LLM connections",
     agents: options.singular ? "agent" : "agents",
     security: "security",
   };

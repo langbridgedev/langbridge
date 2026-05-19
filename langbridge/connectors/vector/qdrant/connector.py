@@ -5,31 +5,24 @@ import os
 from typing import Any, Dict, List, Optional, Sequence
 
 from langbridge.connectors.base.config import ConnectorRuntimeType
-from langbridge.connectors.base.connector import ManagedVectorDB, run_sync
+from langbridge.connectors.base.connector import ManagedVectorDB
 from langbridge.connectors.base.errors import ConnectorError
 from langbridge.runtime.logger import get_root_logger
 from .config import QdrantConnectorConfig, _parse_bool
 
-try:
-    from qdrant_client import QdrantClient
-    from qdrant_client.http import models as qmodels
-except ImportError as exc:
-    QdrantClient = None
-    qmodels = None
-    _QDRANT_IMPORT_ERROR = exc
-else:
-    _QDRANT_IMPORT_ERROR = None
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.http import models as qmodels
 
 
 class QdrantConnector(ManagedVectorDB):
     """Managed connector for Qdrant."""
 
     RUNTIME_TYPE = ConnectorRuntimeType.QDRANT
+    _client: AsyncQdrantClient
 
     def __init__(self, config: QdrantConnectorConfig, logger: Optional[Any] = None) -> None:
         super().__init__(config=config, logger=logger)
-        self._require_qdrant()
-        self._client = QdrantClient(
+        self._client = AsyncQdrantClient(
             host=config.host,
             port=config.port,
             api_key=config.api_key,
@@ -40,8 +33,7 @@ class QdrantConnector(ManagedVectorDB):
         self._lock = asyncio.Lock()
 
     async def test_connection(self) -> None:
-        self._require_qdrant()
-        await run_sync(self._client.get_collections)
+        await self._client.get_collections()
 
     @staticmethod
     async def create_managed_instance(
@@ -67,25 +59,22 @@ class QdrantConnector(ManagedVectorDB):
         return QdrantConnector(config=config, logger=logger)
 
     async def create_index(self, dimension: int, *, metric: str = "cosine") -> None:
-        self._require_qdrant()
         async with self._lock:
             try:
-                await run_sync(self._client.get_collection, self._collection)
-                raise ConnectorError("Qdrant collection already exists.")
+                await self._client.get_collection(self._collection)
+                raise ConnectorError(f"Collection '{self._collection}' already exists in Qdrant.")
             except Exception:
                 pass
 
-            distance = _distance_from_metric(metric)
+            distance = self._distance_from_metric(metric)
             params = qmodels.VectorParams(size=dimension, distance=distance)
-            await run_sync(
-                self._client.create_collection,
+            self._client.create_collection(
                 collection_name=self._collection,
                 vectors_config=params,
             )
 
     async def delete_index(self) -> None:
-        self._require_qdrant()
-        await run_sync(self._client.delete_collection, self._collection)
+        await self._client.delete_collection(self._collection)
 
     async def upsert_vectors(
         self,
@@ -95,8 +84,6 @@ class QdrantConnector(ManagedVectorDB):
     ) -> List[int]:
         if not vectors:
             return []
-        self._require_qdrant()
-
         payloads: List[Any]
         if metadata is None:
             payloads = [None] * len(vectors)
@@ -112,8 +99,7 @@ class QdrantConnector(ManagedVectorDB):
                 qmodels.PointStruct(id=idx, vector=vector, payload=payload)
                 for idx, vector, payload in zip(ids, vectors, payloads)
             ]
-            await run_sync(
-                self._client.upsert,
+            await self._client.upsert(
                 collection_name=self._collection,
                 points=points,
             )
@@ -123,16 +109,13 @@ class QdrantConnector(ManagedVectorDB):
         self,
         vector: Sequence[float],
         *,
-        top_k: int = 5,
+        top_k: int = 10,
         metadata_filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         if top_k <= 0:
             return []
-        self._require_qdrant()
-
-        query_filter = _build_filter(metadata_filters)
-        results = await run_sync(
-            self._client.search,
+        query_filter = self._build_filter(metadata_filters)
+        results = self._client.search(
             collection_name=self._collection,
             query_vector=vector,
             limit=top_k,
@@ -150,31 +133,23 @@ class QdrantConnector(ManagedVectorDB):
             )
         return output
 
-    @staticmethod
-    def _require_qdrant() -> None:
-        if QdrantClient is not None:
-            return
-        raise ConnectorError(
-            "qdrant-client is not installed; add it to requirements to enable Qdrant connectors."
-        ) from _QDRANT_IMPORT_ERROR
+
+    def _distance_from_metric(metric: str) -> "qmodels.Distance":
+        metric = metric.lower()
+        if metric == "cosine":
+            return qmodels.Distance.COSINE
+        if metric in {"dot", "inner"}:
+            return qmodels.Distance.DOT
+        if metric in {"l2", "euclidean"}:
+            return qmodels.Distance.EUCLID
+        raise ConnectorError(f"Unsupported metric '{metric}' for Qdrant.")
 
 
-def _distance_from_metric(metric: str) -> "qmodels.Distance":
-    metric = metric.lower()
-    if metric == "cosine":
-        return qmodels.Distance.COSINE
-    if metric in {"dot", "inner"}:
-        return qmodels.Distance.DOT
-    if metric in {"l2", "euclidean"}:
-        return qmodels.Distance.EUCLID
-    raise ConnectorError(f"Unsupported metric '{metric}' for Qdrant.")
-
-
-def _build_filter(metadata_filters: Optional[Dict[str, Any]]) -> Optional["qmodels.Filter"]:
-    if not metadata_filters:
-        return None
-    conditions = [
-        qmodels.FieldCondition(key=key, match=qmodels.MatchValue(value=value))
-        for key, value in metadata_filters.items()
-    ]
-    return qmodels.Filter(must=conditions)
+    def _build_filter(metadata_filters: Optional[Dict[str, Any]]) -> Optional["qmodels.Filter"]:
+        if not metadata_filters:
+            return None
+        conditions = [
+            qmodels.FieldCondition(key=key, match=qmodels.MatchValue(value=value))
+            for key, value in metadata_filters.items()
+        ]
+        return qmodels.Filter(must=conditions)

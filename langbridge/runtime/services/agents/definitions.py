@@ -1,10 +1,10 @@
 import uuid
 
 from langbridge.ai import (
-    AiAgentExecutionConfig,
     AnalystAgentConfig,
+    ResolvedAgentOrchestrationConfig,
     build_analyst_configs_from_definition,
-    build_execution_from_definition,
+    resolve_orchestration_from_definition,
 )
 from langbridge.runtime.models import LLMConnectionSecret, RuntimeAgentDefinition
 from langbridge.runtime.ports import AgentDefinitionStore, LLMConnectionStore
@@ -31,6 +31,16 @@ class AgentExecutionDefinitionResolver:
             raise ExecutionValidationError(f"Agent definition {agent_definition_id} is not active.")
         return agent_definition
 
+    async def get_agent_definitions(self, agent_definition_ids: list[uuid.UUID]) -> list[RuntimeAgentDefinition]:
+        definitions: list[RuntimeAgentDefinition] = []
+        seen: set[uuid.UUID] = set()
+        for agent_definition_id in agent_definition_ids:
+            if agent_definition_id in seen:
+                continue
+            seen.add(agent_definition_id)
+            definitions.append(await self.get_agent_definition(agent_definition_id))
+        return definitions
+
     async def get_llm_connection(self, llm_connection_id: uuid.UUID) -> LLMConnectionSecret:
         llm_connection = await self._llm_repository.get_by_id(llm_connection_id)
         if llm_connection is None:
@@ -46,9 +56,9 @@ class AgentExecutionDefinitionResolver:
             definition=agent_definition.definition or {},
         )
 
-    def build_execution(self, agent_definition: RuntimeAgentDefinition) -> AiAgentExecutionConfig:
+    def resolve_orchestration(self, agent_definition: RuntimeAgentDefinition) -> ResolvedAgentOrchestrationConfig:
         definition = agent_definition.definition if isinstance(agent_definition.definition, dict) else {}
-        return build_execution_from_definition(
+        return resolve_orchestration_from_definition(
             definition=definition,
             name=agent_definition.name,
             description=agent_definition.description,

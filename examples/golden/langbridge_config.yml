@@ -15,203 +15,872 @@ runtime:
       threads: 4
 
 connectors:
-  - name: fx_http_demo
+  - name: weather_http_demo
     type: BASIC_HTTP
-    description: Basic HTTP connector example for latest USD exchange rates.
+    description: Keyless Open-Meteo current weather dataset for Shopify store locations.
     connection:
-      api_base_url: https://open.er-api.com/v6
+      api_base_url: https://api.open-meteo.com
       auth_type: none
       timeout_s: 30
 
-  - name: commerce_warehouse
-    type: sqlite
-    description: Local commerce operations warehouse with order and product facts.
-    connection:
-      path: ./data/commerce.db
+  - name: shopify_demo
+    type: shopify
+    description: Shopify analytics-safe synced dataset example using explicit REST resource paths.
+    secrets:
+      shop_domain:
+        provider_type: env
+        identifier: SHOPIFY_SHOP_DOMAIN
+      access_token:
+        provider_type: env
+        identifier: SHOPIFY_ACCESS_TOKEN
 
-  - name: growth_warehouse
-    type: sqlite
-    description: Local growth and customer operations mart with profiles, attribution, and support data.
+  - name: sales_postgres
+    type: postgres
+    description: Local Docker Postgres sales database seeded from synced Shopify product and variant IDs.
     connection:
-      path: ./data/growth_ops.db
+      host: localhost
+      port: 55432
+      database: shopify_sales
+      user: reporting_user
+      password: securepassword
 
   - name: planning_files
-    type: local_filesystem
-    description: File-backed planning connector for monthly channel spend targets.
+    type: file
+    description: File-backed planning connector for product campaign targets.
     connection: {}
 
 datasets:
-  - name: latest_usd_rates_snapshot
-    label: Latest USD Rates Snapshot
-    description: Raw latest exchange-rate payload for base USD.
-    connector: fx_http_demo
+  # - name: store_weather_snapshot
+  #   label: Store Weather Snapshot
+  #   description: Current Open-Meteo weather snapshot for Toronto and London store regions.
+  #   connector: weather_http_demo
+  #   source:
+  #     kind: request
+  #     request:
+  #       method: get
+  #       path: /v1/forecast
+  #       params:
+  #         latitude: "43.6532,51.5072"
+  #         longitude: "-79.3832,-0.1276"
+  #         current: temperature_2m,precipitation,weather_code,wind_speed_10m
+  #         temperature_unit: fahrenheit
+  #         wind_speed_unit: mph
+  #         timezone: auto
+  #         forecast_days: 1
+  #     flatten:
+  #       - current
+  #       - current_units
+  #   materialization:
+  #     mode: synced
+  #     sync:
+  #       strategy: FULL_REFRESH
+  #       sync_on_start: true
+  #       cadence: 1h
+
+  - name: shopify_products
+    description: Synced parent dataset for Shopify products.
+    connector: shopify_demo
     source:
-      kind: request
-      request:
-        method: get
-        path: /latest
-        params:
-          base: USD
-      extraction:
-        type: json
-        options:
-          path: rates
+      kind: resource
+      resource: products
     materialization:
       mode: synced
       sync:
         strategy: FULL_REFRESH
         sync_on_start: true
-        cadence: 1h
-        
-  - name: sales_orders
-    label: Sales Orders
-    description: Order-level commerce facts for revenue, refunds, channel mix, and margin analysis.
-    connector: commerce_warehouse
-    materialization:
-      mode: live
-    tags: [commerce, revenue, finance]
-    source:
-      kind: sql
-      sql: |
-        SELECT
-          o.order_id,
-          o.order_date,
-          date(substr(o.order_date, 1, 7) || '-01') AS order_month,
-          CAST(date(substr(o.order_date, 1, 4) || '-01-01') AS INTEGER) AS order_year,
-          o.customer_id,
-          o.order_channel,
-          o.fulfillment_region,
-          o.order_status,
-          o.currency,
-          o.gross_revenue,
-          o.discount_amount,
-          o.shipping_amount,
-          o.refund_amount,
-          o.net_revenue,
-          o.gross_margin,
-          CASE
-            WHEN o.net_revenue = 0 THEN 0
-            ELSE ROUND(o.gross_margin / o.net_revenue, 4)
-          END AS margin_rate
-        FROM orders AS o
 
-  - name: order_line_items
-    label: Order Line Items
-    description: Product-level line item facts with product hierarchy and realized margin.
-    connector: commerce_warehouse
+  - name: shopify_product_variants
+    description: Synced child dataset for product variants from `products.variants`.
+    connector: shopify_demo
     source:
-      kind: sql
-      sql: |
-        SELECT
-          li.line_id,
-          li.line_id AS id,
-          li.order_id,
-          o.order_date,
-          date(substr(o.order_date, 1, 7) || '-01') AS order_month,
-          o.customer_id,
-          o.order_channel,
-          p.product_sku,
-          p.product_name,
-          p.category,
-          p.subcategory,
-          li.quantity,
-          li.unit_price,
-          li.net_line_revenue,
-          li.line_margin
-        FROM order_items AS li
-        JOIN orders AS o
-          ON o.order_id = li.order_id
-        JOIN products AS p
-          ON p.product_sku = li.product_sku
+      kind: resource
+      resource: products.variants
     materialization:
       mode: synced
       sync:
-        strategy: INCREMENTAL
-        cursor_field: order_date
-        initial_cursor: "2025-01-01"
+        strategy: FULL_REFRESH
         sync_on_start: true
-        cadence: 1h
-    tags: [commerce, product]
 
-  - name: customer_month_revenue
-    label: Customer Month Revenue
-    description: Customer-month-channel revenue rollup used for growth efficiency and conversion analysis.
-    connector: commerce_warehouse
+  - name: shopify_product_options
+    description: Synced child dataset for product options from `products.options`.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: products.options
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  - name: shopify_product_images
+    description: Synced child dataset for product images from `products.images`.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: products.images
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  - name: shopify_custom_collections
+    description: Synced dataset for Shopify custom collections.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: custom_collections
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  - name: shopify_smart_collections
+    description: Synced dataset for Shopify smart collections.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: smart_collections
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  - name: shopify_collects
+    description: Synced dataset mapping products to custom collections.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: collects
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  - name: shopify_locations
+    description: Synced dataset for Shopify locations.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: locations
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  - name: shopify_price_rules
+    description: Synced dataset for Shopify price rules.
+    connector: shopify_demo
+    source:
+      kind: resource
+      resource: price_rules
+    materialization:
+      mode: synced
+      sync:
+        strategy: FULL_REFRESH
+        sync_on_start: true
+
+  - name: sales_customers
+    label: Sales Customers
+    description: Customer records from the local Postgres sales database.
+    connector: sales_postgres
     materialization:
       mode: live
-    tags: [growth, revenue, cohort]
+    source:
+      kind: table
+      table: sales_customers
+
+  - name: sales_orders
+    label: Sales Orders
+    description: Order-level facts from the local Postgres sales database.
+    connector: sales_postgres
+    materialization:
+      mode: live
     source:
       kind: sql
       sql: |
         SELECT
-          CAST(customer_id AS TEXT) || '|' || substr(order_date, 1, 7) || '|' || order_channel AS customer_month_channel_key,
+          id AS order_id,
+          order_number,
           customer_id,
-          date(substr(order_date, 1, 7) || '-01') AS revenue_month,
-          order_channel,
-          substr(order_date, 1, 7) || '|' || order_channel AS channel_month_key,
-          fulfillment_region,
-          SUM(net_revenue) AS monthly_net_revenue,
-          SUM(gross_margin) AS monthly_gross_margin,
-          COUNT(*) AS monthly_order_count,
-          SUM(CASE WHEN order_status <> 'fulfilled' THEN 1 ELSE 0 END) AS refunded_order_count
-        FROM orders
-        GROUP BY 1, 2, 3, 4, 5, 6
+          CAST(order_ts AS DATE) AS order_date,
+          channel,
+          status,
+          fulfillment_location_name,
+          fulfillment_location_country,
+          subtotal,
+          discount,
+          tax,
+          shipping,
+          total
+        FROM sales_orders
+        WHERE status <> 'cancelled'
 
-  - name: customer_profiles
-    label: Customer Profiles
-    description: Shared customer dimension with segment, lifecycle stage, region, and acquisition context.
-    connector: growth_warehouse
+  - name: sales_order_items
+    label: Sales Order Items
+    description: Line-item sales facts keyed to synced Shopify product and variant IDs.
+    connector: sales_postgres
     materialization:
       mode: live
-    tags: [customer, dimension]
-    source:
-      kind: table
-      table: customer_profiles
-
-  - name: campaign_attribution
-    label: Campaign Attribution
-    description: Customer-month-channel attribution rollup with pipeline influence and assisted signups.
-    connector: growth_warehouse
-    materialization:
-      mode: live
-    tags: [growth, marketing]
-    source:
-      kind: table
-      table: campaign_attribution_monthly
-
-  - name: customer_month_support
-    label: Customer Month Support
-    description: Customer-month support load for pairing marketing and revenue outcomes with service pressure.
-    connector: growth_warehouse
-    materialization:
-      mode: live
-    tags: [support, customer]
     source:
       kind: sql
       sql: |
         SELECT
-          CAST(customer_id AS TEXT) || '|' || substr(opened_date, 1, 7) AS customer_month_key,
-          customer_id,
-          date(substr(opened_date, 1, 7) || '-01') AS support_month,
-          MIN(ticket_type) AS dominant_ticket_type,
-          COUNT(*) AS ticket_count,
-          SUM(CASE WHEN severity = 'high' THEN 1 ELSE 0 END) AS high_severity_tickets,
-          SUM(resolution_hours) AS resolution_hours_total
-        FROM support_tickets
-        GROUP BY 1, 2, 3
+          id AS order_item_id,
+          order_id,
+          shopify_product_id,
+          shopify_variant_id,
+          sku,
+          quantity,
+          unit_price,
+          discount,
+          line_total
+        FROM sales_order_items
 
-  - name: channel_spend_targets
-    label: Channel Spend Targets
-    description: Monthly channel spend plan and demand targets from a local CSV file.
+  - name: product_campaign_plan
+    label: Product Campaign Plan
+    description: Product-level merchandising campaign targets from a local CSV file.
     connector: planning_files
     materialization:
       mode: live
-    tags: [growth, finance, planning]
+    tags: [growth, finance, planning, csv]
     source:
       kind: file
-      path: ./data/channel_spend_targets.csv
+      path: ./data/product_campaign_plan.csv
       format: csv
       header: true
+
+semantic_models:
+  - name: shopify_sales_demo
+    description: Golden demo model spanning synced Shopify catalog, Postgres sales facts, CSV campaign plans, and weather API data.
+    default: true
+    datasets:
+      - shopify_products
+      - shopify_product_variants
+      - shopify_product_options
+      - shopify_product_images
+      - shopify_custom_collections
+      - shopify_smart_collections
+      - shopify_collects
+      - shopify_locations
+      - shopify_price_rules
+      - sales_customers
+      - sales_orders
+      - sales_order_items
+      - product_campaign_plan
+    model:
+      version: "1"
+      name: shopify_sales_demo
+      description: Governed demo model for Shopify catalog, sales, campaign, and weather analysis.
+      sql_instructions: |
+        Shopify REST fields such as variant price and price rule value may arrive as strings.
+        Use the numeric semantic measures for price, discount, sales, and plan calculations.
+      datasets:
+        shopify_products:
+          relation_name: shopify_products
+          description: Product-level catalog records synced from Shopify products.
+          dimensions:
+            - name: product_id
+              expression: id
+              type: number
+              primary_key: true
+              synonyms: [id]
+            - name: product_title
+              expression: title
+              type: string
+              synonyms: [product, name]
+              vector:
+                enabled: true
+                refresh_interval: 5m
+            - name: vendor
+              expression: vendor
+              type: string
+              synonyms: [brand, supplier]
+            - name: product_type
+              expression: product_type
+              type: string
+              synonyms: [category, type]
+            - name: status
+              expression: status
+              type: string
+            - name: handle
+              expression: handle
+              type: string
+            - name: tags
+              expression: tags
+              type: string
+            - name: created_at
+              expression: created_at
+              type: time
+            - name: updated_at
+              expression: updated_at
+              type: time
+            - name: published_at
+              expression: published_at
+              type: time
+          measures:
+            - name: product_count
+              expression: id
+              type: number
+              aggregation: count
+              synonyms: [products]
+
+        shopify_product_variants:
+          relation_name: shopify_product_variants
+          description: Product variant records expanded from products.variants.
+          dimensions:
+            - name: variant_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: product_id
+              expression: product_id
+              type: number
+            - name: variant_title
+              expression: title
+              type: string
+              synonyms: [variant, name]
+            - name: sku
+              expression: sku
+              type: string
+            - name: option1
+              expression: option1
+              type: string
+            - name: inventory_policy
+              expression: inventory_policy
+              type: string
+            - name: inventory_management
+              expression: inventory_management
+              type: string
+            - name: taxable
+              expression: taxable
+              type: boolean
+            - name: requires_shipping
+              expression: requires_shipping
+              type: boolean
+            - name: weight_unit
+              expression: weight_unit
+              type: string
+            - name: created_at
+              expression: created_at
+              type: time
+            - name: updated_at
+              expression: updated_at
+              type: time
+          measures:
+            - name: variant_count
+              expression: id
+              type: number
+              aggregation: count
+            - name: total_inventory_quantity
+              expression: inventory_quantity
+              type: number
+              aggregation: sum
+              synonyms: [inventory, stock, quantity on hand]
+            - name: average_variant_price
+              expression: CAST(shopify_product_variants.price AS DOUBLE)
+              type: number
+              aggregation: avg
+              synonyms: [average price, avg price]
+            - name: maximum_variant_price
+              expression: CAST(shopify_product_variants.price AS DOUBLE)
+              type: number
+              aggregation: max
+            - name: minimum_variant_price
+              expression: CAST(shopify_product_variants.price AS DOUBLE)
+              type: number
+              aggregation: min
+            - name: total_variant_weight
+              expression: weight
+              type: number
+              aggregation: sum
+
+        shopify_product_options:
+          relation_name: shopify_product_options
+          description: Product option records expanded from products.options.
+          dimensions:
+            - name: option_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: product_id
+              expression: product_id
+              type: number
+            - name: option_name
+              expression: name
+              type: string
+            - name: position
+              expression: position
+              type: number
+          measures:
+            - name: option_count
+              expression: id
+              type: number
+              aggregation: count
+
+        shopify_product_images:
+          relation_name: shopify_product_images
+          description: Product image records expanded from products.images.
+          dimensions:
+            - name: image_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: product_id
+              expression: product_id
+              type: number
+            - name: alt_text
+              expression: alt
+              type: string
+            - name: image_url
+              expression: src
+              type: string
+            - name: position
+              expression: position
+              type: number
+            - name: created_at
+              expression: created_at
+              type: time
+            - name: updated_at
+              expression: updated_at
+              type: time
+          measures:
+            - name: image_count
+              expression: id
+              type: number
+              aggregation: count
+            - name: average_image_width
+              expression: width
+              type: number
+              aggregation: avg
+            - name: average_image_height
+              expression: height
+              type: number
+              aggregation: avg
+
+        shopify_custom_collections:
+          relation_name: shopify_custom_collections
+          description: Manually curated Shopify custom collections.
+          dimensions:
+            - name: collection_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: collection_title
+              expression: title
+              type: string
+            - name: handle
+              expression: handle
+              type: string
+            - name: sort_order
+              expression: sort_order
+              type: string
+            - name: published_scope
+              expression: published_scope
+              type: string
+            - name: updated_at
+              expression: updated_at
+              type: time
+            - name: published_at
+              expression: published_at
+              type: time
+          measures:
+            - name: custom_collection_count
+              expression: id
+              type: number
+              aggregation: count
+
+        shopify_smart_collections:
+          relation_name: shopify_smart_collections
+          description: Rule-driven Shopify smart collections.
+          dimensions:
+            - name: collection_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: collection_title
+              expression: title
+              type: string
+            - name: handle
+              expression: handle
+              type: string
+            - name: sort_order
+              expression: sort_order
+              type: string
+            - name: disjunctive
+              expression: disjunctive
+              type: boolean
+            - name: updated_at
+              expression: updated_at
+              type: time
+            - name: published_at
+              expression: published_at
+              type: time
+          measures:
+            - name: smart_collection_count
+              expression: id
+              type: number
+              aggregation: count
+
+        shopify_collects:
+          relation_name: shopify_collects
+          description: Product-to-custom-collection membership records.
+          dimensions:
+            - name: collect_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: collection_id
+              expression: collection_id
+              type: number
+            - name: product_id
+              expression: product_id
+              type: number
+            - name: position
+              expression: position
+              type: number
+            - name: sort_value
+              expression: sort_value
+              type: string
+            - name: created_at
+              expression: created_at
+              type: time
+            - name: updated_at
+              expression: updated_at
+              type: time
+          measures:
+            - name: collect_count
+              expression: id
+              type: number
+              aggregation: count
+
+        shopify_locations:
+          relation_name: shopify_locations
+          description: Shopify fulfillment and inventory locations.
+          dimensions:
+            - name: location_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: location_name
+              expression: name
+              type: string
+              synonyms: [location, warehouse]
+            - name: city
+              expression: city
+              type: string
+            - name: province
+              expression: province
+              type: string
+            - name: country
+              expression: country
+              type: string
+            - name: country_name
+              expression: country_name
+              type: string
+            - name: zip
+              expression: zip
+              type: string
+            - name: active
+              expression: active
+              type: boolean
+            - name: created_at
+              expression: created_at
+              type: time
+            - name: updated_at
+              expression: updated_at
+              type: time
+          measures:
+            - name: location_count
+              expression: id
+              type: number
+              aggregation: count
+
+        shopify_price_rules:
+          relation_name: shopify_price_rules
+          description: Shopify discount and price rule configuration.
+          dimensions:
+            - name: price_rule_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: title
+              expression: title
+              type: string
+              synonyms: [discount, price rule, promotion]
+            - name: value_type
+              expression: value_type
+              type: string
+            - name: target_type
+              expression: target_type
+              type: string
+            - name: target_selection
+              expression: target_selection
+              type: string
+            - name: allocation_method
+              expression: allocation_method
+              type: string
+            - name: customer_selection
+              expression: customer_selection
+              type: string
+            - name: once_per_customer
+              expression: once_per_customer
+              type: boolean
+            - name: created_at
+              expression: created_at
+              type: time
+            - name: updated_at
+              expression: updated_at
+              type: time
+            - name: starts_at
+              expression: starts_at
+              type: time
+            - name: ends_at
+              expression: ends_at
+              type: time
+          measures:
+            - name: price_rule_count
+              expression: id
+              type: number
+              aggregation: count
+            - name: average_discount_value
+              expression: CAST(shopify_price_rules.value AS DOUBLE)
+              type: number
+              aggregation: avg
+            - name: maximum_discount_value
+              expression: CAST(shopify_price_rules.value AS DOUBLE)
+              type: number
+              aggregation: max
+
+        sales_customers:
+          relation_name: sales_customers
+          description: Customer records from the seeded Postgres sales database.
+          dimensions:
+            - name: customer_id
+              expression: id
+              type: number
+              primary_key: true
+            - name: customer_key
+              expression: customer_key
+              type: string
+            - name: country
+              expression: country
+              type: string
+            - name: region
+              expression: region
+              type: string
+            - name: loyalty_tier
+              expression: loyalty_tier
+              type: string
+            - name: marketing_opt_in
+              expression: marketing_opt_in
+              type: boolean
+            - name: created_at
+              expression: created_at
+              type: time
+          measures:
+            - name: customer_count
+              expression: id
+              type: number
+              aggregation: count
+
+        sales_orders:
+          relation_name: sales_orders
+          description: Order records from the seeded Postgres sales database.
+          dimensions:
+            - name: order_id
+              expression: order_id
+              type: number
+              primary_key: true
+            - name: order_number
+              expression: order_number
+              type: string
+            - name: customer_id
+              expression: customer_id
+              type: number
+            - name: order_date
+              expression: order_date
+              type: time
+            - name: channel
+              expression: channel
+              type: string
+            - name: status
+              expression: status
+              type: string
+            - name: fulfillment_location_name
+              expression: fulfillment_location_name
+              type: string
+            - name: fulfillment_location_country
+              expression: fulfillment_location_country
+              type: string
+          measures:
+            - name: order_count
+              expression: order_id
+              type: number
+              aggregation: count
+            - name: order_total
+              expression: total
+              type: number
+              aggregation: sum
+            - name: order_discount
+              expression: discount
+              type: number
+              aggregation: sum
+            - name: shipping_revenue
+              expression: shipping
+              type: number
+              aggregation: sum
+
+        sales_order_items:
+          relation_name: sales_order_items
+          description: Sales line items linked to Shopify products and variants.
+          dimensions:
+            - name: order_item_id
+              expression: order_item_id
+              type: number
+              primary_key: true
+            - name: order_id
+              expression: order_id
+              type: number
+            - name: shopify_product_id
+              expression: shopify_product_id
+              type: number
+            - name: shopify_variant_id
+              expression: shopify_variant_id
+              type: number
+            - name: sku
+              expression: sku
+              type: string
+          measures:
+            - name: units_sold
+              expression: quantity
+              type: number
+              aggregation: sum
+              synonyms: [units, quantity sold]
+            - name: net_sales
+              expression: line_total
+              type: number
+              aggregation: sum
+              synonyms: [sales, revenue, line revenue]
+            - name: line_discount
+              expression: discount
+              type: number
+              aggregation: sum
+            - name: average_unit_price
+              expression: unit_price
+              type: number
+              aggregation: avg
+
+        product_campaign_plan:
+          relation_name: product_campaign_plan
+          description: Product campaign targets from CSV.
+          dimensions:
+            - name: shopify_product_id
+              expression: shopify_product_id
+              type: number
+              primary_key: true
+            - name: product_title_snapshot
+              expression: product_title_snapshot
+              type: string
+            - name: campaign_name
+              expression: campaign_name
+              type: string
+            - name: campaign_channel
+              expression: campaign_channel
+              type: string
+            - name: offer_type
+              expression: offer_type
+              type: string
+            - name: target_region
+              expression: target_region
+              type: string
+            - name: start_date
+              expression: start_date
+              type: time
+            - name: end_date
+              expression: end_date
+              type: time
+          measures:
+            - name: planned_units
+              expression: planned_units
+              type: number
+              aggregation: sum
+            - name: planned_spend
+              expression: planned_spend
+              type: number
+              aggregation: sum
+      relationships:
+        - name: sales_items_to_campaign_plan
+          source_dataset: sales_order_items
+          source_field: shopify_product_id
+          target_dataset: product_campaign_plan
+          target_field: shopify_product_id
+          type: many_to_one
+        - name: sales_items_to_orders
+          source_dataset: sales_order_items
+          source_field: order_id
+          target_dataset: sales_orders
+          target_field: order_id
+          type: many_to_one
+        - name: sales_orders_to_customers
+          source_dataset: sales_orders
+          source_field: customer_id
+          target_dataset: sales_customers
+          target_field: id
+          type: many_to_one
+        - name: sales_items_to_shopify_products
+          source_dataset: sales_order_items
+          source_field: shopify_product_id
+          target_dataset: shopify_products
+          target_field: id
+          type: many_to_one
+        - name: sales_items_to_shopify_variants
+          source_dataset: sales_order_items
+          source_field: shopify_variant_id
+          target_dataset: shopify_product_variants
+          target_field: id
+          type: many_to_one
+        - name: variants_to_products
+          source_dataset: shopify_product_variants
+          source_field: product_id
+          target_dataset: shopify_products
+          target_field: id
+          type: many_to_one
+        - name: options_to_products
+          source_dataset: shopify_product_options
+          source_field: product_id
+          target_dataset: shopify_products
+          target_field: id
+          type: many_to_one
+        - name: images_to_products
+          source_dataset: shopify_product_images
+          source_field: product_id
+          target_dataset: shopify_products
+          target_field: id
+          type: many_to_one
+        - name: collects_to_products
+          source_dataset: shopify_collects
+          source_field: product_id
+          target_dataset: shopify_products
+          target_field: id
+          type: many_to_one
+        - name: collects_to_custom_collections
+          source_dataset: shopify_collects
+          source_field: collection_id
+          target_dataset: shopify_custom_collections
+          target_field: id
+          type: many_to_one
+        - name: campaign_plan_to_products
+          source_dataset: product_campaign_plan
+          source_field: shopify_product_id
+          target_dataset: shopify_products
+          target_field: id
+          type: many_to_one
 
 llm_connections:
   - name: self_hosted_openai
@@ -222,391 +891,57 @@ llm_connections:
       provider_type: env
       identifier: OPENAI_API_KEY
 
-semantic_models:
-  - name: commerce_performance
-    description: Multi-dataset commerce model spanning order facts, product lines, and customer segmentation.
-    default: true
-    model:
-      version: "1"
-      name: commerce_performance
-      description: Governed commerce model for revenue, margin, product mix, and customer segment analysis.
-      datasets:
-        sales_orders:
-          relation_name: sales_orders
-          description: Order-level commerce fact dataset.
-          dimensions:
-            - name: order_id
-              expression: order_id
-              type: string
-              primary_key: true
-              vector:
-                enabled: true
-                refresh_interval: 5m
-            - name: order_date
-              expression: order_date
-              type: time
-            - name: order_month
-              expression: order_month
-              type: string
-            - name: order_year
-              expression: order_year
-              type: number
-            - name: customer_id
-              expression: customer_id
-              type: number
-            - name: order_channel
-              expression: order_channel
-              type: string
-            - name: fulfillment_region
-              expression: fulfillment_region
-              type: string
-            - name: order_status
-              expression: order_status
-              type: string
-            - name: currency
-              expression: currency
-              type: string
-          measures:
-            - name: gross_revenue
-              expression: gross_revenue
-              type: number
-              aggregation: sum
-            - name: discount_amount
-              expression: discount_amount
-              type: number
-              aggregation: sum
-            - name: refund_amount
-              expression: refund_amount
-              type: number
-              aggregation: sum
-            - name: net_revenue
-              expression: net_revenue
-              type: number
-              aggregation: sum
-              synonyms: [sales, revenue]
-            - name: gross_margin
-              expression: gross_margin
-              type: number
-              aggregation: sum
-            - name: order_count
-              expression: order_id
-              type: number
-              aggregation: count
-
-        order_line_items:
-          relation_name: order_line_items
-          description: Product line detail for mix and profitability analysis.
-          dimensions:
-            - name: line_id
-              expression: line_id
-              type: string
-              primary_key: true
-            - name: order_id
-              expression: order_id
-              type: string
-            - name: order_date
-              expression: order_date
-              type: time
-            - name: order_month
-              expression: order_month
-              type: time
-            - name: customer_id
-              expression: customer_id
-              type: number
-            - name: order_channel
-              expression: order_channel
-              type: string
-            - name: product_sku
-              expression: product_sku
-              type: string
-            - name: product_name
-              expression: product_name
-              type: string
-            - name: category
-              expression: category
-              type: string
-            - name: subcategory
-              expression: subcategory
-              type: string
-          measures:
-            - name: units_sold
-              expression: quantity
-              type: number
-              aggregation: sum
-            - name: line_net_revenue
-              expression: net_line_revenue
-              type: number
-              aggregation: sum
-            - name: line_margin
-              expression: line_margin
-              type: number
-              aggregation: sum
-
-        customer_profiles:
-          relation_name: customer_profiles
-          description: Shared customer dimension for segmentation and lifecycle analysis.
-          dimensions:
-            - name: customer_id
-              expression: customer_id
-              type: number
-              primary_key: true
-            - name: customer_name
-              expression: customer_name
-              type: string
-            - name: segment
-              expression: segment
-              type: string
-            - name: lifecycle_stage
-              expression: lifecycle_stage
-              type: string
-            - name: acquisition_source
-              expression: acquisition_source
-              type: string
-            - name: region
-              expression: region
-              type: string
-            - name: country
-              expression: country
-              type: string
-            - name: signup_date
-              expression: signup_date
-              type: time
-            - name: account_manager
-              expression: account_manager
-              type: string
-          measures:
-            - name: customer_count
-              expression: customer_id
-              type: number
-              aggregation: count
-
-        channel_spend_targets:
-          relation_name: channel_spend_targets
-          description: Monthly channel spend targets for growth efficiency analysis.
-          dimensions:
-            - name: channel_month_key
-              expression: channel_month_key
-              type: string
-              primary_key: true
-            - name: order_channel
-              expression: order_channel
-              type: string
-            - name: spend_month
-              expression: spend_month
-              type: time
-          measures:
-            - name: spend_target
-              expression: spend_amount
-              type: number
-              aggregation: sum
-
-      relationships:
-        - name: sales_orders_to_customers
-          source_dataset: sales_orders
-          source_field: customer_id
-          target_dataset: customer_profiles
-          target_field: customer_id
-          type: many_to_one
-        - name: line_items_to_orders
-          source_dataset: order_line_items
-          source_field: order_id
-          target_dataset: sales_orders
-          target_field: order_id
-          type: many_to_one
-        - name: spend_targets_to_orders
-          source_dataset: channel_spend_targets
-          source_field: spend_month
-          target_dataset: sales_orders
-          target_field: order_month
-          type: many_to_one
-
-  - name: growth_performance
-    description: Multi-connector growth model joining customer revenue, attribution, and spend planning.
-    model:
-      version: "1"
-      name: growth_performance
-      description: Growth model for spend efficiency, influenced pipeline, and customer cohort performance.
-      datasets:
-        customer_month_revenue:
-          relation_name: customer_month_revenue
-          description: Customer-month-channel revenue grain used for conversion and efficiency analysis.
-          dimensions:
-            - name: customer_month_channel_key
-              expression: customer_month_channel_key
-              type: string
-              primary_key: true
-            - name: customer_id
-              expression: customer_id
-              type: number
-            - name: revenue_month
-              expression: revenue_month
-              type: time
-            - name: order_channel
-              expression: order_channel
-              type: string
-            - name: channel_month_key
-              expression: channel_month_key
-              type: string
-            - name: fulfillment_region
-              expression: fulfillment_region
-              type: string
-          measures:
-            - name: monthly_net_revenue
-              expression: monthly_net_revenue
-              type: number
-              aggregation: sum
-            - name: monthly_gross_margin
-              expression: monthly_gross_margin
-              type: number
-              aggregation: sum
-            - name: monthly_order_count
-              expression: monthly_order_count
-              type: number
-              aggregation: sum
-            - name: refunded_order_count
-              expression: refunded_order_count
-              type: number
-              aggregation: sum
-
-        customer_profiles:
-          relation_name: customer_profiles
-          description: Customer segmentation and lifecycle dimension.
-          dimensions:
-            - name: customer_id
-              expression: customer_id
-              type: number
-              primary_key: true
-            - name: customer_name
-              expression: customer_name
-              type: string
-            - name: segment
-              expression: segment
-              type: string
-            - name: lifecycle_stage
-              expression: lifecycle_stage
-              type: string
-            - name: acquisition_source
-              expression: acquisition_source
-              type: string
-            - name: region
-              expression: region
-              type: string
-            - name: country
-              expression: country
-              type: string
-            - name: signup_date
-              expression: signup_date
-              type: time
-            - name: account_manager
-              expression: account_manager
-              type: string
-          measures:
-            - name: customer_count
-              expression: customer_id
-              type: number
-              aggregation: count
-
-        campaign_attribution:
-          relation_name: campaign_attribution
-          description: Customer-month-channel attribution facts.
-          dimensions:
-            - name: customer_month_channel_key
-              expression: customer_month_channel_key
-              type: string
-              primary_key: true
-            - name: customer_id
-              expression: customer_id
-              type: number
-            - name: attribution_month
-              expression: attribution_month
-              type: time
-            - name: acquisition_channel
-              expression: acquisition_channel
-              type: string
-            - name: channel_month_key
-              expression: channel_month_key
-              type: string
-            - name: primary_campaign
-              expression: primary_campaign
-              type: string
-            - name: funnel_stage
-              expression: funnel_stage
-              type: string
-          measures:
-            - name: attributed_touches
-              expression: attributed_touches
-              type: number
-              aggregation: sum
-            - name: influenced_pipeline
-              expression: influenced_pipeline
-              type: number
-              aggregation: sum
-            - name: assisted_signups
-              expression: assisted_signups
-              type: number
-              aggregation: sum
-
-      relationships:
-        - name: revenue_to_profiles
-          source_dataset: customer_month_revenue
-          source_field: customer_id
-          target_dataset: customer_profiles
-          target_field: customer_id
-          type: many_to_one
-        - name: attribution_to_profiles
-          source_dataset: campaign_attribution
-          source_field: customer_id
-          target_dataset: customer_profiles
-          target_field: customer_id
-          type: many_to_one
-        - name: revenue_to_attribution
-          source_dataset: customer_month_revenue
-          source_field: customer_month_channel_key
-          target_dataset: campaign_attribution
-          target_field: customer_month_channel_key
-          type: many_to_one
-
 ai:
   profiles:
-    - name: commerce
-      description: Commerce analyst
+    - name: shopify_sales_demo_analyst
+      description: Demo analyst across Shopify sync, Postgres sales, CSV planning, and weather API data.
       default: true
-      enabled: true
-
-      scope:
-        semantic_models: [commerce_performance]
-        datasets: [latest_usd_rates_snapshot]
-        query_policy: semantic_preferred
-        allow_source_scope: false
-
-      research:
-        enabled: true
-        extended_thinking: true
-        max_sources: 8
-        require_sources: false
-
-      web_search:
-        enabled: true
-        provider: duckduckgo
-        allowed_domains: [shopify.com, stripe.com]
-        require_allowed_domain: false
-        max_results: 6
-        timebox_seconds: 10
-
-      llm:
-        provider: openai
-        model: gpt-5.4
-        temperature: 0.2
-        reasoning_effort: high
-
-      prompts:
-        system: |
-          You are a Langbridge commerce analyst embedded in a self-hosted analytics runtime.
-        planning: |
-          For planning questions, focus on the upcoming period and prioritize forward-looking metrics and leading indicators.
-        presentation: |
-          Keep answers structured, quantify changes, and cite the dimensions used in the query.
-
-      exposure:
+      availability:
         runtime: true
-        mcp: false
+        mcp: true
+      data_scope:
+        semantic_models: [shopify_sales_demo]
+        datasets:
+          - shopify_products
+          - shopify_product_variants
+          - shopify_product_options
+          - shopify_product_images
+          - shopify_custom_collections
+          - shopify_smart_collections
+          - shopify_collects
+          - shopify_locations
+          - shopify_price_rules
+          - sales_customers
+          - sales_orders
+          - sales_order_items
+          - product_campaign_plan
+        query_policy: semantic_preferred
+      capabilities:
+        source_sql: true
+        research:
+          enabled: false
+        web_search:
+          enabled: true
+      llm:
+        llm_connection: self_hosted_openai
+      instructions:
+        system: You are a Langbridge analytics agent for the golden Shopify sales demo.
+        user: |
+          Answer from governed runtime data first. The demo combines Shopify synced catalog data, a seeded Postgres sales database, a local campaign CSV, and an Open-Meteo weather API dataset.
+          Use Shopify catalog fields for product identity, Postgres facts for sales performance and CSV fields for planned campaigns.
+          Use Web search to get weather context for store locations if relevant, but do not use it for Shopify or sales information.
+          Use the numeric semantic measures for price, discount, sales, and plan calculations, as some source fields arrive as strings.
+          Use the relationships between datasets to connect product, sales, and campaign information.
+          Use the following presentation guidelines when responding:
+           - Keep answers concise and focused on the question.
+           - Cite the specific semantic measures, dimensions, or datasets used in your analysis.
+           - Call out when a question crosses data sources or requires external web search for weather context.
+        presentation: |
+          When presenting your answer, follow these guidelines:
+           - Start with a concise summary of your findings.
+           - Include specific data points and cite the relevant semantic measures, dimensions, or datasets.
+           - If you used web search for weather context, include a brief summary of the relevant weather information and how it relates to the question.
+           - If the question requires connecting information across datasets, clearly explain how you linked the data together using the defined relationships.
+           - Avoid using raw Shopify or sales data if it is not relevant to the question.
+      orchestration:
+        policy: balanced_governed

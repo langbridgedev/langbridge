@@ -348,25 +348,94 @@ class _InMemoryLLMConnectionRepository:
         self._connections = dict(connections)
         self._registry = registry
 
+    @staticmethod
+    def _connection_id(value: Any) -> uuid.UUID:
+        if hasattr(value, "connection"):
+            return getattr(value.connection, "id")
+        return getattr(value, "id")
+
+    def add(self, instance: Any) -> Any:
+        self._connections[self._connection_id(instance)] = instance
+        return instance
+
+    async def save(self, instance: Any) -> Any:
+        self._connections[self._connection_id(instance)] = instance
+        return instance
+
     async def get_by_id(self, id_: object) -> LLMConnectionSecret | None:
         record = self._connections.get(id_)
+        return self._to_secret(record)
+
+    async def get_by_name_for_workspace(
+        self,
+        *,
+        name: str,
+        workspace_id: uuid.UUID,
+    ) -> LLMConnectionSecret | None:
+        normalized_name = str(name or "").strip().lower()
+        for record in self._connections.values():
+            secret = self._to_secret(record)
+            if (
+                secret is not None
+                and secret.workspace_id == workspace_id
+                and secret.name.lower() == normalized_name
+            ):
+                return secret
+        return None
+
+    async def list_llm_connections(
+        self,
+        *,
+        workspace_id: uuid.UUID | None = None,
+    ) -> list[LLMConnectionSecret]:
+        items: list[LLMConnectionSecret] = []
+        for record in self._connections.values():
+            secret = self._to_secret(record)
+            if secret is None:
+                continue
+            if workspace_id is not None and secret.workspace_id != workspace_id:
+                continue
+            items.append(secret)
+        return items
+
+    async def delete(self, instance: Any) -> None:
+        self._connections.pop(self._connection_id(instance), None)
+
+    def _to_secret(self, record: Any) -> LLMConnectionSecret | None:
         if record is None:
             return None
-        if record.api_key_secret is None:
-            return record.connection
+        if isinstance(record, LLMConnectionSecret):
+            return record
+        if hasattr(record, "connection"):
+            if record.api_key_secret is None:
+                return record.connection
+            return LLMConnectionSecret(
+                id=record.connection.id,
+                name=record.connection.name,
+                description=record.connection.description,
+                provider=record.connection.provider,
+                api_key=self._registry.resolve(record.api_key_secret),
+                model=record.connection.model,
+                configuration=dict(record.connection.configuration or {}),
+                is_active=record.connection.is_active,
+                default=record.connection.default,
+                workspace_id=record.connection.workspace_id,
+                created_at=record.connection.created_at,
+                updated_at=record.connection.updated_at,
+            )
         return LLMConnectionSecret(
-            id=record.connection.id,
-            name=record.connection.name,
-            description=record.connection.description,
-            provider=record.connection.provider,
-            api_key=self._registry.resolve(record.api_key_secret),
-            model=record.connection.model,
-            configuration=dict(record.connection.configuration or {}),
-            is_active=record.connection.is_active,
-            default=record.connection.default,
-            workspace_id=record.connection.workspace_id,
-            created_at=record.connection.created_at,
-            updated_at=record.connection.updated_at,
+            id=getattr(record, "id"),
+            name=str(getattr(record, "name")),
+            description=getattr(record, "description", None),
+            provider=str(getattr(record, "provider")),
+            api_key=str(getattr(record, "api_key", "") or ""),
+            model=str(getattr(record, "model")),
+            configuration=dict(getattr(record, "configuration", None) or {}),
+            is_active=bool(getattr(record, "is_active", True)),
+            default=bool(getattr(record, "default", False)),
+            workspace_id=getattr(record, "workspace_id"),
+            created_at=getattr(record, "created_at", None),
+            updated_at=getattr(record, "updated_at", None),
         )
 
 

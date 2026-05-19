@@ -8,7 +8,7 @@ export function DynamicFieldValue({ value, depth = 0 }) {
   }
 
   if (typeof parsedValue === "boolean") {
-    return <span className="dynamic-field-badge">{parsedValue ? "Yes" : "No"}</span>;
+    return <span className={`dynamic-field-badge ${parsedValue ? "is-true" : "is-false"}`}>{parsedValue ? "Yes" : "No"}</span>;
   }
 
   if (typeof parsedValue === "number") {
@@ -74,7 +74,7 @@ function DynamicArrayValue({ value, depth }) {
         <div className="dynamic-list-viewer">
           {value.slice(0, MAX_VISIBLE_ARRAY_ITEMS).map((item, index) => (
             <div className="dynamic-list-row" key={`${String(item)}-${index}`}>
-              <span>Item {index + 1}</span>
+              {/* <span>Item {index + 1}</span> */}
               <DynamicFieldValue value={item} depth={depth + 1} />
             </div>
           ))}
@@ -98,7 +98,7 @@ function DynamicArrayValue({ value, depth }) {
     <div className={`dynamic-array-viewer depth-${depth}`}>
       {value.slice(0, MAX_VISIBLE_ARRAY_ITEMS).map((item, index) => (
         <div className="dynamic-array-card" key={index}>
-          <strong>Item {index + 1}</strong>
+          {/* <strong>Item {index + 1}</strong> */}
           <DynamicFieldValue value={item} depth={depth + 1} />
         </div>
       ))}

@@ -1,10 +1,14 @@
 """LLM-guided meta-controller gateway for the Langbridge AI package."""
 from enum import Enum
-from typing import Any
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
 
 from langbridge.ai.agents.presentation import PresentationAgent
+from langbridge.ai.agents.presentation.contracts import (
+    MARKDOWN_ARTIFACT_RESPONSE_VERSION,
+    PresentationResponseContract,
+)
 from langbridge.ai.base import (
     AgentIOContract,
     AgentResult,
@@ -16,8 +20,7 @@ from langbridge.ai.base import (
     BaseAgent,
 )
 from langbridge.ai.events import AIEventEmitter, AIEventSource
-from langbridge.ai.llm.base import LLMProvider
-from langbridge.ai.llm.structured import acomplete_structured
+from langbridge.ai.llm.base import LLMMessage, LLMProvider, LLMRequest
 from langbridge.ai.modes import AnalystAgentMode, analyst_output_contract_for_task_input, normalize_analyst_task_input
 from langbridge.ai.orchestration.continuation import (
     ContinuationState,
@@ -43,32 +46,41 @@ from langbridge.ai.orchestration.verification import AgentVerifier, Verification
 from langbridge.ai.question_intent import AnalystQuestionIntent
 from langbridge.ai.registry import AgentRegistry
 
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
+
 
 class MetaControllerAction(str, Enum):
     direct = "direct"
     plan = "plan"
     clarify = "clarify"
+    respond = "respond"
     abort = "abort"
 
 
 class MetaControllerDecision(BaseModel):
     action: MetaControllerAction
     rationale: str
+    intent: str | None = None
     agent_name: str | None = None
     task_kind: AgentTaskKind | None = None
     input: dict[str, Any] = Field(default_factory=dict)
     clarification_question: str | None = None
     plan_guidance: str | None = None
+    answer_markdown: str | None = None
+    confidence: float | None = None
 
 
 class MetaControllerLLMDecision(BaseModel):
     action: MetaControllerAction
     rationale: str
+    intent: str | None = None
     agent_name: str | None = None
     task_kind: str | None = None
     input: dict[str, Any] = Field(default_factory=dict)
     clarification_question: str | None = None
     plan_guidance: str | None = None
+    answer_markdown: str | None = None
+    confidence: float | None = None
 
 
 class MetaControllerRun(BaseModel):
@@ -115,6 +127,29 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
         self._max_iterations = max(1, int(max_iterations))
         self._max_replans = max(0, int(max_replans))
         self._max_step_retries = max(0, int(max_step_retries))
+
+    async def _complete_structured(
+        self,
+        prompt: str,
+        *,
+        response_model: type[StructuredModel],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        purpose: str = "meta_controller.structured",
+    ) -> StructuredModel:
+        invocation = await self._llm.ainvoke(
+            LLMRequest[StructuredModel](
+                purpose=purpose,
+                messages=[LLMMessage(role="user", content=prompt)],
+                response_model=response_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+        parsed = invocation.response.parsed
+        if parsed is None:
+            raise ValueError(f"Meta-controller LLM response missing parsed {response_model.__name__}.")
+        return parsed
 
     @property
     def specification(self) -> AgentSpecification:
@@ -196,12 +231,24 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             source="meta-controller",
             details={
                 "action": decision.action.value,
+                "intent": decision.intent,
                 "agent_name": decision.agent_name,
                 "task_kind": decision.task_kind.value if decision.task_kind else None,
             },
         )
 
+        if decision.action == MetaControllerAction.respond:
+            return self._finish_with_route_response(
+                decision=decision,
+                available_agents=[specification.name for specification in specifications],
+            )
+
         if decision.action == MetaControllerAction.clarify:
+            if decision.answer_markdown or decision.intent:
+                return self._finish_with_route_response(
+                    decision=decision,
+                    available_agents=[specification.name for specification in specifications],
+                )
             return await self._finish_before_execution(
                 execution_mode=None,
                 route="clarification",
@@ -302,6 +349,61 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             },
         )
 
+    def _finish_with_route_response(
+        self,
+        *,
+        decision: MetaControllerDecision,
+        available_agents: list[str],
+    ) -> MetaControllerRun:
+        intent = str(decision.intent or decision.action.value).strip() or decision.action.value
+        is_clarification = decision.action == MetaControllerAction.clarify
+        answer_markdown = (
+            str(decision.answer_markdown or "").strip()
+            or str(decision.clarification_question or "").strip()
+            or str(decision.rationale or "").strip()
+        )
+        intent_payload = decision.model_dump(
+            mode="json",
+            exclude={"answer_markdown"},
+            exclude_none=True,
+        )
+        intent_payload["intent"] = intent
+        diagnostics = {
+            "mode": "clarification" if is_clarification else "intent",
+            "intent": intent_payload,
+            "route_decision": decision.model_dump(mode="json", exclude_none=True),
+            **(
+                {"clarifying_question": decision.clarification_question}
+                if is_clarification and decision.clarification_question
+                else {}
+            ),
+        }
+        final = PresentationResponseContract(
+            answer_markdown=answer_markdown,
+            artifacts=[],
+            diagnostics=diagnostics,
+            metadata={
+                "contract_version": MARKDOWN_ARTIFACT_RESPONSE_VERSION,
+                "mode": "clarification" if is_clarification else "intent",
+                "intent": intent,
+            },
+        ).model_dump(mode="json", exclude_none=True)
+        run_diagnostics = {
+            "intent": intent_payload,
+            "route_decision": decision.model_dump(mode="json", exclude_none=True),
+            "available_agents": available_agents,
+            "stop_reason": "clarification" if is_clarification else "intent_response",
+        }
+        route = "intent:clarification" if is_clarification else f"intent:{intent}"
+        return MetaControllerRun(
+            execution_mode=None,
+            status="clarification_needed" if is_clarification else "completed",
+            plan=self._build_terminal_plan(route=route, rationale=decision.rationale),
+            final_result=final,
+            presentation=final,
+            diagnostics=run_diagnostics,
+        )
+
     async def _route_with_llm(
         self,
         *,
@@ -322,15 +424,22 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             requested_agent_mode=str(context.get("requested_agent_mode") or context.get("agent_mode") or ""),
             specification_payloads=[self._spec_payload(item) for item in specifications],
         )
-        decision = await acomplete_structured(
-            self._llm,
+        decision = await self._complete_structured(
             prompt,
             response_model=MetaControllerLLMDecision,
             temperature=0.0,
-            max_tokens=700,
+            max_tokens=1600,
+            purpose="meta_controller.route",
         )
         decision_payload = decision.model_dump(mode="python")
-        for key in ("agent_name", "task_kind", "clarification_question", "plan_guidance"):
+        for key in (
+            "agent_name",
+            "task_kind",
+            "intent",
+            "clarification_question",
+            "plan_guidance",
+            "answer_markdown",
+        ):
             if decision_payload.get(key) in ("", None):
                 decision_payload[key] = None
         decision = MetaControllerDecision.model_validate(decision_payload)
@@ -341,8 +450,8 @@ class MetaControllerAgent(AIEventSource, BaseAgent):
             specifications=specifications,
             force_plan=force_plan,
         )
-        if force_plan and decision.action == MetaControllerAction.direct:
-            raise ValueError("Meta-controller LLM selected direct route despite force_plan.")
+        if force_plan and decision.action in {MetaControllerAction.direct, MetaControllerAction.respond}:
+            raise ValueError("Meta-controller LLM selected a non-plan route despite force_plan.")
         return decision
 
     def _available_specifications(self) -> list[AgentSpecification]:

@@ -1,7 +1,7 @@
 import { ArrowRight, Plus } from "lucide-react";
 import { useEffect, useRef } from "react";
 
-import { RUNTIME_AGENT_MODE_OPTIONS } from "../../lib/runtimeUi";
+import { AUTO_AGENT_SELECTION_VALUE, RUNTIME_AGENT_MODE_OPTIONS } from "../../lib/runtimeUi";
 
 export function ChatComposer({
   agents,
@@ -15,7 +15,7 @@ export function ChatComposer({
   onSubmit,
 }) {
   const textareaRef = useRef(null);
-  const canSubmit = Boolean(!submitting && selectedAgentName && String(message || "").trim());
+  const canSubmit = Boolean(!submitting && agents.length > 0 && String(message || "").trim());
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -68,6 +68,7 @@ export function ChatComposer({
               onChange={(event) => onSelectedAgentNameChange(event.target.value)}
               disabled={submitting || agents.length === 0}
             >
+              <option value={AUTO_AGENT_SELECTION_VALUE}>Auto-select</option>
               {agents.map((item) => (
                 <option key={item.id || item.name} value={item.name}>
                   {item.name}

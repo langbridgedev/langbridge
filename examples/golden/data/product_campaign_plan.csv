@@ -1,0 +1,13 @@
+shopify_product_id,product_title_snapshot,campaign_name,campaign_channel,offer_type,target_region,start_date,end_date,planned_units,planned_spend
+15162442809609,The Complete Snowboard,Peak Season Push,email,bundle,GB,2026-02-01,2026-03-31,120,8500
+15162442907913,The Collection Snowboard: Oxygen,Peak Season Push,paid_search,discount,GB,2026-02-01,2026-03-31,75,7200
+15162443038985,The Collection Snowboard: Liquid,Premium Board Launch,paid_social,discount,CA,2026-02-10,2026-04-15,65,6400
+15162442940681,The Multi-location Snowboard,Store Stock Focus,in_store,bundle,CA,2026-02-15,2026-04-30,90,5100
+15162442744073,The Collection Snowboard: Hydrogen,Hydrogen Collection,email,discount,GB,2026-02-01,2026-03-15,80,4300
+15162442776841,Selling Plans Ski Wax,Accessory Attach,email,cross_sell,Global,2026-02-01,2026-04-30,240,1800
+15162442449161,The Inventory Not Tracked Snowboard,Operational Cleanup,partner,awareness,US,2026-02-20,2026-04-30,30,2500
+15162442678537,The Compare at Price Snowboard,Markdown Watch,paid_social,markdown,US,2026-03-01,2026-04-30,45,3600
+15162442514697,The Minimal Snowboard,Minimalist Feature,display,discount,CA,2026-03-01,2026-04-15,55,4100
+15162442481929,Gift Card,Loyalty Gift Card,sms,loyalty,Global,2026-02-01,2026-04-30,180,2200
+15162443006217,The 3p Fulfilled Snowboard,Third Party Fulfillment,partner,awareness,GB,2026-02-01,2026-03-31,35,3200
+15162442547465,The Draft Snowboard,Draft Product Review,email,awareness,GB,2026-03-01,2026-04-30,20,1600

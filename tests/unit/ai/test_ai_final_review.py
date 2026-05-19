@@ -8,13 +8,14 @@ from langbridge.ai.orchestration.final_review import (
     FinalReviewReasonCode,
 )
 from langbridge.ai.orchestration.final_review_prompts import build_final_review_prompt
+from tests.unit.structured_llm_stub import StructuredTextLLMStub
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-class _FakeLLMProvider:
+class _FakeLLMProvider(StructuredTextLLMStub):
     async def acomplete(self, prompt: str, **kwargs):
         if "Ambiguous revenue request" in prompt:
             return (
@@ -33,7 +34,7 @@ class _FakeLLMProvider:
         return [[1.0] for _ in texts]
 
 
-class _FailIfCalledLLMProvider:
+class _FailIfCalledLLMProvider(StructuredTextLLMStub):
     async def acomplete(self, prompt: str, **kwargs):
         raise AssertionError("Deterministic contract review should not call the LLM.")
 

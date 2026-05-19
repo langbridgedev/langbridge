@@ -22,13 +22,14 @@ from langbridge.runtime.models import (
 )
 from langbridge.runtime.models.metadata import LifecycleState, ManagementMode
 from langbridge.runtime.services.agents import AgentExecutionService
+from tests.unit.structured_llm_stub import StructuredTextLLMStub
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-class _FakeLLMProvider:
+class _FakeLLMProvider(StructuredTextLLMStub):
     def __init__(self) -> None:
         self.prompts = []
 
@@ -67,9 +68,37 @@ class _FakeLLMProvider:
         return [[1.0] for _ in texts]
 
 
-class _FailingLLMProvider:
+class _FailingLLMProvider(StructuredTextLLMStub):
     async def acomplete(self, prompt: str, **kwargs):
         raise RuntimeError("llm down")
+
+    async def create_embeddings(self, texts, embedding_model=None):
+        return [[1.0] for _ in texts]
+
+
+class _IntentRouteLLMProvider(StructuredTextLLMStub):
+    def __init__(self) -> None:
+        self.prompts = []
+
+    async def acomplete(self, prompt: str, **kwargs):
+        self.prompts.append(prompt)
+        if "Decide Langbridge agent route" not in prompt:
+            raise AssertionError(f"Intent route should not invoke execution prompts: {prompt[:120]}")
+        if "Question: hello" in prompt:
+            return (
+                '{"action":"respond","rationale":"The user is greeting the runtime.",'
+                '"intent":"greeting","agent_name":null,"task_kind":null,"input":{},'
+                '"clarification_question":null,"plan_guidance":null,'
+                '"answer_markdown":"Hi. Ask me a governed data question, or ask what I can do for this runtime.",'
+                '"confidence":0.96}'
+            )
+        return (
+            '{"action":"clarify","rationale":"The user prompt is empty.",'
+            '"intent":"empty_prompt","agent_name":null,"task_kind":null,"input":{},'
+            '"clarification_question":"What would you like me to help you analyze?",'
+            '"plan_guidance":null,"answer_markdown":"What would you like me to help you analyze?",'
+            '"confidence":0.95}'
+        )
 
     async def create_embeddings(self, texts, embedding_model=None):
         return [[1.0] for _ in texts]
@@ -87,7 +116,15 @@ class _ArtifactMarkdownLLMProvider(_FakeLLMProvider):
         return await super().acomplete(prompt, **kwargs)
 
 
-class _SqlLLMProvider:
+class _InvalidContextAnalysisLLMProvider(_FakeLLMProvider):
+    async def acomplete(self, prompt: str, **kwargs):
+        self.prompts.append(prompt)
+        if "Analyze verified Langbridge result data" in prompt:
+            return '["region","revenue"]'
+        return await super().acomplete(prompt, **kwargs)
+
+
+class _SqlLLMProvider(StructuredTextLLMStub):
     def __init__(self) -> None:
         self.prompts = []
 
@@ -218,7 +255,7 @@ class _SqlExcludeRetailWholesaleFollowUpLLMProvider(_SqlLLMProvider):
         return await super().acomplete(prompt, **kwargs)
 
 
-class _ClarificationLLMProvider:
+class _ClarificationLLMProvider(StructuredTextLLMStub):
     def __init__(self) -> None:
         self.prompts = []
 
@@ -247,7 +284,7 @@ class _ClarificationLLMProvider:
         return [[1.0] for _ in texts]
 
 
-class _ClarificationThenResearchLLMProvider:
+class _ClarificationThenResearchLLMProvider(StructuredTextLLMStub):
     def __init__(self) -> None:
         self.prompts = []
 
@@ -338,12 +375,84 @@ class _SimpleProfileLLMProvider(_FakeLLMProvider):
         return await super().acomplete(prompt, **kwargs)
 
 
+class _AutoSelectSupportLLMProvider(_FakeLLMProvider):
+    async def acomplete(self, prompt: str, **kwargs):
+        self.prompts.append(prompt)
+        if "Select Langbridge runtime agent" in prompt:
+            assert "commerce_sql" in prompt
+            assert "support_analyst" in prompt
+            return (
+                '{"action":"select","rationale":"The request is about support tickets.",'
+                '"agent_name":"support_analyst","intent":"support_analysis",'
+                '"clarification_question":null,"answer_markdown":null,"confidence":0.91,'
+                '"alternatives":[{"agent_name":"commerce_sql","reason":"Commerce scope is less relevant."}]}'
+            )
+        if "Create a chart specification for verified tabular data" in prompt:
+            return (
+                '{"chart_type":"bar","title":"Open tickets by priority","x":"priority","y":"tickets",'
+                '"series":null,"encoding":{},"rationale":"Bar chart requested for priority counts."}'
+            )
+        if "Decide Langbridge agent route" in prompt:
+            return (
+                '{"action":"direct","rationale":"Support analyst can answer.",'
+                '"agent_name":"analyst.support_analyst","task_kind":"analyst","input":{},'
+                '"clarification_question":null,"plan_guidance":null}'
+            )
+        if "Choose the next execution mode" in prompt:
+            return '{"mode":"context_analysis","reason":"thread context is sufficient"}'
+        if "Analyze verified Langbridge result data" in prompt:
+            return (
+                '{"analysis":"Open support tickets are highest for priority P1.",'
+                '"result":{"columns":["priority","tickets"],"rows":[["P1",12]]}}'
+            )
+        if "Review the final Langbridge answer package" in prompt:
+            return (
+                '{"action":"approve","reason_code":"grounded_complete",'
+                '"rationale":"Answer is grounded in the supplied evidence.",'
+                '"issues":[],"updated_context":{},"clarification_question":null}'
+            )
+        if "Compose the final Langbridge response" in prompt:
+            return (
+                '{"answer_markdown":"P1 has the highest open support ticket count.",'
+                '"artifact_ids":["primary_result"],'
+                '"diagnostics":{"mode":"test"},"metadata":{}}'
+            )
+        raise AssertionError(f"Unexpected prompt: {prompt[:120]}")
+
+
+class _AutoRespondLLMProvider(StructuredTextLLMStub):
+    def __init__(self) -> None:
+        self.prompts = []
+
+    async def acomplete(self, prompt: str, **kwargs):
+        self.prompts.append(prompt)
+        if "Select Langbridge runtime agent" in prompt:
+            return (
+                '{"action":"respond","rationale":"The prompt is a greeting.",'
+                '"agent_name":null,"intent":"greeting","clarification_question":null,'
+                '"answer_markdown":"Hi. Ask me a governed data question or ask what this runtime can do.",'
+                '"confidence":0.97,"alternatives":[]}'
+            )
+        raise AssertionError(f"Auto respond should not run analyst prompts: {prompt[:120]}")
+
+    async def create_embeddings(self, texts, embedding_model=None):
+        return [[1.0] for _ in texts]
+
+
 class _ObjectStore:
     def __init__(self, value):
         self.value = value
 
     async def get_by_id(self, id_):
         return self.value if self.value.id == id_ else None
+
+
+class _MultiObjectStore:
+    def __init__(self, values):
+        self.values = {value.id: value for value in values}
+
+    async def get_by_id(self, id_):
+        return self.values.get(id_)
 
 
 class _ThreadStore(_ObjectStore):
@@ -447,20 +556,40 @@ def _ids():
 def _agent_definition(ids) -> RuntimeAgentDefinition:
     return RuntimeAgentDefinition(
         id=ids.agent_id,
-        name="commerce_agent",
+        name="commerce_sql",
         description="Commerce analyst.",
         llm_connection_id=ids.llm_id,
         definition={
-            "features": {"visualization_enabled": True, "supports_deep_research": True},
-            "tools": [
-                {
-                    "name": "commerce_sql",
-                    "tool_type": "sql",
-                    "description": "Commerce dataset.",
-                    "config": {"dataset_ids": ["commerce_orders"]},
-                }
-            ],
-            "execution": {"max_iterations": 4},
+            "data_scope": {
+                "datasets": ["commerce_orders"],
+                "query_policy": "dataset_only",
+            },
+            "capabilities": {
+                "research": {"enabled": True},
+            },
+            "orchestration": {"policy": "strict_governed"},
+        },
+        is_active=True,
+        management_mode=ManagementMode.RUNTIME_MANAGED,
+        lifecycle_state=LifecycleState.ACTIVE,
+    )
+
+
+def _support_agent_definition(ids, agent_id: uuid.UUID) -> RuntimeAgentDefinition:
+    return RuntimeAgentDefinition(
+        id=agent_id,
+        name="support_analyst",
+        description="Support operations analyst.",
+        llm_connection_id=ids.llm_id,
+        definition={
+            "data_scope": {
+                "datasets": ["support_tickets"],
+                "query_policy": "dataset_only",
+            },
+            "capabilities": {
+                "research": {"enabled": True},
+            },
+            "orchestration": {"policy": "strict_governed"},
         },
         is_active=True,
         management_mode=ManagementMode.RUNTIME_MANAGED,
@@ -471,20 +600,18 @@ def _agent_definition(ids) -> RuntimeAgentDefinition:
 def _dataset_agent_definition(ids, dataset_id: uuid.UUID) -> RuntimeAgentDefinition:
     return RuntimeAgentDefinition(
         id=ids.agent_id,
-        name="commerce_agent",
+        name="commerce_sql",
         description="Commerce analyst.",
         llm_connection_id=ids.llm_id,
         definition={
-            "features": {"visualization_enabled": True, "supports_deep_research": True},
-            "tools": [
-                {
-                    "name": "commerce_sql",
-                    "tool_type": "sql",
-                    "description": "Commerce dataset.",
-                    "config": {"dataset_ids": [str(dataset_id)]},
-                }
-            ],
-            "execution": {"max_iterations": 4},
+            "data_scope": {
+                "datasets": [str(dataset_id)],
+                "query_policy": "dataset_only",
+            },
+            "capabilities": {
+                "research": {"enabled": True},
+            },
+            "orchestration": {"policy": "strict_governed"},
         },
         is_active=True,
         management_mode=ManagementMode.RUNTIME_MANAGED,
@@ -499,11 +626,11 @@ def _simple_ai_agent_definition(ids) -> RuntimeAgentDefinition:
         description="Commerce analyst.",
         llm_connection_id=ids.llm_id,
         definition={
-            "analyst_scope": {
+            "data_scope": {
                 "datasets": ["commerce_orders"],
                 "query_policy": "dataset_only",
             },
-            "prompts": {"system_prompt": "Answer from verified commerce context."},
+            "instructions": {"system": "Answer from verified commerce context."},
         },
         is_active=True,
         management_mode=ManagementMode.RUNTIME_MANAGED,
@@ -623,6 +750,208 @@ def test_agent_execution_service_runs_new_ai_flow_and_persists_message() -> None
     assert result.thread.metadata["continuation_state"]["analysis_state"]["dimensions"] == ["region"]
     assert result.thread.metadata["continuation_state"]["analysis_state"]["dimension_value_samples"] == {"region": ["US"]}
     assert result.assistant_message.content["metadata"]["continuation_state"]["result"]["rows"] == [["US", 2200]]
+
+
+def test_agent_execution_service_auto_selects_candidate_agent() -> None:
+    ids = _ids()
+    support_agent_id = uuid.uuid4()
+    provider = _AutoSelectSupportLLMProvider()
+    message_store = _ThreadMessageStore(
+        [
+            RuntimeThreadMessage(
+                id=ids.message_id,
+                thread_id=ids.thread_id,
+                role=RuntimeMessageRole.user,
+                content={
+                    "text": "Which support ticket priority has the highest open count?",
+                    "context": {
+                        "result": {
+                            "columns": ["priority", "tickets"],
+                            "rows": [["P1", 12]],
+                        }
+                    },
+                },
+            )
+        ]
+    )
+    service = AgentExecutionService(
+        agent_definition_repository=_MultiObjectStore(
+            [_agent_definition(ids), _support_agent_definition(ids, support_agent_id)]
+        ),
+        llm_repository=_ObjectStore(_llm_connection(ids)),
+        thread_repository=_ThreadStore(_thread(ids)),
+        thread_message_repository=message_store,
+        llm_provider_factory=lambda connection: provider,
+    )
+    emitter = CollectingAgentEventEmitter()
+    request = CreateAgentJobRequest(
+        job_type=JobType.AGENT,
+        agent_definition_id=ids.agent_id,
+        router_agent_definition_id=ids.agent_id,
+        candidate_agent_definition_ids=[ids.agent_id, support_agent_id],
+        agent_selection="auto",
+        workspace_id=ids.workspace_id,
+        actor_id=ids.actor_id,
+        thread_id=ids.thread_id,
+    )
+
+    result = _run(service.execute(job_id=ids.job_id, request=request, event_emitter=emitter))
+
+    assert result.agent_definition.id == support_agent_id
+    assert result.assistant_message.model_snapshot["agent_id"] == str(support_agent_id)
+    assert result.response["answer_markdown"].startswith("P1 has the highest open support ticket count.")
+    selection = result.response["diagnostics"]["agent_selection"]
+    assert selection["action"] == "select"
+    assert selection["agent_name"] == "support_analyst"
+    assert selection["candidate_count"] == 2
+    assert selection["selected_agent_definition_id"] == str(support_agent_id)
+    event_types = [event["event_type"] for event in emitter.events]
+    assert "AgentAutoSelectionStarted" in event_types
+    assert "AgentAutoSelectionCompleted" in event_types
+    assert "AgentRouteSelected" in event_types
+
+
+def test_agent_execution_service_auto_selection_can_respond_without_analyst_execution() -> None:
+    ids = _ids()
+    support_agent_id = uuid.uuid4()
+    provider = _AutoRespondLLMProvider()
+    message_store = _ThreadMessageStore(
+        [
+            RuntimeThreadMessage(
+                id=ids.message_id,
+                thread_id=ids.thread_id,
+                role=RuntimeMessageRole.user,
+                content={"text": "hello"},
+            )
+        ]
+    )
+    service = AgentExecutionService(
+        agent_definition_repository=_MultiObjectStore(
+            [_agent_definition(ids), _support_agent_definition(ids, support_agent_id)]
+        ),
+        llm_repository=_ObjectStore(_llm_connection(ids)),
+        thread_repository=_ThreadStore(_thread(ids)),
+        thread_message_repository=message_store,
+        llm_provider_factory=lambda connection: provider,
+    )
+    request = CreateAgentJobRequest(
+        job_type=JobType.AGENT,
+        agent_definition_id=ids.agent_id,
+        candidate_agent_definition_ids=[ids.agent_id, support_agent_id],
+        agent_selection="auto",
+        workspace_id=ids.workspace_id,
+        actor_id=ids.actor_id,
+        thread_id=ids.thread_id,
+    )
+
+    result = _run(service.execute(job_id=ids.job_id, request=request))
+
+    assert result.response["answer_markdown"].startswith("Hi. Ask me a governed data question")
+    assert result.ai_run.plan.route == "agent_selection:respond"
+    assert result.ai_run.status == "completed"
+    assert result.response["diagnostics"]["agent_selection"]["action"] == "respond"
+    assert result.response["diagnostics"]["agent_selection"]["intent"] == "greeting"
+    assert all("Decide Langbridge agent route" not in prompt for prompt in provider.prompts)
+    assert result.assistant_message.content["answer_markdown"] == result.response["answer_markdown"]
+    assert result.thread.state == RuntimeThreadState.awaiting_user_input
+
+
+def test_agent_execution_service_persists_intent_only_response_without_legacy_fields() -> None:
+    ids = _ids()
+    provider = _IntentRouteLLMProvider()
+    message_store = _ThreadMessageStore(
+        [
+            RuntimeThreadMessage(
+                id=ids.message_id,
+                thread_id=ids.thread_id,
+                role=RuntimeMessageRole.user,
+                content={"text": "hello"},
+            )
+        ]
+    )
+    emitter = CollectingAgentEventEmitter()
+    service = AgentExecutionService(
+        agent_definition_repository=_ObjectStore(_agent_definition(ids)),
+        llm_repository=_ObjectStore(_llm_connection(ids)),
+        thread_repository=_ThreadStore(_thread(ids)),
+        thread_message_repository=message_store,
+        llm_provider_factory=lambda connection: provider,
+    )
+
+    result = _run(service.execute(job_id=ids.job_id, request=_request(ids), event_emitter=emitter))
+
+    assert result.response["answer_markdown"].startswith("Hi. Ask me a governed data question")
+    assert "answer" not in result.response
+    assert "result" not in result.response
+    assert result.response["diagnostics"]["intent"]["intent"] == "greeting"
+    assert result.response["diagnostics"]["ai_run"]["route"] == "intent:greeting"
+    assert result.response["diagnostics"]["ai_run"]["status"] == "completed"
+    assert result.assistant_message.content["answer_markdown"] == result.response["answer_markdown"]
+    assert "answer" not in result.assistant_message.content
+    assert "result" not in result.assistant_message.content
+    assert result.thread.state == RuntimeThreadState.awaiting_user_input
+    assert len(provider.prompts) == 1
+    assert "Decide Langbridge agent route" in provider.prompts[0]
+    event_types = [event["event_type"] for event in emitter.events]
+    assert "MetaControllerIntentClassified" not in event_types
+    assert "AgentRoutingStarted" in event_types
+    assert "AgentRouteSelected" in event_types
+    assert "PlanStepStarted" not in event_types
+    assert "PresentationStarted" not in event_types
+    assert emitter.events[-1]["event_type"] == "AgentRunCompleted"
+
+
+def test_agent_execution_service_handles_empty_prompt_as_intent_clarification() -> None:
+    ids = _ids()
+    provider = _IntentRouteLLMProvider()
+    message_store = _ThreadMessageStore(
+        [
+            RuntimeThreadMessage(
+                id=ids.message_id,
+                thread_id=ids.thread_id,
+                role=RuntimeMessageRole.user,
+                content={"text": ""},
+            )
+        ]
+    )
+    service = AgentExecutionService(
+        agent_definition_repository=_ObjectStore(_agent_definition(ids)),
+        llm_repository=_ObjectStore(_llm_connection(ids)),
+        thread_repository=_ThreadStore(_thread(ids)),
+        thread_message_repository=message_store,
+        llm_provider_factory=lambda connection: provider,
+    )
+
+    result = _run(service.execute(job_id=ids.job_id, request=_request(ids)))
+
+    assert result.response["answer_markdown"] == "What would you like me to help you analyze?"
+    assert result.response["diagnostics"]["clarifying_question"] == result.response["answer_markdown"]
+    assert result.response["diagnostics"]["intent"]["intent"] == "empty_prompt"
+    assert result.response["diagnostics"]["ai_run"]["status"] == "clarification_needed"
+    assert result.response["diagnostics"]["ai_run"]["route"] == "intent:clarification"
+    assert result.assistant_message.content["answer_markdown"] == result.response["answer_markdown"]
+    assert len(provider.prompts) == 1
+    assert "Decide Langbridge agent route" in provider.prompts[0]
+
+
+def test_agent_execution_service_falls_back_when_context_analysis_returns_array() -> None:
+    ids = _ids()
+    service, _message_store = _service(ids, _InvalidContextAnalysisLLMProvider())
+
+    result = _run(
+        service.execute(
+            job_id=ids.job_id,
+            request=_request(ids),
+            event_emitter=CollectingAgentEventEmitter(),
+        )
+    )
+
+    assert result.ai_run.status == "completed"
+    step_result = result.ai_run.step_results[0]
+    assert step_result["status"] == "succeeded"
+    assert step_result["output"]["result"]["rows"] == [["US", 2200]]
+    assert step_result["diagnostics"]["context_analysis_fallback"]["reason"] == "structured_output_invalid"
+    assert result.response["diagnostics"]["ai_run"]["status"] == "completed"
 
 
 def test_agent_execution_service_persists_answer_markdown_and_artifacts() -> None:

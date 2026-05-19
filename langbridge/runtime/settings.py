@@ -47,6 +47,10 @@ class RuntimeSettings:
     DATASET_FILE_LOCAL_DIR: str = os.getenv("DATASET_FILE_LOCAL_DIR", "./.langbridge/.langbridge-data/datasets")
     FEDERATION_ARTIFACT_DIR: str = os.getenv("FEDERATION_ARTIFACT_DIR", "./.langbridge/.langbridge-data/federation")
     MANAGED_VECTOR_FAISS_DB_DIR: str = os.getenv("MANAGED_VECTOR_FAISS_DB_DIR", "./.langbridge/.langbridge-data/vector_faiss_dbs")
+    MANAGED_QDRANT_HOST: str = os.getenv("QDRANT_HOST", "localhost")
+    MANAGED_QDRANT_PORT: int = _read_int("QDRANT_PORT", 6333)
+    MANAGED_QDRANT_API_KEY: str | None = os.getenv("QDRANT_API_KEY")
+    MANAGED_QDRANT_HTTPS: bool = _read_bool("QDRANT_HTTPS", False)
     FEDERATION_BROADCAST_THRESHOLD_BYTES: int = _read_int(
         "FEDERATION_BROADCAST_THRESHOLD_BYTES",
         64 * 1024 * 1024,

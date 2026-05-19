@@ -380,7 +380,7 @@ function describeChartKind(chartType) {
   );
 }
 
-function buildTooltipModel({ x, y, width, height, eyebrow, title, value, details = [], color }) {
+function buildTooltipModel({ x, y, width, height, eyebrow, title, value, details = [], color, emphasisKey = "" }) {
   return {
     xPercent: Math.max(8, Math.min(92, (x / width) * 100)),
     yPercent: Math.max(10, Math.min(86, (y / height) * 100)),
@@ -389,22 +389,55 @@ function buildTooltipModel({ x, y, width, height, eyebrow, title, value, details
     value: String(value || "").trim(),
     details: details.filter(Boolean).map((item) => String(item)),
     color: color || DEFAULT_PALETTE[0],
+    emphasisKey: String(emphasisKey || "").trim(),
   };
+}
+
+function positionTooltipFromPointer(tooltip, event) {
+  const region = event?.currentTarget?.closest?.(".chart-visual-region");
+  const rect = region?.getBoundingClientRect?.();
+  if (!rect || typeof event.clientX !== "number" || typeof event.clientY !== "number") {
+    return tooltip;
+  }
+
+  const cursorX = Math.max(12, Math.min(rect.width - 12, event.clientX - rect.left));
+  const cursorY = Math.max(12, Math.min(rect.height - 12, event.clientY - rect.top));
+  return {
+    ...tooltip,
+    cursorX,
+    cursorY,
+    placement: cursorX > rect.width * 0.62 ? "left" : "right",
+    verticalPlacement: cursorY < 80 ? "below" : cursorY > rect.height - 80 ? "above" : "middle",
+  };
+}
+
+function emitPointerTooltip(event, onChange, tooltip) {
+  onChange?.(positionTooltipFromPointer(tooltip, event));
 }
 
 function ChartTooltip({ tooltip }) {
   if (!tooltip) {
     return null;
   }
+  const hasCursorPosition =
+    Number.isFinite(tooltip.cursorX) && Number.isFinite(tooltip.cursorY);
+  const className = [
+    "chart-tooltip",
+    hasCursorPosition ? "chart-tooltip--cursor" : "",
+    tooltip.placement ? `chart-tooltip--${tooltip.placement}` : "",
+    tooltip.verticalPlacement ? `chart-tooltip--${tooltip.verticalPlacement}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <div
-      className="chart-tooltip"
+      className={className}
       style={{
-        left: `${tooltip.xPercent}%`,
-        top: `${tooltip.yPercent}%`,
+        left: hasCursorPosition ? `${tooltip.cursorX}px` : `${tooltip.xPercent}%`,
+        top: hasCursorPosition ? `${tooltip.cursorY}px` : `${tooltip.yPercent}%`,
         "--chart-tooltip-accent": tooltip.color,
       }}
-      role="status"
+      role="tooltip"
       aria-live="polite"
     >
       {tooltip.eyebrow ? <span className="chart-tooltip-eyebrow">{tooltip.eyebrow}</span> : null}
@@ -596,6 +629,21 @@ function BarLikeChart({
                   const barHeight = (Math.max(value, 0) / maxValue) * chartHeight;
                   const y = padding.top + chartHeight - runningHeight - barHeight;
                   runningHeight += barHeight;
+                  const tooltipModel = buildTooltipModel({
+                    x: groupX + groupWidth / 2,
+                    y,
+                    width,
+                    height,
+                    eyebrow: series.label,
+                    title: category,
+                    value: formatChartValue(value, series.key),
+                    details: [
+                      `${toDisplayLabel(xLabel)}: ${category}`,
+                      `${series.label}: ${formatChartValue(value, series.key)}`,
+                    ],
+                    color: palette[seriesIndex % palette.length],
+                    emphasisKey: series.key,
+                  });
                   return (
                     <rect
                       key={`${category}-${seriesIndex}`}
@@ -611,43 +659,10 @@ function BarLikeChart({
                       className="chart-bar-mark"
                       opacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? 0.96 : 0.2}
                       tabIndex={0}
-                      onMouseEnter={() =>
-                        onDatumHover?.(
-                          buildTooltipModel({
-                            x: groupX + groupWidth / 2,
-                            y,
-                            width,
-                            height,
-                            eyebrow: series.label,
-                            title: category,
-                            value: formatChartValue(value, series.key),
-                            details: [
-                              `${toDisplayLabel(xLabel)}: ${category}`,
-                              `${series.label}: ${formatChartValue(value, series.key)}`,
-                            ],
-                            color: palette[seriesIndex % palette.length],
-                          }),
-                        )
-                      }
+                      onMouseEnter={(event) => emitPointerTooltip(event, onDatumHover, tooltipModel)}
+                      onMouseMove={(event) => emitPointerTooltip(event, onDatumHover, tooltipModel)}
                       onMouseLeave={onDatumLeave}
-                      onFocus={() =>
-                        onDatumHover?.(
-                          buildTooltipModel({
-                            x: groupX + groupWidth / 2,
-                            y,
-                            width,
-                            height,
-                            eyebrow: series.label,
-                            title: category,
-                            value: formatChartValue(value, series.key),
-                            details: [
-                              `${toDisplayLabel(xLabel)}: ${category}`,
-                              `${series.label}: ${formatChartValue(value, series.key)}`,
-                            ],
-                            color: palette[seriesIndex % palette.length],
-                          }),
-                        )
-                      }
+                      onFocus={() => onDatumHover?.(tooltipModel)}
                       onBlur={onDatumLeave}
                     />
                   );
@@ -672,6 +687,21 @@ function BarLikeChart({
                 const barHeight = (Math.max(value, 0) / maxValue) * chartHeight;
                 const x = groupX + seriesIndex * barWidth;
                 const y = padding.top + chartHeight - barHeight;
+                const tooltipModel = buildTooltipModel({
+                  x: x + Math.max(barWidth - 6, 10) / 2,
+                  y,
+                  width,
+                  height,
+                  eyebrow: series.label,
+                  title: category,
+                  value: formatChartValue(value, series.key),
+                  details: [
+                    `${toDisplayLabel(xLabel)}: ${category}`,
+                    `${series.label}: ${formatChartValue(value, series.key)}`,
+                  ],
+                  color: palette[seriesIndex % palette.length],
+                  emphasisKey: series.key,
+                });
                 return (
                   <rect
                     key={`${category}-${seriesIndex}`}
@@ -687,43 +717,10 @@ function BarLikeChart({
                     className="chart-bar-mark"
                     opacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? 0.96 : 0.2}
                     tabIndex={0}
-                    onMouseEnter={() =>
-                      onDatumHover?.(
-                        buildTooltipModel({
-                          x: x + Math.max(barWidth - 6, 10) / 2,
-                          y,
-                          width,
-                          height,
-                          eyebrow: series.label,
-                          title: category,
-                          value: formatChartValue(value, series.key),
-                          details: [
-                            `${toDisplayLabel(xLabel)}: ${category}`,
-                            `${series.label}: ${formatChartValue(value, series.key)}`,
-                          ],
-                          color: palette[seriesIndex % palette.length],
-                        }),
-                      )
-                    }
+                    onMouseEnter={(event) => emitPointerTooltip(event, onDatumHover, tooltipModel)}
+                    onMouseMove={(event) => emitPointerTooltip(event, onDatumHover, tooltipModel)}
                     onMouseLeave={onDatumLeave}
-                    onFocus={() =>
-                      onDatumHover?.(
-                        buildTooltipModel({
-                          x: x + Math.max(barWidth - 6, 10) / 2,
-                          y,
-                          width,
-                          height,
-                          eyebrow: series.label,
-                          title: category,
-                          value: formatChartValue(value, series.key),
-                          details: [
-                            `${toDisplayLabel(xLabel)}: ${category}`,
-                            `${series.label}: ${formatChartValue(value, series.key)}`,
-                          ],
-                          color: palette[seriesIndex % palette.length],
-                        }),
-                      )
-                    }
+                    onFocus={() => onDatumHover?.(tooltipModel)}
                     onBlur={onDatumLeave}
                   />
                 );
@@ -922,67 +919,54 @@ function LineLikeChart({
               onMouseEnter={() => onHoverSeries?.(series.key)}
               onMouseLeave={() => onClearHoverSeries?.()}
             />
-            {series.points.map((point) => (
-              <g key={`${series.key}-${point.label}`}>
-                <circle
-                  cx={point.x}
-                  cy={point.y}
-                  r={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? "8" : "6.5"}
-                  fill={palette[seriesIndex % palette.length]}
-                  fillOpacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? "0.16" : "0.06"}
-                  className="chart-point-halo"
-                />
-                <circle
-                  cx={point.x}
-                  cy={point.y}
-                  r={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? "4.5" : "3.5"}
-                  fill={palette[seriesIndex % palette.length]}
-                  stroke="rgba(255, 255, 255, 0.95)"
-                  strokeWidth="2"
-                  opacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? 1 : 0.28}
-                  className="chart-point-mark"
-                />
-                <circle
-                  cx={point.x}
-                  cy={point.y}
-                  r="12"
-                  fill="transparent"
-                  tabIndex={0}
-                  onMouseEnter={() =>
-                    onDatumHover?.(
-                      buildTooltipModel({
-                        x: point.x,
-                        y: point.y,
-                        width,
-                        height,
-                        eyebrow: series.label,
-                        title: point.label,
-                        value: formatChartValue(point.value, series.key),
-                        details: [`${xLabel}: ${point.label}`, `${yLabel}: ${formatChartValue(point.value, series.key)}`],
-                        color: palette[seriesIndex % palette.length],
-                      }),
-                    )
-                  }
-                  onMouseLeave={onDatumLeave}
-                  onFocus={() =>
-                    onDatumHover?.(
-                      buildTooltipModel({
-                        x: point.x,
-                        y: point.y,
-                        width,
-                        height,
-                        eyebrow: series.label,
-                        title: point.label,
-                        value: formatChartValue(point.value, series.key),
-                        details: [`${xLabel}: ${point.label}`, `${yLabel}: ${formatChartValue(point.value, series.key)}`],
-                        color: palette[seriesIndex % palette.length],
-                      }),
-                    )
-                  }
-                  onBlur={onDatumLeave}
-                />
-              </g>
-            ))}
+            {series.points.map((point) => {
+              const tooltipModel = buildTooltipModel({
+                x: point.x,
+                y: point.y,
+                width,
+                height,
+                eyebrow: series.label,
+                title: point.label,
+                value: formatChartValue(point.value, series.key),
+                details: [`${xLabel}: ${point.label}`, `${yLabel}: ${formatChartValue(point.value, series.key)}`],
+                color: palette[seriesIndex % palette.length],
+                emphasisKey: series.key,
+              });
+              return (
+                <g key={`${series.key}-${point.label}`}>
+                  <circle
+                    cx={point.x}
+                    cy={point.y}
+                    r={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? "8" : "6.5"}
+                    fill={palette[seriesIndex % palette.length]}
+                    fillOpacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? "0.16" : "0.06"}
+                    className="chart-point-halo"
+                  />
+                  <circle
+                    cx={point.x}
+                    cy={point.y}
+                    r={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? "4.5" : "3.5"}
+                    fill={palette[seriesIndex % palette.length]}
+                    stroke="rgba(255, 255, 255, 0.95)"
+                    strokeWidth="2"
+                    opacity={!resolvedEmphasisKey || resolvedEmphasisKey === series.key ? 1 : 0.28}
+                    className="chart-point-mark"
+                  />
+                  <circle
+                    cx={point.x}
+                    cy={point.y}
+                    r="12"
+                    fill="transparent"
+                    tabIndex={0}
+                    onMouseEnter={(event) => emitPointerTooltip(event, onDatumHover, tooltipModel)}
+                    onMouseMove={(event) => emitPointerTooltip(event, onDatumHover, tooltipModel)}
+                    onMouseLeave={onDatumLeave}
+                    onFocus={() => onDatumHover?.(tooltipModel)}
+                    onBlur={onDatumLeave}
+                  />
+                </g>
+              );
+            })}
           </g>
         ))}
       </svg>
@@ -1093,6 +1077,18 @@ function ScatterChart({
           const x = padding.left + (point.x / maxX) * chartWidth;
           const y = padding.top + chartHeight - (point.y / maxY) * chartHeight;
           const groupIndex = Math.max(groups.indexOf(point.group), 0);
+          const tooltipModel = buildTooltipModel({
+            x,
+            y,
+            width,
+            height,
+            eyebrow: point.group,
+            title: point.label,
+            value: `${formatChartValue(point.x, xLabel)} / ${formatChartValue(point.y, yLabel)}`,
+            details: [`${xLabel}: ${formatChartValue(point.x, xLabel)}`, `${yLabel}: ${formatChartValue(point.y, yLabel)}`],
+            color: palette[groupIndex % palette.length],
+            emphasisKey: point.group,
+          });
           return (
             <g key={`${point.group}-${point.label}-${index}`}>
               <circle
@@ -1119,37 +1115,10 @@ function ScatterChart({
                 r="14"
                 fill="transparent"
                 tabIndex={0}
-                onMouseEnter={() =>
-                  onDatumHover?.(
-                    buildTooltipModel({
-                      x,
-                      y,
-                      width,
-                      height,
-                      eyebrow: point.group,
-                      title: point.label,
-                      value: `${formatChartValue(point.x, xLabel)} / ${formatChartValue(point.y, yLabel)}`,
-                      details: [`${xLabel}: ${formatChartValue(point.x, xLabel)}`, `${yLabel}: ${formatChartValue(point.y, yLabel)}`],
-                      color: palette[groupIndex % palette.length],
-                    }),
-                  )
-                }
+                onMouseEnter={(event) => emitPointerTooltip(event, onDatumHover, tooltipModel)}
+                onMouseMove={(event) => emitPointerTooltip(event, onDatumHover, tooltipModel)}
                 onMouseLeave={onDatumLeave}
-                onFocus={() =>
-                  onDatumHover?.(
-                    buildTooltipModel({
-                      x,
-                      y,
-                      width,
-                      height,
-                      eyebrow: point.group,
-                      title: point.label,
-                      value: `${formatChartValue(point.x, xLabel)} / ${formatChartValue(point.y, yLabel)}`,
-                      details: [`${xLabel}: ${formatChartValue(point.x, xLabel)}`, `${yLabel}: ${formatChartValue(point.y, yLabel)}`],
-                      color: palette[groupIndex % palette.length],
-                    }),
-                  )
-                }
+                onFocus={() => onDatumHover?.(tooltipModel)}
                 onBlur={onDatumLeave}
               />
             </g>
@@ -1256,6 +1225,20 @@ function PieChart({
           const angleInRadians = ((middleAngle - 90) * Math.PI) / 180;
           const offsetX = Math.cos(angleInRadians) * emphasisOffset;
           const offsetY = Math.sin(angleInRadians) * emphasisOffset;
+          const tooltipModel = buildTooltipModel({
+            x: outerPoint.x,
+            y: outerPoint.y,
+            width: 280,
+            height: 280,
+            eyebrow: title || "Breakdown",
+            title: slice.label,
+            value: formatChartValue(slice.value, measureKey),
+            details: [
+              `${truncateLabel(measureKey, 28)}: ${formatChartValue(slice.value, measureKey)}`,
+              `${Math.round((slice.value / total) * 100)}% of total`,
+            ],
+            color: palette[index % palette.length],
+          });
           return (
             <path
               key={slice.label}
@@ -1267,24 +1250,13 @@ function PieChart({
               stroke="rgba(255,255,255,0.92)"
               strokeWidth={!resolvedEmphasisKey || resolvedEmphasisKey === slice.label ? 2 : 1}
               tabIndex={0}
-              onMouseEnter={() => {
+              onMouseEnter={(event) => {
                 onHoverSliceKey?.(slice.label);
-                onTooltipChange?.(
-                  buildTooltipModel({
-                    x: outerPoint.x,
-                    y: outerPoint.y,
-                    width: 280,
-                    height: 280,
-                    eyebrow: title || "Breakdown",
-                    title: slice.label,
-                    value: formatChartValue(slice.value, measureKey),
-                    details: [
-                      `${truncateLabel(measureKey, 28)}: ${formatChartValue(slice.value, measureKey)}`,
-                      `${Math.round((slice.value / total) * 100)}% of total`,
-                    ],
-                    color: palette[index % palette.length],
-                  }),
-                );
+                emitPointerTooltip(event, onTooltipChange, tooltipModel);
+              }}
+              onMouseMove={(event) => {
+                onHoverSliceKey?.(slice.label);
+                emitPointerTooltip(event, onTooltipChange, tooltipModel);
               }}
               onMouseLeave={() => {
                 onClearHoverSliceKey?.();
@@ -1292,22 +1264,7 @@ function PieChart({
               }}
               onFocus={() => {
                 onHoverSliceKey?.(slice.label);
-                onTooltipChange?.(
-                  buildTooltipModel({
-                    x: outerPoint.x,
-                    y: outerPoint.y,
-                    width: 280,
-                    height: 280,
-                    eyebrow: title || "Breakdown",
-                    title: slice.label,
-                    value: formatChartValue(slice.value, measureKey),
-                    details: [
-                      `${truncateLabel(measureKey, 28)}: ${formatChartValue(slice.value, measureKey)}`,
-                      `${Math.round((slice.value / total) * 100)}% of total`,
-                    ],
-                    color: palette[index % palette.length],
-                  }),
-                );
+                onTooltipChange?.(tooltipModel);
               }}
               onBlur={() => {
                 onClearHoverSliceKey?.();
@@ -1414,6 +1371,18 @@ export function ChartPreview({
     setHoveredKey("");
   }
 
+  function showDatumTooltip(nextTooltip) {
+    setTooltip(nextTooltip);
+    if (nextTooltip?.emphasisKey) {
+      setHoveredKey(nextTooltip.emphasisKey);
+    }
+  }
+
+  function clearDatumTooltip() {
+    setTooltip(null);
+    setHoveredKey("");
+  }
+
   function clearVisualInteraction() {
     setTooltip(null);
     setHoveredKey("");
@@ -1495,8 +1464,8 @@ export function ChartPreview({
           palette={palette}
           chartId={chartId}
           activeGroupKey={emphasisKey}
-          onDatumHover={setTooltip}
-          onDatumLeave={() => setTooltip(null)}
+          onDatumHover={showDatumTooltip}
+          onDatumLeave={clearDatumTooltip}
           onToggleSeries={handleToggleKey}
           onHoverSeries={setHoveredKey}
           onClearHoverSeries={clearHoverState}
@@ -1674,8 +1643,8 @@ export function ChartPreview({
           xLabel={dimensionKey}
           yLabel={measureKeys.map((key) => toDisplayLabel(key, { stripMeasurePrefix: true })).join(", ")}
           activeSeriesKey={emphasisKey}
-          onDatumHover={setTooltip}
-          onDatumLeave={() => setTooltip(null)}
+          onDatumHover={showDatumTooltip}
+          onDatumLeave={clearDatumTooltip}
           onToggleSeries={handleToggleKey}
           onHoverSeries={setHoveredKey}
           onClearHoverSeries={clearHoverState}
@@ -1690,8 +1659,8 @@ export function ChartPreview({
           xLabel={dimensionKey}
           yLabel={measureKeys.map((key) => toDisplayLabel(key, { stripMeasurePrefix: true })).join(", ")}
           activeSeriesKey={emphasisKey}
-          onDatumHover={setTooltip}
-          onDatumLeave={() => setTooltip(null)}
+          onDatumHover={showDatumTooltip}
+          onDatumLeave={clearDatumTooltip}
           onToggleSeries={handleToggleKey}
           onHoverSeries={setHoveredKey}
           onClearHoverSeries={clearHoverState}

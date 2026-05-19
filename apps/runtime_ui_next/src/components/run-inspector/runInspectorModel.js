@@ -49,6 +49,24 @@ function readRouteDecision(diagnostics) {
   );
 }
 
+function readIntentDecision(diagnostics) {
+  const aiRun = readAiRun(diagnostics);
+  return (
+    objectValue(aiRun?.diagnostics?.intent) ||
+    objectValue(diagnostics?.intent) ||
+    objectValue(readExecution(diagnostics)?.intent)
+  );
+}
+
+function readAgentSelection(diagnostics) {
+  const aiRun = readAiRun(diagnostics);
+  return (
+    objectValue(diagnostics?.agent_selection) ||
+    objectValue(readExecution(diagnostics)?.agent_selection) ||
+    objectValue(aiRun?.diagnostics?.agent_selection)
+  );
+}
+
 function readFinalReview(execution, diagnostics) {
   return (
     objectValue(execution?.reviews?.final_review) ||
@@ -81,6 +99,19 @@ function readSqlItems(execution, diagnostics) {
   return arrayValue(execution?.sql).length > 0
     ? arrayValue(execution?.sql)
     : arrayValue(diagnostics?.sql);
+}
+
+function readInvestigationTrace(execution, diagnostics) {
+  const directTrace = arrayValue(diagnostics?.investigation_trace);
+  if (directTrace.length > 0) {
+    return directTrace;
+  }
+  const items = [];
+  readStepResults(execution, diagnostics).forEach((step) => {
+    const stepTrace = arrayValue(step?.diagnostics?.investigation_trace);
+    stepTrace.forEach((item) => items.push(item));
+  });
+  return items;
 }
 
 function statusTone(value, fallback = "neutral") {
@@ -119,7 +150,7 @@ function buildEvidenceSummary(execution) {
   return parts.join(" | ");
 }
 
-function buildSummary({ diagnostics, execution, routeDecision, sqlItems }) {
+function buildSummary({ diagnostics, execution, routeDecision, agentSelection, sqlItems }) {
   const aiRun = readAiRun(diagnostics);
   const finalReview = readFinalReview(execution, diagnostics);
   const verificationItems = readVerificationItems(execution, diagnostics);
@@ -147,7 +178,12 @@ function buildSummary({ diagnostics, execution, routeDecision, sqlItems }) {
     status: textValue(execution?.status || aiRun?.status || diagnostics?.status),
     route: textValue(execution?.route || aiRun?.route),
     executionMode: textValue(execution?.execution_mode || aiRun?.execution_mode),
-    selectedAgent: textValue(execution?.selected_agent || aiRun?.diagnostics?.selected_agent || routeDecision?.agent_name),
+    selectedAgent: textValue(
+      execution?.selected_agent ||
+        aiRun?.diagnostics?.selected_agent ||
+        routeDecision?.agent_name ||
+        agentSelection?.agent_name,
+    ),
     stopReason: textValue(execution?.stop_reason || aiRun?.diagnostics?.stop_reason),
     iterations: numberValue(execution?.iterations || aiRun?.diagnostics?.iterations),
     replanCount: numberValue(execution?.replan_count || aiRun?.diagnostics?.replan_count),
@@ -160,8 +196,54 @@ function buildSummary({ diagnostics, execution, routeDecision, sqlItems }) {
   };
 }
 
-function buildFlowItems({ diagnostics, execution, routeDecision }) {
+function buildTraceFlowItems(traceItems) {
+  return traceItems
+    .filter((item) => item && typeof item === "object")
+    .map((item, index) => {
+      const status = textValue(item.status);
+      const rowCount = numberValue(item.rowcount);
+      const meta = compact([
+        item.type ? toTitle(item.type) : "",
+        status ? toTitle(status) : "",
+        item.query_scope,
+        rowCount !== null ? `${rowCount.toLocaleString()} rows` : "",
+        item.recommended_chart_type ? `${item.recommended_chart_type} chart` : "",
+      ]).join(" | ");
+      return {
+        id: textValue(item.id) || `investigation-${index + 1}`,
+        type: textValue(item.type) || "investigation",
+        tone: statusTone(status, "neutral"),
+        title: textValue(item.title) || `Investigation step ${index + 1}`,
+        description: textValue(item.summary || item.rationale || item.evidence_goal),
+        meta,
+      };
+    });
+}
+
+function buildFlowItems({ diagnostics, execution, routeDecision, intentDecision, agentSelection, investigationTrace }) {
   const items = [];
+
+  if (agentSelection) {
+    const action = textValue(agentSelection.action);
+    const confidence = numberValue(agentSelection.confidence);
+    const candidateCount = numberValue(agentSelection.candidate_count);
+    items.push({
+      id: "agent-selection",
+      type: "agent-selection",
+      tone: statusTone(action === "clarify" ? "clarification" : action || "completed", "active"),
+      title:
+        action === "select" && agentSelection.agent_name
+          ? `Auto selected ${agentSelection.agent_name}`
+          : action
+            ? `Auto ${labelize(action)}`
+            : "Auto agent selection",
+      description: textValue(agentSelection.rationale || agentSelection.clarification_question),
+      meta: compact([
+        candidateCount !== null ? `${candidateCount} candidate(s)` : "",
+        confidence !== null ? `${Math.round(confidence * 100)}% confidence` : "",
+      ]).join(" | "),
+    });
+  }
 
   if (routeDecision) {
     const action = textValue(routeDecision.action);
@@ -177,6 +259,21 @@ function buildFlowItems({ diagnostics, execution, routeDecision }) {
       description: textValue(routeDecision.rationale || routeDecision.clarification_question),
       meta: compact([routeDecision.task_kind, routeDecision.input?.agent_mode ? `Mode ${routeDecision.input.agent_mode}` : ""]).join(" | "),
     });
+  } else if (intentDecision) {
+    const intent = textValue(intentDecision.intent);
+    const action = textValue(intentDecision.action);
+    const confidence = numberValue(intentDecision.confidence);
+    items.push({
+      id: "intent-decision",
+      type: "intent",
+      tone: statusTone(action === "clarify" ? "clarification" : "completed", "active"),
+      title: intent ? `Intent: ${toTitle(intent)}` : "Intent classified",
+      description: textValue(intentDecision.rationale || intentDecision.clarification_question),
+      meta: compact([
+        action ? toTitle(action) : "",
+        confidence !== null ? `${Math.round(confidence * 100)}% confidence` : "",
+      ]).join(" | "),
+    });
   } else if (execution?.route || execution?.selected_agent) {
     items.push({
       id: "route",
@@ -186,6 +283,23 @@ function buildFlowItems({ diagnostics, execution, routeDecision }) {
       description: textValue(execution.summary),
       meta: compact([execution.execution_mode, execution.stop_reason]).join(" | "),
     });
+  }
+
+  const traceItems = buildTraceFlowItems(investigationTrace);
+  if (traceItems.length > 0) {
+    items.push(...traceItems);
+    const finalReview = readFinalReview(execution, diagnostics);
+    if (finalReview) {
+      items.push({
+        id: "final-review",
+        type: "review",
+        tone: statusTone(finalReview.action || finalReview.reason_code),
+        title: finalReview.action ? `Final review: ${toTitle(finalReview.action)}` : "Final review",
+        description: textValue(finalReview.rationale || finalReview.reason_code),
+        meta: textValue(finalReview.reason_code),
+      });
+    }
+    return items;
   }
 
   readPlanSteps(execution, diagnostics).forEach((step, index) => {
@@ -319,12 +433,27 @@ export function buildRunInspectorModel(diagnostics) {
   }
 
   const execution = readExecution(source);
-  const routeDecision = readRouteDecision(source);
+  const intentDecision = readIntentDecision(source);
+  const agentSelection = readAgentSelection(source);
+  const routeDecisionRaw = readRouteDecision(source);
+  const routeAction = textValue(routeDecisionRaw?.action).toLowerCase();
+  const routeDecision =
+    intentDecision && ["respond", "clarify"].includes(routeAction)
+      ? null
+      : routeDecisionRaw;
   const sqlItems = readSqlItems(execution, source);
+  const investigationTrace = readInvestigationTrace(execution, source);
 
   return {
-    summary: buildSummary({ diagnostics: source, execution, routeDecision, sqlItems }),
-    flowItems: buildFlowItems({ diagnostics: source, execution, routeDecision }),
+    summary: buildSummary({ diagnostics: source, execution, routeDecision, agentSelection, sqlItems }),
+    flowItems: buildFlowItems({
+      diagnostics: source,
+      execution,
+      routeDecision,
+      intentDecision,
+      agentSelection,
+      investigationTrace,
+    }),
     queryItems: buildQueryItems(sqlItems),
     checkItems: buildCheckItems({ diagnostics: source, execution }),
     raw: source,

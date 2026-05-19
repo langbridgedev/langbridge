@@ -31,7 +31,6 @@ export function ResourceList({
   return (
     <div className="config-resource-list">
       <div className="config-resource-list-head">
-        <strong>{loading ? "Loading..." : `${filteredResources.length} ${resourceLabel}`}</strong>
         <div className="config-resource-list-actions">
           <input
             type="search"

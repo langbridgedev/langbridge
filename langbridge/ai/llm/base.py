@@ -1,9 +1,78 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping, MutableMapping, TypeVar
+from typing import Any, Generic, Literal, Mapping, MutableMapping, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+T = TypeVar("T", bound=BaseModel)
+
+LLMRole = Literal["system", "developer", "user", "assistant"]
+LLMMessageKind = Literal[
+    "instruction",
+    "user_input",
+    "conversation_context",
+    "evidence",
+    "tool_context",
+    "output_contract",
+]
+
+
+class LLMMessage(BaseModel):
+    role: LLMRole
+    content: str
+    kind: LLMMessageKind = "user_input"
+    name: str | None = None
+    trusted: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LLMRequest(BaseModel, Generic[T]):
+    """Provider-neutral async LLM request.
+
+    `response_model` makes structured output explicit at the request boundary.
+    Provider implementations should try their native structured-output path first
+    and then use `LLMProvider._extract_response` as the common JSON extraction
+    fallback when native enforcement is unavailable.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    purpose: str
+    messages: list[LLMMessage]
+    response_model: type[T] | None = Field(default=None, exclude=True)
+    temperature: float = 0.0
+    max_tokens: int | None = None
+    provider_options: dict[str, Any] = Field(default_factory=dict)
+    trace_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LLMResponse(BaseModel, Generic[T]):
+    """Normalized provider response plus optional structured output."""
+
+    raw_response: dict[str, Any]
+    text: str | None = None
+    parsed: T | None = None
+    response_model_name: str | None = None
+    extract_mode: Literal["native_structured", "json_extractor", "text", "none"] = "none"
+
+
+class LLMInvocation(BaseModel, Generic[T]):
+    request: LLMRequest[T]
+    response: LLMResponse[T]
+
+
+class LLMEmbeddingsRequest(BaseModel):
+    texts: list[str]
+    embedding_model: str | None = None
+    provider_options: dict[str, Any] = Field(default_factory=dict)
+    trace_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LLMEmbeddingsInvocation(BaseModel):
+    request: LLMEmbeddingsRequest
+    embeddings: list[list[float]]
+    raw_response: dict[str, Any] | None = None
 
 
 class LLMProviderName(str, Enum):
@@ -19,12 +88,6 @@ class ProviderConfigurationError(ValueError):
 
 class ProviderNotRegisteredError(LookupError):
     """Raised when no provider implementation is registered for a name."""
-
-
-def _extract_value(obj: Any, key: str, default: Any = None) -> Any:
-    if isinstance(obj, Mapping):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
 
 
 def coerce_provider_name(value: Any) -> LLMProviderName:
@@ -46,10 +109,10 @@ class LLMConnectionConfig:
 
     @classmethod
     def from_connection(cls, connection: Any) -> "LLMConnectionConfig":
-        provider = coerce_provider_name(_extract_value(connection, "provider"))
-        api_key = _extract_value(connection, "api_key")
-        model = _extract_value(connection, "model")
-        configuration = _extract_value(connection, "configuration", {}) or {}
+        provider = coerce_provider_name(cls._extract_value(connection, "provider"))
+        api_key = cls._extract_value(connection, "api_key")
+        model = cls._extract_value(connection, "model")
+        configuration = cls._extract_value(connection, "configuration", {}) or {}
 
         if api_key is None:
             raise ProviderConfigurationError("LLM connection is missing an API key.")
@@ -67,10 +130,11 @@ class LLMConnectionConfig:
             configuration=configuration,
         )
 
-
-LLMMessage = dict[str, Any]
-LLMResponse = dict[str, Any]
-StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
+    @classmethod
+    def _extract_value(cls, obj: Any, key: str, default: Any = None) -> Any:
+        if isinstance(obj, Mapping):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
 
 
 class LLMProvider(ABC):
@@ -112,153 +176,70 @@ class LLMProvider(ABC):
         """Instantiate a provider SDK client."""
 
     @abstractmethod
-    def complete(
-        self,
-        prompt: str,
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> str:
-        """Generate a text completion for the given prompt."""
-
-    @abstractmethod
-    async def acomplete(
-        self,
-        prompt: str,
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> str:
-        """Asynchronously generate a text completion for the given prompt."""
-
-    async def acomplete_structured(
-        self,
-        prompt: str,
-        *,
-        response_model: type[StructuredModel],
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> StructuredModel:
-        """Asynchronously generate and validate structured output."""
-        return await self.ainvoke_structured(
-            [{"role": "user", "content": prompt}],
-            response_model=response_model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-
-    @abstractmethod
-    def invoke(
-        self,
-        messages: list[LLMMessage],
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> LLMResponse:
-        """Invoke the model with messages and return a plain dict response."""
-
-    @abstractmethod
     async def ainvoke(
         self,
-        messages: list[LLMMessage],
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> LLMResponse:
-        """Asynchronously invoke the model with messages and return a plain dict response."""
+        request: LLMRequest[T],
+    ) -> LLMInvocation[T]:
+        """Asynchronously invoke the model with a structured-first request.
 
-    async def ainvoke_structured(
-        self,
-        messages: list[LLMMessage],
-        *,
-        response_model: type[StructuredModel],
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> StructuredModel:
-        """Asynchronously invoke the model and validate structured output.
-
-        Concrete providers can override the native path. The base implementation
-        centralizes auto/native/prompt behavior so provider call sites can depend
-        on one structured-output API.
+        Implementations should:
+        1. send `request.messages` using provider-native roles where possible;
+        2. if `request.response_model` is present, prefer native structured output;
+        3. if native structured output is unavailable, call `_extract_response`
+           on the text response to validate the parsed model consistently.
         """
-        from .structured import (
-            StructuredOutputMode,
-            StructuredOutputUnsupportedError,
-            configured_structured_output_mode,
-            parse_structured_text,
-        )
 
-        mode = configured_structured_output_mode(self.configuration)
-        if mode in {StructuredOutputMode.auto, StructuredOutputMode.native}:
-            try:
-                return await self._ainvoke_structured_native(
-                    messages,
-                    response_model=response_model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-            except StructuredOutputUnsupportedError:
-                if mode == StructuredOutputMode.native:
-                    raise
-            except Exception:
-                if mode == StructuredOutputMode.native:
-                    raise
-
-        fallback_messages = self._messages_with_structured_prompt(
-            messages,
-            response_model=response_model,
-        )
-        response = await self.ainvoke(
-            fallback_messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return parse_structured_text(response_text(response), response_model=response_model)
-
-    async def _ainvoke_structured_native(
-        self,
-        messages: list[LLMMessage],
-        *,
-        response_model: type[StructuredModel],
-        temperature: float,
-        max_tokens: int | None,
-    ) -> StructuredModel:
-        from .structured import StructuredOutputUnsupportedError
-
-        raise StructuredOutputUnsupportedError(
-            f"Provider '{self.name.value}' does not implement native structured output."
-        )
-
-    @staticmethod
-    def _messages_with_structured_prompt(
-        messages: list[LLMMessage],
-        *,
-        response_model: type[BaseModel],
-    ) -> list[LLMMessage]:
-        from .structured import structured_prompt
-
-        if not messages:
-            return [{"role": "user", "content": structured_prompt("", response_model=response_model)}]
-        updated = list(messages)
-        last = dict(updated[-1])
-        last["content"] = structured_prompt(str(last.get("content") or ""), response_model=response_model)
-        updated[-1] = last
-        return updated
-        
     @abstractmethod
-    async def create_embeddings(
+    async def acreate_embeddings(
         self,
-        texts: list[str],
-        embedding_model: str | None = None,
-    ) -> list[list[float]]:
-        """Asynchronously create embeddings for a list of texts."""
+        request: LLMEmbeddingsRequest,
+    ) -> LLMEmbeddingsInvocation:
+        """Asynchronously create embeddings with a structured request."""
+        raise NotImplementedError(f"Provider '{self.name.value}' does not support embeddings.")
+
+    def _extract_response(
+        self,
+        response: LLMResponse[Any],
+        response_model: type[T] | None = None,
+    ) -> LLMResponse[T]:
+        """Parse text JSON into the requested Pydantic model.
+
+        This is the common fallback providers should call after a non-native
+        structured response. It intentionally imports the JSON parser lazily to
+        keep `base.py` independent from `structured.py` at module import time.
+        """
+
+        if response_model is None:
+            raise ProviderConfigurationError("Structured response extraction requires a response_model.")
+
+        from .structured import StructuredOutputParser
+
+        text = response.text if isinstance(response.text, str) else response_text(response)
+        parsed = StructuredOutputParser(response_model).parse_text(text)
+        return LLMResponse[T](
+            raw_response=response.raw_response,
+            text=text,
+            parsed=parsed,
+            response_model_name=response_model.__name__,
+            extract_mode="json_extractor",
+        )
 
 
-def response_text(response: LLMResponse) -> str:
-    text = response.get("text")
+def response_text(response: LLMResponse[Any] | Mapping[str, Any]) -> str:
+    """Extract assistant text from normalized or provider-native responses."""
+
+    raw_response: Mapping[str, Any]
+    if isinstance(response, LLMResponse):
+        if isinstance(response.text, str):
+            return response.text
+        raw_response = response.raw_response
+    else:
+        raw_response = response
+
+    text = raw_response.get("text")
     if isinstance(text, str):
         return text
-    choices = response.get("choices")
+    choices = raw_response.get("choices")
     if isinstance(choices, list) and choices:
         first = choices[0]
         if isinstance(first, Mapping):
@@ -267,7 +248,15 @@ def response_text(response: LLMResponse) -> str:
                 return str(message["content"])
             if isinstance(first.get("text"), str):
                 return str(first["text"])
-    content = response.get("content")
+    content = raw_response.get("content")
     if isinstance(content, str):
         return content
-    return str(response)
+    if isinstance(content, list):
+        text_parts = [
+            str(item.get("text"))
+            for item in content
+            if isinstance(item, Mapping) and item.get("type") == "text" and item.get("text") is not None
+        ]
+        if text_parts:
+            return "".join(text_parts)
+    return str(raw_response)

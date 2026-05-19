@@ -234,6 +234,14 @@ class AgentConversationContextBuilder:
         text = cls.message_text(message)
         if text:
             return text
+        content = message.content
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, dict):
+            for key in ("text", "message", "prompt", "query"):
+                value = content.get(key)
+                if isinstance(value, str):
+                    return value.strip()
         raise ExecutionValidationError(f"Thread message {message.id} does not contain user text.")
 
     @staticmethod

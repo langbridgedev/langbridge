@@ -284,6 +284,38 @@ export function buildArtifactRenderPlan(parts, artifacts, fallbackVisualization)
   return { aliasById, skipIds };
 }
 
+export function buildUnreferencedPrimaryArtifactIds(parts, artifacts) {
+  const referencedIds = new Set(
+    (Array.isArray(parts) ? parts : [])
+      .filter((part) => part?.type === "artifact")
+      .map((part) => String(part.id || "").trim())
+      .filter(Boolean),
+  );
+  const hasReferencedPrimaryDataArtifact = (Array.isArray(artifacts) ? artifacts : []).some((artifact) => {
+    const id = artifactId(artifact);
+    const kind = artifactKind(artifact, id);
+    return referencedIds.has(id) && (kind === "chart" || kind === "table");
+  });
+  if (hasReferencedPrimaryDataArtifact) {
+    return [];
+  }
+  const candidates = (Array.isArray(artifacts) ? artifacts : []).filter((artifact) => {
+    const id = artifactId(artifact);
+    if (!id || referencedIds.has(id)) {
+      return false;
+    }
+    const kind = artifactKind(artifact, id);
+    if (kind !== "chart" && kind !== "table") {
+      return false;
+    }
+    const role = String(artifact?.role || "").trim();
+    return role === "primary_result" || id === "primary_visualization" || id === "primary_result";
+  });
+  const charts = candidates.filter((artifact) => artifactKind(artifact) === "chart");
+  const selected = charts.length > 0 ? charts : candidates.filter((artifact) => artifactKind(artifact) === "table");
+  return selected.map((artifact) => artifactId(artifact)).filter(Boolean);
+}
+
 export async function copyText(value) {
   const text = String(value || "");
   if (

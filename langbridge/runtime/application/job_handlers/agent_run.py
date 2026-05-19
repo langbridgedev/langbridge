@@ -21,6 +21,9 @@ AGENT_RUN_JOB_TYPE = "agent.run"
 class _AgentRunJobPayload:
     agent_definition_id: uuid.UUID | None
     agent_name: str | None
+    agent_selection: str
+    router_agent_definition_id: uuid.UUID | None
+    candidate_agent_definition_ids: list[uuid.UUID]
     thread_id: uuid.UUID
     user_message_id: uuid.UUID | None
     agent_mode: str
@@ -46,6 +49,14 @@ class _AgentRunPublicProgressPolicy:
                 stage="selecting_agent",
             ),
             "AgentRouteSelected": _PublicProgressEvent(
+                message="Selecting analyst.",
+                stage="selecting_agent",
+            ),
+            "AgentAutoSelectionStarted": _PublicProgressEvent(
+                message="Selecting analyst.",
+                stage="selecting_agent",
+            ),
+            "AgentAutoSelectionCompleted": _PublicProgressEvent(
                 message="Selecting analyst.",
                 stage="selecting_agent",
             ),
@@ -206,6 +217,16 @@ class AgentRunJobHandler(RuntimeJobHandler):
         return _AgentRunJobPayload(
             agent_definition_id=self._uuid_or_none(payload.get("agent_definition_id")),
             agent_name=str(payload.get("agent_name") or "").strip() or None,
+            agent_selection=str(payload.get("agent_selection") or "").strip().lower() or "pinned",
+            router_agent_definition_id=self._uuid_or_none(payload.get("router_agent_definition_id")),
+            candidate_agent_definition_ids=[
+                parsed
+                for parsed in (
+                    self._uuid_or_none(item)
+                    for item in (payload.get("candidate_agent_definition_ids") or [])
+                )
+                if parsed is not None
+            ],
             thread_id=self._required_uuid(payload.get("thread_id"), "thread_id"),
             user_message_id=self._uuid_or_none(payload.get("user_message_id")),
             agent_mode=str(payload.get("agent_mode") or "auto").strip() or "auto",
@@ -224,6 +245,14 @@ class AgentRunJobHandler(RuntimeJobHandler):
         return {
             "agent_definition_id": str(payload.agent_definition_id) if payload.agent_definition_id else None,
             "agent_name": payload.agent_name,
+            "agent_selection": payload.agent_selection,
+            "router_agent_definition_id": str(payload.router_agent_definition_id)
+            if payload.router_agent_definition_id
+            else None,
+            "candidate_agent_definition_ids": [
+                str(item)
+                for item in payload.candidate_agent_definition_ids
+            ],
             "thread_id": str(payload.thread_id),
             "user_message_id": str(payload.user_message_id) if payload.user_message_id else None,
             "agent_mode": payload.agent_mode,
@@ -235,6 +264,14 @@ class AgentRunJobHandler(RuntimeJobHandler):
             "job_type": self.job_type,
             "agent_definition_id": str(payload.agent_definition_id) if payload.agent_definition_id else None,
             "agent_name": payload.agent_name,
+            "agent_selection": payload.agent_selection,
+            "router_agent_definition_id": str(payload.router_agent_definition_id)
+            if payload.router_agent_definition_id
+            else None,
+            "candidate_agent_definition_ids": [
+                str(item)
+                for item in payload.candidate_agent_definition_ids
+            ],
             "thread_id": str(payload.thread_id),
             "message_id": str(payload.user_message_id) if payload.user_message_id else None,
             "agent_mode": payload.agent_mode,

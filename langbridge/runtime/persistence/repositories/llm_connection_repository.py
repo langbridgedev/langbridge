@@ -28,6 +28,32 @@ class LLMConnectionRepository(AsyncBaseRepository[LLMConnection]):
         stmt = self._select_with_relationships().filter(LLMConnection.id == id_)
         result = await self._session.scalars(stmt)
         return result.one_or_none()
+
+    async def get_by_id_for_workspace(
+        self,
+        *,
+        connection_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+    ) -> LLMConnection | None:
+        stmt = self._select_with_relationships().filter(
+            LLMConnection.id == connection_id,
+            LLMConnection.workspace_id == workspace_id,
+        )
+        result = await self._session.scalars(stmt)
+        return result.one_or_none()
+
+    async def get_by_name_for_workspace(
+        self,
+        *,
+        name: str,
+        workspace_id: uuid.UUID,
+    ) -> LLMConnection | None:
+        stmt = self._select_with_relationships().filter(
+            LLMConnection.name == name,
+            LLMConnection.workspace_id == workspace_id,
+        )
+        result = await self._session.scalars(stmt)
+        return result.one_or_none()
     
     async def list_llm_connections(
         self,

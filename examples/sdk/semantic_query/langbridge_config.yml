@@ -190,18 +190,21 @@ ai:
   profiles:
     - name: commerce_analyst
       description: Default local analytics agent for the SDK notebook and async examples.
-      llm:
-        llm_connection: local_openai
-      scope:
+      availability:
+        runtime: true
+        mcp: false
+      data_scope:
         semantic_models: [commerce_performance]
         datasets: [shopify_orders, customers, support_tickets]
-      prompts:
+        query_policy: semantic_preferred
+      capabilities:
+        source_sql: false
+      llm:
+        llm_connection: local_openai
+      instructions:
         system: You are a Langbridge analytics agent.
         user: |
           Focus on net sales, margin, country, channel, and loyalty questions.
         presentation: Keep answers concise and clearly grounded in query results.
-      access:
-        allowed_connectors: [commerce_demo]
-        denied_connectors: []
-      execution:
-        max_iterations: 3
+      orchestration:
+        policy: balanced_governed

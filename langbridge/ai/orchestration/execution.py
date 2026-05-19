@@ -28,9 +28,9 @@ class PlanExecutionState(BaseModel):
     review_decisions: list[dict[str, Any]] = Field(default_factory=list)
     iteration: int = 0
     replan_count: int = 0
-    max_iterations: int = 8
-    max_replans: int = 2
-    max_step_retries: int = 1
+    max_iterations: int = 20
+    max_replans: int = 3
+    max_step_retries: int = 3
     step_retry_counts: dict[str, int] = Field(default_factory=dict)
     context: dict[str, Any] = Field(default_factory=dict)
 

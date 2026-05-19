@@ -12,13 +12,14 @@ from langbridge.ai import (
     MetaControllerAgent,
 )
 from langbridge.ai.agents import PresentationAgent
+from tests.unit.structured_llm_stub import StructuredTextLLMStub
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-class _GoldenLLMProvider:
+class _GoldenLLMProvider(StructuredTextLLMStub):
     def __init__(self) -> None:
         self.prompts: list[str] = []
 

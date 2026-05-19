@@ -1,6 +1,6 @@
 from datetime import datetime
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, field_serializer, field_validator, model_validator
 
@@ -34,6 +34,7 @@ from langbridge.runtime.models.jobs import (
     SqlQueryRequest,
     SqlQueryScope,
 )
+from langbridge.runtime.models.llm import LLMProvider
 from langbridge.runtime.models.state import ConnectorSyncMode, ConnectorSyncStatus
 
 
@@ -126,6 +127,82 @@ class RuntimeConnectorSummary(RuntimeModel):
 class RuntimeConnectorListResponse(RuntimeModel):
     items: list[RuntimeConnectorSummary] = Field(default_factory=list)
     total: int = 0
+
+
+class RuntimeLLMConnectionAgentUsage(RuntimeModel):
+    id: uuid.UUID
+    name: str
+    description: str | None = None
+    default: bool = False
+
+
+class RuntimeLLMConnectionSummary(RuntimeModel):
+    id: uuid.UUID | None = None
+    name: str
+    description: str | None = None
+    provider: LLMProvider
+    model: str
+    configuration: dict[str, Any] = Field(default_factory=dict)
+    structured_outputs: str = "auto"
+    base_url: str | None = None
+    is_active: bool = True
+    default: bool = False
+    credential_state: str = "missing"
+    management_mode: ManagementMode
+    managed: bool = False
+    agent_count: int = 0
+    agents: list[RuntimeLLMConnectionAgentUsage] = Field(default_factory=list)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _normalize_provider(cls, value: Any) -> LLMProvider:
+        return LLMProvider(str(getattr(value, "value", value)).strip().lower())
+
+
+class RuntimeLLMConnectionListResponse(RuntimeModel):
+    items: list[RuntimeLLMConnectionSummary] = Field(default_factory=list)
+    total: int = 0
+
+
+class RuntimeLLMConnectionCreateRequest(RuntimeRequestModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    provider: LLMProvider
+    model: str = Field(..., min_length=1, max_length=100)
+    description: str | None = None
+    api_key: str | None = None
+    configuration: dict[str, Any] = Field(default_factory=dict)
+    is_active: bool = True
+    default: bool = False
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _normalize_provider(cls, value: Any) -> LLMProvider:
+        return LLMProvider(str(getattr(value, "value", value)).strip().lower())
+
+
+class RuntimeLLMConnectionUpdateRequest(RuntimeRequestModel):
+    description: str | None = None
+    model: str | None = Field(default=None, min_length=1, max_length=100)
+    api_key: str | None = None
+    configuration: dict[str, Any] | None = None
+    is_active: bool | None = None
+    default: bool | None = None
+
+
+class RuntimeLLMConnectionTestResponse(RuntimeModel):
+    status: str
+    ok: bool
+    connection_id: uuid.UUID | None = None
+    connection_name: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    extract_mode: str | None = None
+    response_model: str | None = None
+    latency_ms: int | None = None
+    parsed: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
 
 class RuntimeConnectorTypesListResponse(RuntimeModel):
     items: list[RuntimeConnectorTypeSummary] = Field(default_factory=list)
@@ -449,6 +526,7 @@ class RuntimeAgentRunRequest(RuntimeRequestModel):
     message: str = Field(..., min_length=1)
     agent_id: uuid.UUID | None = None
     agent_name: str | None = None
+    agent_selection: Literal["auto", "pinned"] | None = None
     thread_id: uuid.UUID | None = None
     title: str | None = None
     agent_mode: str | None = None
@@ -462,6 +540,7 @@ class RuntimeAgentRunResponse(RuntimeModel):
     job_type: str
     message_id: uuid.UUID
     agent_name: str | None = None
+    agent_selection: Literal["auto", "pinned"] | None = None
     stream_path: str
 
 

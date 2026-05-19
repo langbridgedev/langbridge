@@ -16,11 +16,16 @@ import {
 } from "../../lib/runtimeApi";
 import { getErrorMessage } from "../../lib/format";
 import {
+  AUTO_AGENT_SELECTION_VALUE,
   CHAT_STARTERS,
+  buildRuntimeAgentRunPayload,
   buildConversationTurns,
   createLocalId,
   formatRuntimeAgentModeLabel,
+  formatRuntimeAgentSelectionLabel,
   formatRelativeTime,
+  isAutoAgentSelection,
+  normalizeRuntimeAgentSelection,
   normalizeRuntimeAgentMode,
 } from "../../lib/runtimeUi";
 
@@ -206,7 +211,7 @@ export function ChatPage() {
   const agentsState = useAsyncData(fetchAgents);
   const agents = Array.isArray(agentsState.data?.items) ? agentsState.data.items : [];
 
-  const [selectedAgentName, setSelectedAgentName] = useState("");
+  const [selectedAgentName, setSelectedAgentName] = useState(AUTO_AGENT_SELECTION_VALUE);
   const [message, setMessage] = useState("");
   const [thread, setThread] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -221,7 +226,9 @@ export function ChatPage() {
   const [transientTurn, setTransientTurn] = useState(null);
   const [pendingDraftMessage, setPendingDraftMessage] = useState("");
   const [selectedAgentMode, setSelectedAgentMode] = useState("auto");
-  const selectedAgent = agents.find((item) => item.name === selectedAgentName) || null;
+  const selectedAgent = isAutoAgentSelection(selectedAgentName)
+    ? null
+    : agents.find((item) => item.name === selectedAgentName) || null;
   const turns = useMemo(() => buildConversationTurns(messages, agents), [messages, agents]);
   const displayTurns = useMemo(() => {
     if (!transientTurn) {
@@ -257,6 +264,8 @@ export function ChatPage() {
       const stored = window.localStorage.getItem(storageKey);
       if (stored) {
         setSelectedAgentName(stored);
+      } else {
+        setSelectedAgentName(AUTO_AGENT_SELECTION_VALUE);
       }
     } catch {}
   }, [threadId]);
@@ -282,11 +291,7 @@ export function ChatPage() {
     }
     const storageKey = `runtime-thread-agent:${threadId}`;
     try {
-      if (selectedAgentName) {
-        window.localStorage.setItem(storageKey, selectedAgentName);
-      } else {
-        window.localStorage.removeItem(storageKey);
-      }
+      window.localStorage.setItem(storageKey, selectedAgentName);
     } catch {}
   }, [selectedAgentName, threadId]);
 
@@ -304,9 +309,9 @@ export function ChatPage() {
     if (agents.length === 0) {
       return;
     }
-    const hasSelectedAgent = agents.some((item) => item.name === selectedAgentName);
-    if (!selectedAgentName || !hasSelectedAgent) {
-      setSelectedAgentName(agents.find((item) => item.default)?.name || agents[0].name);
+    const normalized = normalizeRuntimeAgentSelection(selectedAgentName, agents);
+    if (normalized !== selectedAgentName) {
+      setSelectedAgentName(normalized);
     }
   }, [agents, selectedAgentName]);
 
@@ -380,14 +385,14 @@ export function ChatPage() {
       !pendingDraftMessage ||
       threadLoading ||
       submitting ||
-      !selectedAgentName ||
+      agents.length === 0 ||
       !threadId
     ) {
       return;
     }
     setPendingDraftMessage("");
     void submitPrompt(pendingDraftMessage);
-  }, [pendingDraftMessage, selectedAgentMode, selectedAgentName, submitting, threadId, threadLoading]);
+  }, [agents.length, pendingDraftMessage, selectedAgentMode, submitting, threadId, threadLoading]);
 
   useEffect(() => {
     if (threadLoading || displayTurns.length === 0) {
@@ -571,7 +576,7 @@ export function ChatPage() {
         ? current
         : buildResumedPendingTurn({
             turn: pendingTurn,
-            agentLabel: selectedAgentName,
+            agentLabel: formatRuntimeAgentSelectionLabel(selectedAgentName),
           }),
     );
     setSubmitError("");
@@ -596,7 +601,7 @@ export function ChatPage() {
           promptValue: pendingTurn.prompt,
           fallbackTurn: buildResumedPendingTurn({
             turn: pendingTurn,
-            agentLabel: selectedAgentName,
+            agentLabel: formatRuntimeAgentSelectionLabel(selectedAgentName),
           }),
           streamedEvents,
         });
@@ -623,7 +628,7 @@ export function ChatPage() {
   }, [selectedAgentName, submitting, thread, threadId, threadLoading, turns]);
 
   async function submitPrompt(promptValue) {
-    if (!threadId || !selectedAgentName || !String(promptValue || "").trim()) {
+    if (!threadId || agents.length === 0 || !String(promptValue || "").trim()) {
       return;
     }
     if (streamAbortRef.current) {
@@ -635,7 +640,7 @@ export function ChatPage() {
     const pendingTurn = buildPendingTurn({
       prompt: pendingPrompt,
       agentId: String(selectedAgent?.id || ""),
-      agentLabel: selectedAgent?.name || selectedAgentName,
+      agentLabel: selectedAgent?.name || formatRuntimeAgentSelectionLabel(selectedAgentName),
       agentMode: selectedAgentMode,
     });
     setTransientTurn(pendingTurn);
@@ -644,12 +649,12 @@ export function ChatPage() {
     streamAbortRef.current = controller;
     const streamedEvents = [];
     try {
-      const queued = await createAgentRun({
+      const queued = await createAgentRun(buildRuntimeAgentRunPayload({
         message: pendingPrompt,
-        agent_name: selectedAgentName,
-        thread_id: threadId,
-        agent_mode: selectedAgentMode,
-      });
+        selectedAgentName,
+        threadId,
+        agentMode: selectedAgentMode,
+      }));
       const activeJob = {
         jobId: String(queued?.job_id || ""),
         lastSequence: 0,
@@ -753,7 +758,7 @@ export function ChatPage() {
       <ChatTopBar
         threadTitle={threadTitle}
         isPending={isPending}
-        selectedAgentName={selectedAgent?.name || selectedAgentName}
+        selectedAgentName={selectedAgent?.name || formatRuntimeAgentSelectionLabel(selectedAgentName)}
         selectedAgentModeLabel={formatRuntimeAgentModeLabel(selectedAgentMode)}
         onBack={() => navigate("/chat")}
         renamingOpen={renamingOpen}
@@ -777,7 +782,7 @@ export function ChatPage() {
 
         <div className="thread-chat-context">
           <span className="chip">
-            {selectedAgent ? `Using ${selectedAgent.name}` : "Choose an agent"}
+            {selectedAgent ? `Using ${selectedAgent.name}` : "Auto-selecting agent"}
           </span>
           <span className="chip">
             {lastUpdated ? `Updated ${formatRelativeTime(lastUpdated)}` : "New thread"}
@@ -805,7 +810,7 @@ export function ChatPage() {
             <Sparkles className="thread-empty-icon" aria-hidden="true" />
             <div>
               <strong>Ask about your data</strong>
-              <p>Select an agent, ask a question, and Langbridge will answer in this thread.</p>
+              <p>Ask a question and Langbridge will choose the right agent for this thread.</p>
             </div>
             <div className="thread-suggestion-strip thread-suggestion-strip--empty">
               {CHAT_STARTERS.map((starter) => (

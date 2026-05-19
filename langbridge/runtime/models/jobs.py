@@ -565,5 +565,8 @@ class CreateAgentJobRequest(RuntimeJobRequestModel):
     thread_id: uuid.UUID
     correlation_id: str | None = None
     mcp: bool = False
+    agent_selection: Literal["auto", "pinned"] = "pinned"
+    router_agent_definition_id: uuid.UUID | None = None
+    candidate_agent_definition_ids: list[uuid.UUID] = Field(default_factory=list)
     
     agent_mode: Literal["auto", "sql", "context_analysis", "research"] = "auto"

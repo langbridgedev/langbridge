@@ -566,9 +566,7 @@ function DatasetOverview({ resource }) {
         <div><span>Mode</span><strong>{isSyncedDataset(raw) ? "Synced" : "Live"}</strong></div>
         <div><span>Connector</span><strong>{raw.connector || "None"}</strong></div>
       </div>
-
-      <div className="resource-state-grid">
-        <ResourceSection title="Runtime state" rows={resource.runtimeState} />
+      <div className="resource-detail-block">
         <ResourceSection title="Config definition" rows={resource.configDefinition} />
       </div>
 

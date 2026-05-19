@@ -500,7 +500,7 @@ def _build_mcp_tool_availability(runtime_host: ConfiguredLocalRuntimeHost) -> di
         ),
         _MCP_ASK_AGENT_TOOL_NAME: _availability_entry(
             available=(
-                summary["agents"] > 0
+                summary["mcp_agents"] > 0
                 and getattr(runtime_services, "agent_execution", None) is not None
             ),
             reason=_ask_agent_unavailable_reason(
@@ -517,6 +517,11 @@ def _build_runtime_resource_summary(runtime_host: ConfiguredLocalRuntimeHost) ->
     datasets = getattr(runtime_host, "_datasets", {}) or {}
     semantic_models = getattr(runtime_host, "_semantic_models", {}) or {}
     agents = getattr(runtime_host, "_agents", {}) or {}
+    mcp_agents = [
+        agent
+        for agent in agents.values()
+        if bool(getattr(getattr(getattr(agent, "config", None), "availability", None), "mcp", False))
+    ]
     supports_sync = getattr(runtime_host, "_connector_supports_sync", None)
     syncable_connectors = 0
     if callable(supports_sync):
@@ -530,6 +535,7 @@ def _build_runtime_resource_summary(runtime_host: ConfiguredLocalRuntimeHost) ->
         "datasets": len(datasets),
         "semantic_models": len(semantic_models),
         "agents": len(agents),
+        "mcp_agents": len(mcp_agents),
         "syncable_connectors": syncable_connectors,
     }
 
@@ -560,6 +566,8 @@ def _sql_query_unavailable_reason(*, summary: dict[str, int], runtime_services: 
 def _ask_agent_unavailable_reason(*, summary: dict[str, int], runtime_services: Any) -> str | None:
     if summary["agents"] == 0:
         return "No agents are configured for this runtime."
+    if summary.get("mcp_agents", 0) == 0:
+        return "No agents are available through MCP."
     if getattr(runtime_services, "agent_execution", None) is None:
         return "Agent execution is not configured for this runtime."
     return None

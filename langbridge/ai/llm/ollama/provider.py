@@ -3,9 +3,25 @@ from typing import Any, Mapping
 import httpx
 from pydantic import BaseModel
 
-from ..base import LLMMessage, LLMProvider, LLMProviderName, LLMResponse, response_text
+from ..base import (
+    LLMEmbeddingsInvocation,
+    LLMEmbeddingsRequest,
+    LLMInvocation,
+    LLMMessage,
+    LLMProvider,
+    LLMProviderName,
+    LLMRequest,
+    LLMResponse,
+    response_text,
+)
 from ..factory import register_provider
-from ..structured import json_schema_for_model, parse_structured_text
+from ..contracts import (
+    StructuredOutputConfig,
+    StructuredOutputContract,
+    StructuredOutputMode,
+    StructuredOutputSchema,
+    StructuredOutputUnsupportedError,
+)
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_TIMEOUT_SECONDS = 300.0
@@ -41,15 +57,7 @@ def _response_payload(response: httpx.Response) -> dict[str, Any]:
 class OllamaProvider(LLMProvider):
     name = LLMProviderName.OLLAMA
 
-    def create_client(self, **overrides: Any) -> httpx.Client:
-        params = {key: self.configuration.get(key) for key in _CLIENT_CONFIG_KEYS if key in self.configuration}
-        params.update(overrides)
-        params = self._clean_kwargs(params)
-        params.setdefault("base_url", _configured_base_url(self.configuration))
-        params.setdefault("timeout", DEFAULT_OLLAMA_TIMEOUT_SECONDS)
-        return httpx.Client(**params)
-
-    def create_async_client(self, **overrides: Any) -> httpx.AsyncClient:
+    def create_client(self, **overrides: Any) -> httpx.AsyncClient:
         params = {key: self.configuration.get(key) for key in _CLIENT_CONFIG_KEYS if key in self.configuration}
         params.update(overrides)
         params = self._clean_kwargs(params)
@@ -57,100 +65,90 @@ class OllamaProvider(LLMProvider):
         params.setdefault("timeout", DEFAULT_OLLAMA_TIMEOUT_SECONDS)
         return httpx.AsyncClient(**params)
 
-    def complete(
-        self,
-        prompt: str,
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> str:
-        return response_text(
-            self.invoke(
-                [{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-        )
-
-    async def acomplete(
-        self,
-        prompt: str,
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> str:
-        return response_text(
-            await self.ainvoke(
-                [{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-        )
-
-    def invoke(
-        self,
-        messages: list[LLMMessage],
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> LLMResponse:
-        with self.create_client() as client:
-            response = client.post(
-                "/api/chat",
-                json=self._chat_payload(messages, temperature=temperature, max_tokens=max_tokens),
-            )
-        return self._chat_response(_response_payload(response))
-
     async def ainvoke(
         self,
-        messages: list[LLMMessage],
-        *,
-        temperature: float = 0.0,
-        max_tokens: int | None = None,
-    ) -> LLMResponse:
-        async with self.create_async_client() as client:
-            response = await client.post(
-                "/api/chat",
-                json=self._chat_payload(messages, temperature=temperature, max_tokens=max_tokens),
-            )
-        return self._chat_response(_response_payload(response))
+        request: LLMRequest[BaseModel],
+    ) -> LLMInvocation[BaseModel]:
+        if request.response_model is not None:
+            return await self._invoke_structured(request)
+        response = await self._create_text_response(request)
+        return LLMInvocation(request=request, response=response)
 
-    async def _ainvoke_structured_native(
+    async def _invoke_structured(
         self,
-        messages: list[LLMMessage],
+        request: LLMRequest[BaseModel],
+    ) -> LLMInvocation[BaseModel]:
+        response_model = request.response_model
+        if response_model is None:
+            raise StructuredOutputUnsupportedError("Ollama structured invocation requires response_model.")
+
+        mode = StructuredOutputConfig.from_mapping(self.configuration).mode
+        if mode in {StructuredOutputMode.auto, StructuredOutputMode.native}:
+            response = await self._create_text_response(
+                request,
+                response_format=StructuredOutputSchema(response_model).as_dict(),
+            )
+            parsed_response = self._extract_response(response, response_model=response_model)
+            return LLMInvocation(
+                request=request,
+                response=parsed_response.model_copy(update={"extract_mode": "native_structured"}),
+            )
+
+        text_request = request.model_copy(
+            update={
+                "messages": self._messages_with_output_contract(request.messages, response_model=response_model),
+                "response_model": None,
+            }
+        )
+        text_response = await self._create_text_response(text_request)
+        return LLMInvocation(
+            request=request,
+            response=self._extract_response(text_response, response_model=response_model),
+        )
+
+    async def _create_text_response(
+        self,
+        request: LLMRequest[Any],
         *,
-        response_model: type[BaseModel],
-        temperature: float,
-        max_tokens: int | None,
-    ) -> BaseModel:
-        async with self.create_async_client() as client:
+        response_format: Any = None,
+    ) -> LLMResponse[Any]:
+        async with self.create_client() as client:
             response = await client.post(
                 "/api/chat",
                 json=self._chat_payload(
-                    messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    response_format=json_schema_for_model(response_model),
+                    request.messages,
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens,
+                    response_format=response_format,
+                    provider_options=request.provider_options,
                 ),
             )
         payload = self._chat_response(_response_payload(response))
-        return parse_structured_text(str(payload.get("text") or ""), response_model=response_model)
+        return LLMResponse(raw_response=payload, text=response_text(payload), extract_mode="text")
 
-    async def create_embeddings(
+    async def acreate_embeddings(
         self,
-        texts: list[str],
-        embedding_model: str | None = None,
-    ) -> list[list[float]]:
-        cleaned = [text for text in texts if isinstance(text, str)]
+        request: LLMEmbeddingsRequest,
+    ) -> LLMEmbeddingsInvocation:
+        cleaned = [text for text in request.texts if isinstance(text, str)]
         if not cleaned:
-            return []
-        model = self._embedding_model(embedding_model)
-        async with self.create_async_client() as client:
+            return LLMEmbeddingsInvocation(request=request, embeddings=[], raw_response=None)
+        model = self._embedding_model(request.embedding_model)
+        async with self.create_client() as client:
             response = await client.post(
                 "/api/embed",
-                json=self._embedding_payload(model=model, texts=cleaned),
+                json=self._embedding_payload(
+                    model=model,
+                    texts=cleaned,
+                    provider_options=request.provider_options,
+                ),
             )
-        return self._embedding_response(_response_payload(response))
+        payload = _response_payload(response)
+        return LLMEmbeddingsInvocation(
+            request=request,
+            embeddings=self._embedding_response(payload),
+            raw_response=payload,
+        )
 
     def _chat_payload(
         self,
@@ -159,12 +157,15 @@ class OllamaProvider(LLMProvider):
         temperature: float,
         max_tokens: int | None,
         response_format: Any = None,
+        provider_options: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model_name,
             "messages": [self._message_payload(message) for message in messages],
             "stream": False,
         }
+        if provider_options:
+            payload.update(dict(provider_options))
         if response_format is not None:
             payload["format"] = response_format
         elif self.configuration.get("format") is not None:
@@ -178,11 +179,19 @@ class OllamaProvider(LLMProvider):
             payload["options"] = options
         return payload
 
-    def _embedding_payload(self, *, model: str, texts: list[str]) -> dict[str, Any]:
+    def _embedding_payload(
+        self,
+        *,
+        model: str,
+        texts: list[str],
+        provider_options: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
             "input": texts,
         }
+        if provider_options:
+            payload.update(dict(provider_options))
         if self.configuration.get("keep_alive") is not None:
             payload["keep_alive"] = self.configuration["keep_alive"]
         if self.configuration.get("truncate") is not None:
@@ -211,15 +220,15 @@ class OllamaProvider(LLMProvider):
     @staticmethod
     def _message_payload(message: LLMMessage) -> dict[str, Any]:
         return {
-            "role": str(message.get("role") or "user"),
-            "content": str(message.get("content") or ""),
+            "role": str(message.role or "user"),
+            "content": str(message.content or ""),
         }
 
     def _json_mode_when_requested(self, messages: list[LLMMessage]) -> bool:
         enabled = self.configuration.get("json_mode_when_requested", True)
         if enabled is False:
             return False
-        text = "\n".join(str(message.get("content") or "") for message in messages).casefold()
+        text = "\n".join(str(message.content or "") for message in messages).casefold()
         return any(
             cue in text
             for cue in (
@@ -238,6 +247,20 @@ class OllamaProvider(LLMProvider):
             if isinstance(content, str):
                 payload["text"] = content
         return payload
+
+    @staticmethod
+    def _messages_with_output_contract(
+        messages: list[LLMMessage],
+        *,
+        response_model: type[BaseModel],
+    ) -> list[LLMMessage]:
+        output_contract = LLMMessage(
+            role="system",
+            kind="output_contract",
+            trusted=True,
+            content=StructuredOutputContract(response_model).system_instruction(),
+        )
+        return [output_contract, *messages]
 
     @staticmethod
     def _embedding_response(payload: dict[str, Any]) -> list[list[float]]:

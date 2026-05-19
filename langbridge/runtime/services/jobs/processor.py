@@ -49,6 +49,12 @@ class RuntimeJobProcessor:
         if self._task is not None and not self._task.done():
             return
         self._stopping = False
+        self._logger.info(
+            "Starting runtime job processor worker_id=%s queue=%s lease_seconds=%s.",
+            self._worker_id,
+            self._queue_name,
+            self._lease_seconds,
+        )
         self._task = asyncio.create_task(self._run(), name="langbridge-runtime-job-processor")
 
     async def stop(self) -> None:
@@ -57,6 +63,7 @@ class RuntimeJobProcessor:
         task = self._task
         if task is None:
             return
+        self._logger.info("Stopping runtime job processor worker_id=%s.", self._worker_id)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         self._task = None
@@ -131,11 +138,20 @@ class RuntimeJobProcessor:
 
     async def _run(self) -> None:
         while not self._stopping:
-            processed = await self.process_once()
+            try:
+                processed = await self.process_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self._logger.exception(
+                    "Runtime job processor worker_id=%s poll failed; continuing.",
+                    self._worker_id,
+                )
+                processed = False
             if processed:
                 continue
             self._wake_event.clear()
             try:
                 await asyncio.wait_for(self._wake_event.wait(), timeout=self._poll_interval_seconds)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 continue

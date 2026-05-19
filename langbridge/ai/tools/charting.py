@@ -1,13 +1,14 @@
 """LLM-backed chart specification tool."""
 
 import json
-from typing import Any
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
 
 from langbridge.ai.events import AIEventEmitter, AIEventSource
-from langbridge.ai.llm.base import LLMProvider
-from langbridge.ai.llm.structured import acomplete_structured
+from langbridge.ai.llm.base import LLMMessage, LLMProvider, LLMRequest
+
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 class ChartSpec(BaseModel):
@@ -26,6 +27,29 @@ class ChartingTool(AIEventSource):
     def __init__(self, *, llm_provider: LLMProvider, event_emitter: AIEventEmitter | None = None) -> None:
         super().__init__(event_emitter=event_emitter)
         self._llm = llm_provider
+
+    async def _complete_structured(
+        self,
+        prompt: str,
+        *,
+        response_model: type[StructuredModel],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        purpose: str = "charting.structured",
+    ) -> StructuredModel:
+        invocation = await self._llm.ainvoke(
+            LLMRequest[StructuredModel](
+                purpose=purpose,
+                messages=[LLMMessage(role="user", content=prompt)],
+                response_model=response_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+        parsed = invocation.response.parsed
+        if parsed is None:
+            raise ValueError(f"Charting LLM response missing parsed {response_model.__name__}.")
+        return parsed
 
     async def build_chart(
         self,
@@ -54,12 +78,12 @@ class ChartingTool(AIEventSource):
         )
         chart = self._normalize_chart_spec(
             (
-                await acomplete_structured(
-                    self._llm,
+                await self._complete_structured(
                     prompt,
                     response_model=ChartSpec,
                     temperature=0.2,
                     max_tokens=700,
+                    purpose="charting.build_chart",
                 )
             ).model_dump(mode="json"),
             columns=[str(column) for column in columns],

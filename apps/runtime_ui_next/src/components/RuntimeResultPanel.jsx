@@ -45,6 +45,8 @@ function buildSummaryFallback(state) {
       return "The runtime returned a structured answer with a visualization and supporting rows.";
     case "success_rows":
       return "The runtime returned structured rows for this request.";
+    case "success_answer":
+      return "";
     default:
       return "";
   }
@@ -172,6 +174,7 @@ export function RuntimeResultPanel({
 }) {
   const normalizedResult = result ? normalizeTabularResult(result) : null;
   const normalizedVisualization = normalizeVisualizationSpec(visualization);
+  const answerMarkdownText = String(answerMarkdown || "").trim();
   const state = deriveRuntimeResultState({
     status,
     result: normalizedResult,
@@ -179,11 +182,11 @@ export function RuntimeResultPanel({
     diagnostics,
     errorMessage,
     errorStatus,
+    answerMarkdown: answerMarkdownText,
   });
   const isChatVariant = variant === "chat";
   const isClarification = state.kind === "needs_clarification";
   const clarificationText = isClarification ? readClarificationText(diagnostics) : "";
-  const answerMarkdownText = String(answerMarkdown || "").trim();
   const summaryText =
     String(summary || "").trim() ||
     clarificationText ||
@@ -212,7 +215,9 @@ export function RuntimeResultPanel({
   const compactChatSuccess =
     isChatVariant &&
     (state.kind === "success_rows" || state.kind === "success_chart");
-  const hideChatStateCard = isChatVariant && (compactChatSuccess || isClarification);
+  const hideChatStateCard =
+    isChatVariant &&
+    (compactChatSuccess || isClarification || state.kind === "success_answer");
   const inlineChartArtifactIds = showChart
     ? placeholderArtifactIds.filter((id) =>
         artifactPlaceholderMatchesType(id, normalizedArtifacts, "chart"),

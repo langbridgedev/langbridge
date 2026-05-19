@@ -81,9 +81,10 @@ surfaces.
   growth, spend, and support datasets when the governed semantic surface cannot
   satisfy the request.
 
-The agents have different prompts, different tool bindings, and different
-connector scope. `commerce_analyst` is intentionally blocked from the
-`planning_files` connector.
+The agents have different instructions, data scopes, capabilities, and
+orchestration policies. Connector access is derived from the selected semantic
+models and datasets, so the effective connector list is inspect-only runtime
+state rather than an authored allow/deny policy.
 
 ## Initialize The Example
 

@@ -4,7 +4,7 @@ import os
 import pytest
 from pydantic import BaseModel
 
-from langbridge.ai.llm import create_provider
+from langbridge.ai.llm import LLMMessage, LLMRequest, create_provider
 
 
 pytestmark = pytest.mark.skipif(
@@ -26,6 +26,18 @@ def _prompt() -> str:
     return "Extract the pet details: Luna is a 4 year old cat. Return the pet name and age."
 
 
+async def _extract_pet(provider) -> PetExtraction:
+    invocation = await provider.ainvoke(
+        LLMRequest[PetExtraction](
+            purpose="smoke.extract_pet",
+            messages=[LLMMessage(role="user", content=_prompt())],
+            response_model=PetExtraction,
+        )
+    )
+    assert invocation.response.parsed is not None
+    return invocation.response.parsed
+
+
 def _require_env(*names: str) -> dict[str, str]:
     values = {name: os.getenv(name) for name in names}
     missing = [name for name, value in values.items() if not value]
@@ -45,7 +57,7 @@ def test_openai_responses_parse_structured_output_smoke() -> None:
         }
     )
 
-    result = _run(provider.acomplete_structured(_prompt(), response_model=PetExtraction))
+    result = _run(_extract_pet(provider))
 
     assert result == PetExtraction(name="Luna", age=4)
 
@@ -72,7 +84,7 @@ def test_azure_chat_parse_structured_output_smoke() -> None:
         }
     )
 
-    result = _run(provider.acomplete_structured(_prompt(), response_model=PetExtraction))
+    result = _run(_extract_pet(provider))
 
     assert result == PetExtraction(name="Luna", age=4)
 
@@ -91,7 +103,7 @@ def test_ollama_format_structured_output_smoke() -> None:
         }
     )
 
-    result = _run(provider.acomplete_structured(_prompt(), response_model=PetExtraction))
+    result = _run(_extract_pet(provider))
 
     assert result == PetExtraction(name="Luna", age=4)
 
@@ -107,6 +119,6 @@ def test_anthropic_forced_tool_structured_output_smoke() -> None:
         }
     )
 
-    result = _run(provider.acomplete_structured(_prompt(), response_model=PetExtraction))
+    result = _run(_extract_pet(provider))
 
     assert result == PetExtraction(name="Luna", age=4)

@@ -79,6 +79,15 @@ def test_execution_diagnostics_include_generated_sql_and_friendly_summary() -> N
                     "selected_tool": "dataset-orders",
                     "governed_attempt_count": 1,
                     "governed_tools_tried": ["dataset-orders"],
+                    "investigation_trace": [
+                        {
+                            "id": "entity-resolution",
+                            "type": "entity_resolution",
+                            "title": "Entity resolved",
+                            "status": "resolved",
+                            "summary": "Resolved governed entity before metric analysis.",
+                        }
+                    ],
                 },
             ).model_dump(mode="json")
         ],
@@ -121,6 +130,7 @@ def test_execution_diagnostics_include_generated_sql_and_friendly_summary() -> N
     assert execution["rowcount"] == 1
     assert execution["sql"][0]["sql_executable"] == "SELECT orders.region, orders.revenue FROM orders"
     assert execution["sql"][0]["rows_sample"] == [["US", 2200]]
+    assert execution["step_results"][0]["diagnostics"]["investigation_trace"][0]["title"] == "Entity resolved"
     assert response["diagnostics"]["sql"][0]["query_scope"] == "dataset"
     assert response["diagnostics"]["ai_run"]["step_results"][0]["rowcount"] == 1
 

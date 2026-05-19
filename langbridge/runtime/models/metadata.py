@@ -555,6 +555,7 @@ class SemanticVectorIndexStatus(str, Enum):
 
 class SemanticVectorStoreTarget(str, Enum):
     MANAGED_FAISS = "managed_faiss"
+    MANAGED_QDRANT = "managed_qdrant"
     CONNECTOR = "connector"
 
 

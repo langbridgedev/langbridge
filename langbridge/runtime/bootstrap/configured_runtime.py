@@ -28,15 +28,7 @@ from langbridge.runtime.config.models import (
     LocalRuntimeDatasetPolicyConfig,
     LocalRuntimeLLMConnectionConfig,
     LocalRuntimeSemanticModelConfig,
-
-    LocalRuntimeAiProfileAnalystScopeConfig,
-    LocalRuntimeAiProfileLLMScopeConfig,
-    LocalRuntimeAiProfilePromptsConfig,
-    LocalRuntimeAiProfileWebSearchScopeConfig,
-    LocalRuntimeAiProfileResearchScopeConfig,
-    LocalRuntimeAiProfileAccessConfig,
     LocalRuntimeAiProfileConfig,
-    
     ResolvedLocalRuntimeMetadataStoreConfig,
 )
 from langbridge.runtime.models.metadata import DatasetStatus, DatasetType, LifecycleState, ManagementMode
@@ -87,6 +79,7 @@ from langbridge.runtime.persistence.sql_runtime import (
 from langbridge.runtime.persistence.migrations import (
     ensure_runtime_metadata_schema_current,
 )
+from langbridge.runtime.persistence.mappers.llm_connections import from_llm_connection_record
 from langbridge.runtime.persistence.uow import _ConfiguredRuntimePersistenceController
 from langbridge.runtime.models import (
     ConnectionMetadata,
@@ -193,6 +186,7 @@ class LocalRuntimeLLMConnectionRecord:
     name: str
     connection: LLMConnectionSecret
     api_key_secret: SecretReference | None = None
+    management_mode: ManagementMode = ManagementMode.CONFIG_MANAGED
 
 
 @dataclass(slots=True, frozen=True)
@@ -209,6 +203,7 @@ class _ConfiguredLocalRuntimeResources:
     datasets_by_id: dict[uuid.UUID, LocalRuntimeDatasetRecord]
     connectors: dict[str, ConnectorMetadata]
     semantic_models: dict[str, LocalRuntimeSemanticModelRecord]
+    llm_connections: dict[str, LocalRuntimeLLMConnectionRecord]
     agents: dict[str, LocalRuntimeAgentRecord]
     default_agent: LocalRuntimeAgentRecord | None
     default_semantic_model_name: str | None
@@ -220,6 +215,7 @@ class _ConfiguredLocalRuntimeResources:
     lineage_edge_repository: Any
     connector_sync_state_repository: Any
     job_repository: Any
+    llm_repository: Any
     secret_provider_registry: SecretProviderRegistry
     thread_repository: Any
     thread_message_repository: Any
@@ -539,6 +535,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         datasets_by_id: dict[uuid.UUID, LocalRuntimeDatasetRecord],
         connectors: dict[str, ConnectorMetadata],
         semantic_models: dict[str, LocalRuntimeSemanticModelRecord],
+        llm_connections: dict[str, LocalRuntimeLLMConnectionRecord],
         agents: dict[str, LocalRuntimeAgentRecord],
         default_agent: LocalRuntimeAgentRecord | None,
         default_semantic_model_name: str | None,
@@ -549,6 +546,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         lineage_edge_repository: Any,
         connector_sync_state_repository: ConnectorSyncStateStore,
         job_repository: Any,
+        llm_repository: Any,
         secret_provider_registry: SecretProviderRegistry,
         thread_repository: ThreadStore,
         thread_message_repository: ThreadMessageStore,
@@ -562,6 +560,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         self._datasets_by_id = datasets_by_id
         self._connectors = connectors
         self._semantic_models = semantic_models
+        self._llm_connections = llm_connections
         self._agents = agents
         self._default_agent = default_agent
         self._default_semantic_model_name = default_semantic_model_name
@@ -572,6 +571,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         self._lineage_edge_repository = lineage_edge_repository
         self._connector_sync_state_repository = connector_sync_state_repository
         self._job_repository = job_repository
+        self._llm_repository = llm_repository
         self._secret_provider_registry = secret_provider_registry
         self._api_connector_factory = ApiConnectorFactory()
         self._thread_repository = thread_repository
@@ -615,6 +615,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             datasets_by_id=self._datasets_by_id,
             connectors=self._connectors,
             semantic_models=self._semantic_models,
+            llm_connections=self._llm_connections,
             agents=self._agents,
             default_agent=self._default_agent,
             default_semantic_model_name=self._default_semantic_model_name,
@@ -625,6 +626,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
             lineage_edge_repository=self._lineage_edge_repository,
             connector_sync_state_repository=self._connector_sync_state_repository,
             job_repository=self._job_repository,
+            llm_repository=self._llm_repository,
             secret_provider_registry=self._secret_provider_registry,
             thread_repository=self._thread_repository,
             thread_message_repository=self._thread_message_repository,
@@ -1140,6 +1142,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         *,
         prompt: str,
         agent_name: str | None = None,
+        agent_selection: str | None = None,
         thread_id: uuid.UUID | None = None,
         title: str | None = None,
         agent_mode: str | None = None,
@@ -1148,6 +1151,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         return await self._applications.agents.ask_agent(
             prompt=prompt,
             agent_name=agent_name,
+            agent_selection=agent_selection,
             thread_id=thread_id,
             title=title,
             agent_mode=agent_mode,
@@ -1159,6 +1163,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         *,
         prompt: str,
         agent_name: str | None = None,
+        agent_selection: str | None = None,
         thread_id: uuid.UUID | None = None,
         title: str | None = None,
         agent_mode: str | None = None,
@@ -1168,6 +1173,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         return await self._applications.agents.create_agent_run_job(
             prompt=prompt,
             agent_name=agent_name,
+            agent_selection=agent_selection,
             thread_id=thread_id,
             title=title,
             agent_mode=agent_mode,
@@ -1193,6 +1199,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         *,
         prompt: str,
         agent_name: str | None = None,
+        agent_selection: str | None = None,
         thread_id: uuid.UUID | None = None,
         title: str | None = None,
         agent_mode: str | None = None,
@@ -1201,6 +1208,7 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         return self._applications.agents.ask_agent_stream(
             prompt=prompt,
             agent_name=agent_name,
+            agent_selection=agent_selection,
             thread_id=thread_id,
             title=title,
             agent_mode=agent_mode,
@@ -1238,6 +1246,50 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         agent_ref: str,
     ) -> dict[str, Any]:
         return await self._applications.agents.get_agent(agent_ref=agent_ref)
+
+    async def list_llm_connections(self) -> list[dict[str, Any]]:
+        return await self._applications.llm_connections.list_llm_connections()
+
+    async def get_llm_connection(
+        self,
+        *,
+        connection_ref: str,
+    ) -> dict[str, Any]:
+        return await self._applications.llm_connections.get_llm_connection(
+            connection_ref=connection_ref
+        )
+
+    async def create_llm_connection(self, *, request) -> dict[str, Any]:
+        return await self._applications.llm_connections.create_llm_connection(request=request)
+
+    async def update_llm_connection(
+        self,
+        *,
+        connection_ref: str,
+        request,
+    ) -> dict[str, Any]:
+        return await self._applications.llm_connections.update_llm_connection(
+            connection_ref=connection_ref,
+            request=request,
+        )
+
+    async def delete_llm_connection(
+        self,
+        *,
+        connection_ref: str,
+    ) -> dict[str, Any]:
+        return await self._applications.llm_connections.delete_llm_connection(
+            connection_ref=connection_ref
+        )
+
+    async def test_llm_connection(
+        self,
+        *,
+        connection_ref: str,
+    ) -> dict[str, Any]:
+        return await self._applications.llm_connections.test_llm_connection(
+            connection_ref=connection_ref
+        )
 
     async def list_threads(self) -> list[dict[str, Any]]:
         return await self._applications.threads.list_threads()
@@ -1373,6 +1425,33 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
                     return candidate
         raise ValueError(f"Unknown agent '{agent_ref}'.")
 
+    def _find_llm_connection_record(self, connection_ref: str) -> LocalRuntimeLLMConnectionRecord | None:
+        normalized_ref = str(connection_ref or "").strip()
+        if not normalized_ref:
+            return None
+        record = self._llm_connections.get(normalized_ref)
+        if record is not None:
+            return record
+        try:
+            connection_id = uuid.UUID(normalized_ref)
+        except ValueError:
+            connection_id = None
+        if connection_id is not None:
+            for candidate in self._llm_connections.values():
+                if candidate.id == connection_id or candidate.connection.id == connection_id:
+                    return candidate
+        normalized_lower = normalized_ref.lower()
+        for candidate in self._llm_connections.values():
+            if candidate.name.lower() == normalized_lower:
+                return candidate
+        return None
+
+    def _resolve_llm_connection_record(self, connection_ref: str) -> LocalRuntimeLLMConnectionRecord:
+        record = self._find_llm_connection_record(connection_ref)
+        if record is None:
+            raise ValueError(f"Unknown LLM connection '{connection_ref}'.")
+        return record
+
     def _resolve_semantic_model_record(self, model_ref: str) -> LocalRuntimeSemanticModelRecord:
         normalized_ref = str(model_ref or "").strip()
         if not normalized_ref:
@@ -1434,6 +1513,43 @@ class ConfiguredLocalRuntimeHost(RuntimeHost):
         connector_provider = self.providers.connector_metadata
         if hasattr(connector_provider, "remove"):
             connector_provider.remove(connector_id=connector_id)
+
+    def _upsert_runtime_llm_connection(
+        self,
+        connection: LLMConnectionSecret,
+        *,
+        management_mode: ManagementMode,
+        clear_default: bool = False,
+    ) -> None:
+        if clear_default:
+            for name, record in list(self._llm_connections.items()):
+                if record.connection.id == connection.id:
+                    continue
+                self._llm_connections[name] = LocalRuntimeLLMConnectionRecord(
+                    id=record.id,
+                    name=record.name,
+                    connection=record.connection.model_copy(update={"default": False}),
+                    api_key_secret=record.api_key_secret,
+                    management_mode=record.management_mode,
+                )
+        self._llm_connections[connection.name] = LocalRuntimeLLMConnectionRecord(
+            id=connection.id,
+            name=connection.name,
+            connection=connection,
+            api_key_secret=None,
+            management_mode=management_mode,
+        )
+
+    def _remove_runtime_llm_connection(
+        self,
+        *,
+        connection_name: str,
+        connection_id: uuid.UUID,
+    ) -> None:
+        self._llm_connections.pop(connection_name, None)
+        for name, record in list(self._llm_connections.items()):
+            if record.connection.id == connection_id:
+                self._llm_connections.pop(name, None)
 
     def _upsert_runtime_dataset_record(self, record: LocalRuntimeDatasetRecord) -> None:
         self._datasets[record.name] = record
@@ -2044,6 +2160,7 @@ class ConfiguredLocalRuntimeHostFactory:
             datasets_by_id=resources.datasets_by_id,
             connectors=resources.connectors,
             semantic_models=resources.semantic_models,
+            llm_connections=resources.llm_connections,
             agents=resources.agents,
             default_agent=resources.default_agent,
             default_semantic_model_name=resources.default_semantic_model_name,
@@ -2054,6 +2171,7 @@ class ConfiguredLocalRuntimeHostFactory:
             lineage_edge_repository=resources.lineage_edge_repository,
             connector_sync_state_repository=resources.connector_sync_state_repository,
             job_repository=resources.job_repository,
+            llm_repository=resources.llm_repository,
             secret_provider_registry=resources.secret_provider_registry,
             thread_repository=resources.thread_repository,
             thread_message_repository=resources.thread_message_repository,
@@ -2144,6 +2262,7 @@ class ConfiguredLocalRuntimeHostFactory:
             lineage_edge_repository,
             connector_sync_state_repository,
             job_repository,
+            llm_repository,
             thread_repository,
             thread_message_repository,
             persistence_controller,
@@ -2162,10 +2281,17 @@ class ConfiguredLocalRuntimeHostFactory:
             secret_provider_registry=secret_provider_registry,
         )
         if metadata_store.type != "in_memory":
-            runtime_managed_connectors, runtime_managed_semantic_models = (
+            (
+                runtime_managed_connectors,
+                runtime_managed_semantic_models,
+                runtime_managed_llm_connections,
+            ) = (
                 ConfiguredLocalRuntimeHostFactory._load_persisted_runtime_managed_resources(
                     metadata_store=metadata_store,
                     context=context,
+                    configured_llm_connection_ids={
+                        record.id for record in llm_connections.values()
+                    },
                 )
             )
             connector_models = {
@@ -2175,6 +2301,14 @@ class ConfiguredLocalRuntimeHostFactory:
             semantic_models = {
                 **semantic_models,
                 **runtime_managed_semantic_models,
+            }
+            llm_connections = {
+                **llm_connections,
+                **{
+                    name: record
+                    for name, record in runtime_managed_llm_connections.items()
+                    if name not in llm_connections
+                },
             }
         default_agent = next((agent for agent in agents.values() if agent.config.default), None)
         default_semantic_model_name = next(
@@ -2188,6 +2322,7 @@ class ConfiguredLocalRuntimeHostFactory:
             datasets_by_id=datasets_by_id,
             connectors={connector.name: connector for connector in connector_models.values()},
             semantic_models=semantic_models,
+            llm_connections=llm_connections,
             agents=agents,
             default_agent=default_agent,
             default_semantic_model_name=default_semantic_model_name,
@@ -2199,6 +2334,7 @@ class ConfiguredLocalRuntimeHostFactory:
             lineage_edge_repository=lineage_edge_repository,
             connector_sync_state_repository=connector_sync_state_repository,
             job_repository=job_repository,
+            llm_repository=llm_repository,
             secret_provider_registry=secret_provider_registry,
             thread_repository=thread_repository,
             thread_message_repository=thread_message_repository,
@@ -2210,10 +2346,16 @@ class ConfiguredLocalRuntimeHostFactory:
         *,
         metadata_store: ResolvedLocalRuntimeMetadataStoreConfig,
         context: RuntimeContext,
-    ) -> tuple[dict[str, ConnectorMetadata], dict[str, LocalRuntimeSemanticModelRecord]]:
+        configured_llm_connection_ids: set[uuid.UUID],
+    ) -> tuple[
+        dict[str, ConnectorMetadata],
+        dict[str, LocalRuntimeSemanticModelRecord],
+        dict[str, LocalRuntimeLLMConnectionRecord],
+    ]:
         from sqlalchemy import select
 
         from langbridge.runtime.persistence.db import create_engine_for_url, create_session_factory
+        from langbridge.runtime.persistence.db.agent import LLMConnection
         from langbridge.runtime.persistence.db.connector import Connector
         from langbridge.runtime.persistence.db.semantic import SemanticModelEntry
         from langbridge.runtime.persistence.mappers.connectors import from_connector_record
@@ -2243,6 +2385,11 @@ class ConfiguredLocalRuntimeHostFactory:
                     SemanticModelEntry.management_mode == ManagementMode.RUNTIME_MANAGED.value,
                 )
             ).all()
+            llm_rows = session.scalars(
+                select(LLMConnection).where(
+                    LLMConnection.workspace_id == context.workspace_id,
+                )
+            ).all()
             connectors = {
                 connector.name: connector
                 for row in connector_rows
@@ -2260,7 +2407,19 @@ class ConfiguredLocalRuntimeHostFactory:
                     )
                 ) is not None
             }
-            return connectors, semantic_models
+            llm_connections: dict[str, LocalRuntimeLLMConnectionRecord] = {}
+            for row in llm_rows:
+                connection = from_llm_connection_record(row)
+                if connection is None or connection.id in configured_llm_connection_ids:
+                    continue
+                llm_connections[connection.name] = LocalRuntimeLLMConnectionRecord(
+                    id=connection.id,
+                    name=connection.name,
+                    connection=connection,
+                    api_key_secret=None,
+                    management_mode=ManagementMode.RUNTIME_MANAGED,
+                )
+            return connectors, semantic_models, llm_connections
         finally:
             session.close()
             sync_engine.dispose()
@@ -2323,7 +2482,7 @@ class ConfiguredLocalRuntimeHostFactory:
         dataset_columns: dict[uuid.UUID, list[DatasetColumnMetadata]],
         dataset_policies: dict[uuid.UUID, DatasetPolicyMetadata],
         secret_provider_registry: SecretProviderRegistry,
-    ) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController | None]:
+    ) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController | None]:
         if metadata_store.type == "in_memory":
             dataset_repository = _InMemoryDatasetRepository(dataset_repository_rows)
             dataset_column_repository = _InMemoryDatasetColumnRepository(dataset_columns)
@@ -2331,7 +2490,7 @@ class ConfiguredLocalRuntimeHostFactory:
             dataset_revision_repository = _InMemoryDatasetRevisionRepository()
             lineage_edge_repository = _InMemoryLineageEdgeRepository()
             connector_sync_state_repository = _InMemoryConnectorSyncStateRepository()
-            runtime_host, thread_repository, thread_message_repository, job_repository = (
+            runtime_host, thread_repository, thread_message_repository, job_repository, llm_repository = (
                 ConfiguredLocalRuntimeHostFactory._build_runtime_host(
                     context=context,
                     connectors=connectors,
@@ -2357,6 +2516,7 @@ class ConfiguredLocalRuntimeHostFactory:
                 lineage_edge_repository,
                 connector_sync_state_repository,
                 job_repository,
+                llm_repository,
                 thread_repository,
                 thread_message_repository,
                 None,
@@ -2390,7 +2550,7 @@ class ConfiguredLocalRuntimeHostFactory:
         dataset_columns: dict[uuid.UUID, list[DatasetColumnMetadata]],
         dataset_policies: dict[uuid.UUID, DatasetPolicyMetadata],
         secret_provider_registry: SecretProviderRegistry,
-    ) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController]:
+    ) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController]:
         return build_persisted_runtime_resources(
             metadata_store=metadata_store,
             context=context,
@@ -3004,7 +3164,7 @@ class ConfiguredLocalRuntimeHostFactory:
             config.llm_connections[0].name if config.llm_connections else None,
         )
         for profile in config.ai.profiles:
-            if not profile.enabled:
+            if not profile.availability.runtime:
                 continue
             llm_connection_name = ConfiguredLocalRuntimeHostFactory._resolve_ai_profile_llm_connection_name(
                 profile=profile,
@@ -3013,7 +3173,7 @@ class ConfiguredLocalRuntimeHostFactory:
             )
             if not llm_connection_name:
                 raise ValueError(
-                    f"AI profile '{profile.name}' requires llm_scope.llm_connection or a resolvable provider/model."
+                    f"AI profile '{profile.name}' requires llm.llm_connection or a resolvable provider/model."
                 )
             llm_connection = llm_connections.get(llm_connection_name)
             if llm_connection is None:
@@ -3026,17 +3186,16 @@ class ConfiguredLocalRuntimeHostFactory:
             definition = ConfiguredLocalRuntimeHostFactory._build_ai_profile_definition_payload(
                 profile=profile,
                 datasets=datasets,
-                connectors=connectors,
                 semantic_models=semantic_models,
             )
             records[profile.name] = LocalRuntimeAgentRecord(
                 id=agent_id,
                 config=profile.model_copy(
                     update={
-                        "llm_scope": profile.llm_scope.model_copy(
+                        "llm": profile.llm.model_copy(
                             update={"llm_connection": llm_connection_name}
                         )
-                        if profile.llm_scope is not None
+                        if profile.llm is not None
                         else None
                     }
                 ),
@@ -3062,14 +3221,14 @@ class ConfiguredLocalRuntimeHostFactory:
         config: LocalRuntimeConfig,
         default_llm_connection_name: str | None,
     ) -> str | None:
-        llm_scope = profile.llm_scope
-        if llm_scope is None:
+        llm = profile.llm
+        if llm is None:
             return default_llm_connection_name
-        direct_name = str(llm_scope.llm_connection or "").strip()
+        direct_name = str(llm.llm_connection or "").strip()
         if direct_name:
             return direct_name
-        provider = str(llm_scope.provider or "").strip().lower()
-        model = str(llm_scope.model or "").strip()
+        provider = str(llm.provider or "").strip().lower()
+        model = str(llm.model or "").strip()
         if not provider or not model:
             return default_llm_connection_name
         matches = [
@@ -3097,7 +3256,7 @@ class ConfiguredLocalRuntimeHostFactory:
         if len(matches) == 1:
             return matches[0]
         raise ValueError(
-            f"AI profile '{profile.name}' matched multiple llm connections for provider '{provider}' and model '{model}'. Use llm_scope.llm_connection."
+            f"AI profile '{profile.name}' matched multiple llm connections for provider '{provider}' and model '{model}'. Use llm.llm_connection."
         )
 
     @staticmethod
@@ -3105,70 +3264,77 @@ class ConfiguredLocalRuntimeHostFactory:
         *,
         profile: LocalRuntimeAiProfileConfig,
         datasets: dict[str, DatasetMetadata],
-        connectors: dict[str, ConnectorMetadata],
         semantic_models: dict[str, LocalRuntimeSemanticModelRecord],
     ) -> dict[str, Any]:
         semantic_model_ids: list[str] = []
-        for semantic_model_name in profile.analyst_scope.semantic_models:
+        effective_connector_ids: list[str] = []
+        for semantic_model_name in profile.data_scope.semantic_models:
             semantic_model = semantic_models.get(semantic_model_name)
             if semantic_model is None:
                 raise ValueError(
                     f"AI profile '{profile.name}' references unknown semantic model '{semantic_model_name}'."
                 )
             semantic_model_ids.append(str(semantic_model.id))
+            effective_connector_ids.extend(
+                ConfiguredLocalRuntimeHostFactory._derive_semantic_model_connector_ids(
+                    semantic_model=semantic_model,
+                    datasets=datasets,
+                )
+            )
 
         dataset_ids: list[str] = []
-        for dataset_name in profile.analyst_scope.datasets:
+        for dataset_name in profile.data_scope.datasets:
             dataset = datasets.get(dataset_name)
             if dataset is None:
                 raise ValueError(
                     f"AI profile '{profile.name}' references unknown dataset '{dataset_name}'."
                 )
             dataset_ids.append(str(dataset.id))
-
-        allowed_connectors: list[str] = []
-        for connector_name in profile.access.allowed_connectors:
-            connector = connectors.get(connector_name)
-            if connector is None:
-                raise ValueError(
-                    f"AI profile '{profile.name}' references unknown allowed connector '{connector_name}'."
-                )
-            allowed_connectors.append(str(connector.id))
-
-        denied_connectors: list[str] = []
-        for connector_name in profile.access.denied_connectors:
-            connector = connectors.get(connector_name)
-            if connector is None:
-                raise ValueError(
-                    f"AI profile '{profile.name}' references unknown denied connector '{connector_name}'."
-                )
-            denied_connectors.append(str(connector.id))
+            if dataset.connection_id is not None:
+                effective_connector_ids.append(str(dataset.connection_id))
 
         definition: dict[str, Any] = {
             "name": profile.name,
             "description": profile.description,
             "default": profile.default,
-            "enabled": profile.enabled,
-            "mcp_enabled": profile.mcp_enabled,
-            "analyst_scope": {
+            "availability": profile.availability.model_dump(mode="json", exclude_none=True),
+            "data_scope": {
                 "semantic_models": semantic_model_ids,
                 "datasets": dataset_ids,
-                "query_policy": profile.analyst_scope.query_policy,
-                "allow_source_scope": profile.analyst_scope.allow_source_scope,
+                "query_policy": profile.data_scope.query_policy,
             },
-            "research_scope": profile.research_scope.model_dump(mode="json", exclude_none=True),
-            "web_search_scope": profile.web_search_scope.model_dump(mode="json", exclude_none=True),
-            "prompts": profile.prompts.model_dump(mode="json", exclude_none=True),
-            "access": {
-                "allowed_connectors": allowed_connectors,
-                "denied_connectors": denied_connectors,
-            },
-            "execution": profile.execution.model_dump(mode="json", exclude_none=True),
+            "capabilities": profile.capabilities.model_dump(mode="json", exclude_none=True),
+            "instructions": profile.instructions.model_dump(mode="json", exclude_none=True),
+            "orchestration": profile.orchestration.model_dump(mode="json", exclude_none=True),
+            "effective_access": {"connectors": list(dict.fromkeys(effective_connector_ids))},
         }
-        llm_scope = profile.llm_scope
-        if llm_scope is not None:
-            definition["llm_scope"] = llm_scope.model_dump(mode="json", exclude_none=True)
+        llm = profile.llm
+        if llm is not None:
+            definition["llm"] = llm.model_dump(mode="json", exclude_none=True)
         return definition
+
+    @staticmethod
+    def _derive_semantic_model_connector_ids(
+        *,
+        semantic_model: LocalRuntimeSemanticModelRecord,
+        datasets: dict[str, DatasetMetadata],
+    ) -> list[str]:
+        connectors: list[str] = []
+        datasets_by_id = {str(dataset.id): dataset for dataset in datasets.values()}
+        content = semantic_model.content_json if isinstance(semantic_model.content_json, Mapping) else {}
+        raw_datasets = content.get("datasets")
+        if not isinstance(raw_datasets, Mapping):
+            raw_datasets = {}
+
+        for dataset_key, dataset_payload in raw_datasets.items():
+            dataset = None
+            if isinstance(dataset_payload, Mapping):
+                dataset_id = str(dataset_payload.get("dataset_id") or "").strip()
+                dataset = datasets_by_id.get(dataset_id) if dataset_id else None
+            dataset = dataset or datasets.get(str(dataset_key))
+            if dataset is not None and dataset.connection_id is not None:
+                connectors.append(str(dataset.connection_id))
+        return connectors
 
 
     @staticmethod
@@ -3395,7 +3561,13 @@ class ConfiguredLocalRuntimeHostFactory:
         lineage_edge_repository: _InMemoryLineageEdgeRepository,
         connector_sync_state_repository: _InMemoryConnectorSyncStateRepository,
         secret_provider_registry: SecretProviderRegistry,
-    ) -> tuple[RuntimeHost, _InMemoryThreadRepository, _InMemoryThreadMessageRepository, _InMemoryJobRepository]:
+    ) -> tuple[
+        RuntimeHost,
+        _InMemoryThreadRepository,
+        _InMemoryThreadMessageRepository,
+        _InMemoryJobRepository,
+        _InMemoryLLMConnectionRepository,
+    ]:
         connector_provider = MemoryConnectorProvider(
             {connector.id: connector for connector in connectors.values()}
         )
@@ -3571,7 +3743,7 @@ class ConfiguredLocalRuntimeHostFactory:
                 semantic_sql_query=semantic_sql_query_service,
                 cleanup=cleanup_service,
             ),
-        ), thread_repository, thread_message_repository, job_repository
+        ), thread_repository, thread_message_repository, job_repository, llm_repository
 
 
 def build_configured_local_runtime(

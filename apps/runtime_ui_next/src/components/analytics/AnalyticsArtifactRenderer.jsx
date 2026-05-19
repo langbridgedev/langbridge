@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import { hasRenderableVisualization, renderJson } from "../../lib/runtimeUi.js";
 import {
   buildArtifactRenderPlan,
+  buildUnreferencedPrimaryArtifactIds,
   copyText,
   csvForResult,
   findArtifact,
@@ -317,6 +318,10 @@ export function AnalyticsArtifactRenderer({
     () => buildArtifactRenderPlan(parts, artifacts, visualization),
     [parts, artifacts, visualization],
   );
+  const fallbackArtifactIds = useMemo(
+    () => buildUnreferencedPrimaryArtifactIds(parts, artifacts),
+    [parts, artifacts],
+  );
   const activeArtifact = activeArtifactId ? findArtifact(artifacts, activeArtifactId) : null;
 
   async function handleCopy(key, text) {
@@ -355,6 +360,21 @@ export function AnalyticsArtifactRenderer({
 
         return <MarkdownSegment key={`markdown-${index}`}>{part.value}</MarkdownSegment>;
       })}
+
+      {fallbackArtifactIds.map((artifactId) => (
+        <ArtifactBlock
+          key={`fallback-artifact-${artifactId}`}
+          id={artifactId}
+          artifact={findArtifact(artifacts, artifactId)}
+          result={result}
+          visualization={visualization}
+          diagnostics={diagnostics}
+          maxPreviewRows={maxPreviewRows}
+          onOpenArtifact={setActiveArtifactId}
+          onCopyArtifact={(key, text) => void handleCopy(key, text)}
+          copiedKey={copiedKey}
+        />
+      ))}
 
       {activeArtifact && typeof document !== "undefined" ? (
         <AnalyticsArtifactModal

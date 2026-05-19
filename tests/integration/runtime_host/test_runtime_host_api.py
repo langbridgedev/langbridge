@@ -115,22 +115,18 @@ ai:
   profiles:
     - name: commerce_analyst
       default: true
-      scope:
+      availability:
+        runtime: true
+        mcp: true
+      data_scope:
         semantic_models: [commerce_performance]
         query_policy: semantic_only
       llm:
         llm_connection: local_openai
-      prompts:
+      instructions:
         system: You are a commerce analytics agent.
-      access:
-        allowed_connectors: [commerce_demo]
-        denied_connectors: []
-      execution:
-        max_iterations: 3
-        log_level: info
-        emit_traces: false
-        capture_prompts: false
-        audit_fields: []
+      orchestration:
+        policy: balanced_governed
 """.strip(),
         encoding="utf-8",
     )
@@ -769,7 +765,15 @@ def test_runtime_host_api_returns_500_for_unexpected_agent_errors(
     app = _create_runtime_app(runtime)
     client = TestClient(app)
 
-    async def _boom(self, *, prompt: str, agent_name: str | None = None, thread_id=None, title=None):  # type: ignore[no-untyped-def]
+    async def _boom(  # type: ignore[no-untyped-def]
+        self,
+        *,
+        prompt: str,
+        agent_name: str | None = None,
+        agent_selection: str | None = None,
+        thread_id=None,
+        title=None,
+    ):
         raise RuntimeError("'NoneType' object is not callable")
 
     monkeypatch.setattr(ConfiguredLocalRuntimeHost, "ask_agent", _boom)
@@ -1520,7 +1524,8 @@ def test_runtime_host_api_uses_stateless_mcp_for_multi_worker_hosts(tmp_path: Pa
 
     assert app.state.runtime_workers == 4
     assert app.state.runtime_mcp_stateless_http is True
-    assert app.state.runtime_background_tasks_enabled is False
+    assert app.state.runtime_background_tasks_enabled is True
+    assert app.state.runtime_background_task_coordination == "distributed_lease"
 
 
 @pytest.mark.anyio
@@ -2229,6 +2234,91 @@ def test_runtime_host_api_create_endpoints_do_not_override_config_managed_resour
     assert semantic_detail.json()["managed"] is True
 
 
+def test_runtime_host_api_manages_runtime_llm_connections(
+    tmp_path: Path,
+) -> None:
+    runtime = _build_runtime(tmp_path)
+    client = TestClient(_create_runtime_app(runtime))
+
+    initial_connections = {
+        item["name"]: item
+        for item in client.get("/api/runtime/v1/llm-connections").json()["items"]
+    }
+    assert initial_connections["local_openai"]["management_mode"] == "config_managed"
+    assert initial_connections["local_openai"]["credential_state"] == "configured"
+    assert initial_connections["local_openai"]["agent_count"] == 1
+    assert "api_key" not in initial_connections["local_openai"]
+
+    duplicate = client.post(
+        "/api/runtime/v1/llm-connections",
+        json={
+            "name": "local_openai",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "api_key": "test-key",
+        },
+    )
+    assert duplicate.status_code == 409
+
+    created = client.post(
+        "/api/runtime/v1/llm-connections",
+        json={
+            "name": "runtime_openai",
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "description": "Runtime OpenAI",
+            "api_key": "runtime-key",
+            "configuration": {
+                "structured_outputs": "native",
+                "base_url": "https://api.openai.com/v1",
+            },
+            "default": True,
+        },
+    )
+    assert created.status_code == 201
+    created_payload = created.json()
+    assert created_payload["name"] == "runtime_openai"
+    assert created_payload["management_mode"] == "runtime_managed"
+    assert created_payload["credential_state"] == "configured"
+    assert created_payload["default"] is True
+    assert "api_key" not in created_payload
+
+    refreshed_connections = {
+        item["name"]: item
+        for item in client.get("/api/runtime/v1/llm-connections").json()["items"]
+    }
+    assert refreshed_connections["runtime_openai"]["default"] is True
+    assert refreshed_connections["local_openai"]["default"] is False
+
+    updated = client.patch(
+        "/api/runtime/v1/llm-connections/runtime_openai",
+        json={
+            "model": "gpt-4.1",
+            "description": "Updated runtime OpenAI",
+            "configuration": {"structured_outputs": "auto"},
+            "is_active": True,
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["model"] == "gpt-4.1"
+    assert updated.json()["description"] == "Updated runtime OpenAI"
+    assert updated.json()["configuration"]["structured_outputs"] == "auto"
+
+    config_update = client.patch(
+        "/api/runtime/v1/llm-connections/local_openai",
+        json={"model": "gpt-4.1"},
+    )
+    assert config_update.status_code == 400
+
+    config_delete = client.delete("/api/runtime/v1/llm-connections/local_openai")
+    assert config_delete.status_code == 400
+
+    deleted = client.delete("/api/runtime/v1/llm-connections/runtime_openai")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert client.get("/api/runtime/v1/llm-connections/runtime_openai").status_code == 404
+
+
 def test_runtime_host_api_updates_and_deletes_runtime_managed_resources(
     tmp_path: Path,
 ) -> None:
@@ -2899,7 +2989,10 @@ def test_runtime_host_api_exposes_semantic_models_agents_and_threads(tmp_path: P
     agents = client.get("/api/runtime/v1/agents")
     assert agents.status_code == 200
     assert agents.json()["total"] == 1
-    agent_id = agents.json()["items"][0]["id"]
+    agent_summary = agents.json()["items"][0]
+    agent_id = agent_summary["id"]
+    assert agent_summary["data_scope"]["semantic_models"] == ["commerce_performance"]
+    assert agent_summary["effective_access"]["connectors"]
 
     agent = client.get(f"/api/runtime/v1/agents/{agent_id}")
     assert agent.status_code == 200

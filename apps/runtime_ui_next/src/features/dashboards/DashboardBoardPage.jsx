@@ -614,6 +614,7 @@ export function DashboardBoardPage({ dashboardId }) {
         onDeleteBoard={deleteBoard}
         onResetBoards={resetDashboards}
         onImportJson={(file) => void importDashboardJson(file)}
+        onRenameBoard={updateBoard}
         onToggleLayout={toggleLayoutMode}
         onToggleContext={toggleContextPanel}
         onAddWidget={() => addWidget("bar")}
@@ -719,6 +720,7 @@ function DashboardToolbar({
   onDeleteBoard,
   onResetBoards,
   onImportJson,
+  onRenameBoard,
   onToggleLayout,
   onToggleContext,
   onAddWidget,
@@ -728,7 +730,10 @@ function DashboardToolbar({
   return (
     <div className="dashboard-command-bar">
       <div className="dashboard-command-title">
-        <strong>{activeBoard?.name || "Runtime dashboard"}</strong>
+        <DashboardInlineTitle
+          board={activeBoard}
+          onRename={(name) => activeBoard ? onRenameBoard(activeBoard.id, { name }) : null}
+        />
         <span>
           {selectedModel || "No semantic model"} / {activeBoard?.widgets.length || 0} widgets / {runnableCount} runnable
         </span>
@@ -1021,6 +1026,67 @@ function FieldButtons({ fields, activeWidget, editMode, onAssignField }) {
   );
 }
 
+function DashboardInlineTitle({ board, onRename }) {
+  const [editing, setEditing] = useState(false);
+  const [draftName, setDraftName] = useState(board?.name || "");
+  const currentName = board?.name || "Runtime dashboard";
+
+  useEffect(() => {
+    setDraftName(board?.name || "");
+    setEditing(false);
+  }, [board?.id, board?.name]);
+
+  function commitRename() {
+    const nextName = draftName.trim();
+    if (!board) {
+      return;
+    }
+    if (!nextName || nextName === board.name) {
+      setDraftName(board.name);
+      setEditing(false);
+      return;
+    }
+    onRename?.(nextName);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <input
+        className="dashboard-inline-title-input"
+        value={draftName}
+        autoFocus
+        aria-label="Dashboard name"
+        onChange={(event) => setDraftName(event.target.value)}
+        onBlur={commitRename}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commitRename();
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setDraftName(board?.name || "");
+            setEditing(false);
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="dashboard-inline-title"
+      disabled={!board}
+      title="Rename dashboard"
+      onClick={() => setEditing(true)}
+    >
+      {currentName}
+    </button>
+  );
+}
+
 function DashboardCanvas({
   activeBoard,
   activeWidget,
@@ -1255,10 +1321,6 @@ function DashboardInspector({
       </div>
 
       <div className="dashboard-inspector-section">
-        <label>
-          Dashboard name
-          <input value={activeBoard.name} disabled={!editMode} onChange={(event) => onUpdateBoard(activeBoard.id, { name: event.target.value })} />
-        </label>
         <label>
           Title
           <input value={activeWidget.title} disabled={!editMode} onChange={(event) => onUpdateWidget(activeBoard.id, activeWidget.id, { title: event.target.value })} />

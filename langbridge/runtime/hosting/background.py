@@ -2,6 +2,7 @@
 import asyncio
 import inspect
 import logging
+import uuid
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import Any, Literal
@@ -10,6 +11,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from langbridge.runtime.scheduling import dataset_sync_cadence_to_seconds
+from langbridge.runtime.services.leases import RuntimeLeaseService
 from langbridge.runtime.services.runtime_host import RuntimeHost
 
 BackgroundTaskKind = Literal["default", "custom"]
@@ -130,12 +132,30 @@ class RuntimeBackgroundTaskManager:
         scheduler: AsyncIOScheduler | None = None,
         default_tasks: Iterable[RuntimeBackgroundTaskDefinition] | None = None,
         custom_tasks: Iterable[RuntimeBackgroundTaskDefinition] | None = None,
+        lease_service: RuntimeLeaseService | None = None,
+        owner_id: str | None = None,
+        lease_ttl_seconds: int = 120,
+        heartbeat_interval_seconds: float | None = None,
+        task_timeout_seconds: float | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self.runtime_host = runtime_host
         self._scheduler = scheduler or AsyncIOScheduler()
         self._owns_scheduler = scheduler is None
         self._logger = logger or logging.getLogger("langbridge.runtime.hosting.background")
+        self._lease_service = lease_service
+        self._owner_id = str(owner_id or f"runtime-background:{uuid.uuid4()}").strip()
+        self._lease_ttl_seconds = max(10, int(lease_ttl_seconds))
+        default_heartbeat_interval = max(1.0, min(30.0, self._lease_ttl_seconds / 3))
+        self._heartbeat_interval_seconds = max(
+            0.1,
+            float(heartbeat_interval_seconds)
+            if heartbeat_interval_seconds is not None
+            else default_heartbeat_interval,
+        )
+        self._task_timeout_seconds: float | None = (
+            float(task_timeout_seconds) if task_timeout_seconds is not None and task_timeout_seconds > 0 else None
+        )
         self._default_tasks: dict[str, RuntimeBackgroundTaskDefinition] = {}
         self._custom_tasks: dict[str, RuntimeBackgroundTaskDefinition] = {}
         self._active_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -161,6 +181,10 @@ class RuntimeBackgroundTaskManager:
     @property
     def custom_tasks(self) -> tuple[RuntimeBackgroundTaskDefinition, ...]:
         return tuple(self._custom_tasks.values())
+
+    @property
+    def distributed_coordination_enabled(self) -> bool:
+        return self._lease_service is not None
 
     def list_tasks(
         self,
@@ -239,12 +263,11 @@ class RuntimeBackgroundTaskManager:
         if not self._scheduler.running:
             self._scheduler.start()
         self._started = True
-        startup_tasks: list[asyncio.Task[Any]] = []
+        # Fire startup tasks as background asyncio.Tasks so the host can accept
+        # requests immediately rather than waiting for potentially long syncs.
         for task in self.list_tasks():
             if task.enabled and task.run_on_startup:
-                startup_tasks.append(self._run_definition_as_task(task))
-        if startup_tasks:
-            await asyncio.gather(*startup_tasks)
+                self._run_definition_as_task(task)
 
     async def stop(self) -> None:
         if not self._started:
@@ -390,13 +413,107 @@ class RuntimeBackgroundTaskManager:
             )
             return None
         async with task_lock:
-            result = handler(context)
-            if inspect.isawaitable(result):
-                return await result
-            return result
+            lease_acquired = await self._acquire_execution_lease(context)
+            if not lease_acquired:
+                return None
+            heartbeat_task = self._start_lease_heartbeat(context)
+            try:
+                if inspect.iscoroutinefunction(handler):
+                    coro: Any = handler(context)
+                else:
+                    # Sync handlers may block; run them in a thread to avoid
+                    # stalling the event loop. Async handlers should be used
+                    # when the handler needs to call runtime async methods.
+                    loop = asyncio.get_running_loop()
+                    coro = loop.run_in_executor(None, handler, context)
 
-    @staticmethod
-    def _job_id(name: str) -> str:
+                if self._task_timeout_seconds is not None:
+                    return await asyncio.wait_for(coro, timeout=self._task_timeout_seconds)
+                return await coro
+            finally:
+                if heartbeat_task is not None:
+                    heartbeat_task.cancel()
+                    await asyncio.gather(heartbeat_task, return_exceptions=True)
+                await self._release_execution_lease(context)
+
+    async def _acquire_execution_lease(self, context: BackgroundTaskExecutionContext) -> bool:
+        if self._lease_service is None:
+            return True
+        lease_name = self._lease_name(context.task_name)
+        acquired = await self._lease_service.acquire(
+            name=lease_name,
+            owner_id=self._owner_id,
+            lease_seconds=self._lease_ttl_seconds,
+            metadata={
+                "task_name": context.task_name,
+                "kind": context.kind,
+            },
+        )
+        if not acquired:
+            self._logger.info(
+                "Skipping background task '%s' because another worker holds the lease.",
+                context.task_name,
+            )
+        return acquired
+
+    def _start_lease_heartbeat(
+        self,
+        context: BackgroundTaskExecutionContext,
+    ) -> asyncio.Task[Any] | None:
+        if self._lease_service is None:
+            return None
+        lease_name = self._lease_name(context.task_name)
+
+        async def _heartbeat() -> None:
+            while True:
+                await asyncio.sleep(self._heartbeat_interval_seconds)
+                try:
+                    renewed = await self._lease_service.heartbeat(
+                        name=lease_name,
+                        owner_id=self._owner_id,
+                        lease_seconds=self._lease_ttl_seconds,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self._logger.warning(
+                        "Background task '%s' lease heartbeat failed.",
+                        context.task_name,
+                        exc_info=True,
+                    )
+                    continue
+                if not renewed:
+                    self._logger.warning(
+                        "Background task '%s' lease is no longer owned by %s.",
+                        context.task_name,
+                        self._owner_id,
+                    )
+                    return
+
+        return asyncio.create_task(
+            _heartbeat(),
+            name=f"langbridge-background-lease:{context.task_name}",
+        )
+
+    async def _release_execution_lease(self, context: BackgroundTaskExecutionContext) -> None:
+        if self._lease_service is None:
+            return
+        try:
+            await self._lease_service.release(
+                name=self._lease_name(context.task_name),
+                owner_id=self._owner_id,
+            )
+        except Exception:
+            self._logger.warning(
+                "Background task '%s' lease release failed.",
+                context.task_name,
+                exc_info=True,
+            )
+
+    def _lease_name(self, name: str) -> str:
+        return f"background-task:{name}"
+
+    def _job_id(self, name: str) -> str:
         return f"runtime-background:{name}"
 
 

@@ -78,6 +78,7 @@ test("listConfigurationResources normalizes analyst agent setup", async () => {
       ["Query policy", "semantic_only"],
       ["Semantic models", "1"],
       ["Datasets", "1"],
+      ["Orchestration", "balanced_governed"],
       ["Tools", "1"],
       ["Default", "Yes"],
     ]);
@@ -93,10 +94,43 @@ test("listConfigurationResources normalizes analyst agent setup", async () => {
         datasets: ["sales_orders"],
         tools: [{ name: "commerce_sql" }],
         definition: {
-          analyst_scope: {
+          data_scope: {
             query_policy: "semantic_only",
           },
         },
+      },
+    ],
+  });
+});
+
+test("listConfigurationResources normalizes LLM connections", async () => {
+  await withMockFetch(async ({ calls }) => {
+    const resources = await listConfigurationResources("llm-connections");
+
+    assert.equal(calls[0].path, "/api/runtime/v1/llm-connections");
+    assert.equal(resources.length, 1);
+    assert.equal(resources[0].name, "local_openai");
+    assert.equal(resources[0].status, "Default");
+    assert.equal(resources[0].management, "runtime_managed");
+    assert.deepEqual(resources[0].relationships, ["commerce_analyst"]);
+    assert.deepEqual(resources[0].runtimeState.slice(0, 4), [
+      ["Provider", "openai"],
+      ["Model", "gpt-4.1-mini"],
+      ["Structured outputs", "native"],
+      ["Credentials", "configured"],
+    ]);
+  }, {
+    items: [
+      {
+        id: "llm-1",
+        name: "local_openai",
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        credential_state: "configured",
+        structured_outputs: "native",
+        management_mode: "runtime_managed",
+        default: true,
+        agents: [{ name: "commerce_analyst" }],
       },
     ],
   });
@@ -106,6 +140,9 @@ test("getSectionCapabilities keeps agents read-only", () => {
   assert.equal(getSectionCapabilities("connectors").canCreate, true);
   assert.equal(getSectionCapabilities("datasets").canUpdate, true);
   assert.equal(getSectionCapabilities("semantic-models").canDelete, true);
+  assert.equal(getSectionCapabilities("llm-connections").canCreate, true);
+  assert.equal(getSectionCapabilities("llm-connections").canUpdate, true);
+  assert.equal(getSectionCapabilities("llm-connections").canDelete, true);
   assert.equal(getSectionCapabilities("agents").canCreate, false);
   assert.equal(getSectionCapabilities("agents").canUpdate, false);
   assert.equal(getSectionCapabilities("agents").canDelete, false);
@@ -138,6 +175,7 @@ test("runConfigurationResourceAction uses the expected runtime endpoints", async
     await runConfigurationResourceAction("datasets", { ref: "sales_orders" }, "sync_status");
     await runConfigurationResourceAction("datasets", { ref: "sales_orders" }, "run_sync");
     await runConfigurationResourceAction("datasets", { ref: "sales_orders" }, "full_refresh");
+    await runConfigurationResourceAction("llm-connections", { ref: "local_openai" }, "test_connection");
 
     assert.deepEqual(calls.map((call) => call.path), [
       "/api/runtime/v1/connectors/warehouse/sync/resources",
@@ -146,9 +184,11 @@ test("runConfigurationResourceAction uses the expected runtime endpoints", async
       "/api/runtime/v1/datasets/sales_orders/sync",
       "/api/runtime/v1/datasets/sales_orders/sync",
       "/api/runtime/v1/datasets/sales_orders/sync",
+      "/api/runtime/v1/llm-connections/local_openai/test",
     ]);
     assert.equal(calls[2].options.method, "POST");
     assert.equal(calls[4].options.method, "POST");
+    assert.equal(calls[6].options.method, "POST");
     assert.deepEqual(JSON.parse(calls[4].options.body), {
       sync_mode: "INCREMENTAL",
       force_full_refresh: false,
@@ -157,7 +197,7 @@ test("runConfigurationResourceAction uses the expected runtime endpoints", async
       sync_mode: "FULL_REFRESH",
       force_full_refresh: true,
     });
-  }, [{ ok: true }, { ok: true }, { rows: [] }, { status: "idle" }, { job_id: "job-1" }, { job_id: "job-2" }]);
+  }, [{ ok: true }, { ok: true }, { rows: [] }, { status: "idle" }, { job_id: "job-1" }, { job_id: "job-2" }, { status: "success" }]);
 });
 
 test("runAgentConfigurationTest calls the runtime ask endpoint", async () => {

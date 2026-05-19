@@ -25,48 +25,54 @@ Agents are consumers of the same runtime primitives as the rest of the system:
 
 ## Local Runtime Agent Config
 
-For local/runtime YAML, the canonical agent authoring path is `agents[].definition`.
-Use `definition.tools` to declare agent tool bindings instead of the old top-level
-single `semantic_model` or `dataset` shortcut.
+For local/runtime YAML, the canonical agent authoring path is `ai.profiles`.
+Profiles are markdown-first analyst contracts over configured runtime resources.
+Connector access is derived from the selected semantic models and datasets; users
+do not author connector allow or deny lists in the agent contract.
+
+## Runtime Agent Selection
+
+Chat and ask APIs support two selection modes:
+
+- `agent_selection: auto` lets the runtime route across all runtime-available agent profiles. The router can select a profile, answer simple runtime prompts directly, or ask one blocking clarification question.
+- `agent_selection: pinned` runs the requested agent profile. This remains the behavior when `agent_id` or `agent_name` is supplied without an explicit selection mode.
+
+Clients should omit `agent_name` when using auto-selection. The run diagnostics include
+`diagnostics.agent_selection` with the selected action, candidate count, confidence,
+and selected agent name when applicable.
 
 ```yaml
-agents:
+ai:
+  profiles:
   - name: commerce_analyst
-    llm_connection: local_openai
+    description: Commerce analyst for governed order and revenue analysis.
     default: true
-    definition:
-      prompt:
-        system_prompt: You are a Langbridge analytics agent.
-      memory:
-        strategy: database
-      features:
-        bi_copilot_enabled: false
-        deep_research_enabled: false
-        visualization_enabled: true
-        mcp_enabled: false
-      tools:
-        - name: governed_sql
-          tool_type: sql
-          config:
-            semantic_model_ids: [commerce_performance, support_performance]
-        - name: dataset_sql
-          tool_type: sql
-          config:
-            dataset_ids: [shopify_orders, support_tickets]
-      access_policy:
-        allowed_connectors: [commerce_demo]
-        denied_connectors: []
-      execution:
-        mode: iterative
-        response_mode: analyst
-        max_iterations: 3
-        max_steps_per_iteration: 5
-        allow_parallel_tools: false
-      output:
-        format: markdown
+    availability:
+      runtime: true
+      mcp: false
+    llm:
+      llm_connection: local_openai
+    data_scope:
+      semantic_models: [commerce_performance]
+      datasets: [shopify_orders]
+      query_policy: semantic_preferred
+    capabilities:
+      source_sql: false
+      research:
+        enabled: true
+        extended_thinking: false
+      web_search:
+        enabled: false
+    instructions:
+      system: You are a Langbridge analytics agent.
+      user: Answer from governed runtime data first.
+      presentation: Keep answers concise and clearly grounded in query results.
+    orchestration:
+      policy: balanced_governed
 ```
 
-For local YAML authoring, `semantic_model_ids`, `dataset_ids`, and connector lists
-can reference configured names. The runtime normalizes those names into the
-canonical runtime IDs before storing the agent definition. SQL tools must still
-follow the existing rule: define either `dataset_ids` or `semantic_model_ids`.
+For local YAML authoring, `data_scope.semantic_models` and `data_scope.datasets`
+can reference configured names. The runtime normalizes those names into canonical
+runtime IDs and stores derived `effective_access.connectors` for inspection only.
+Use `orchestration.policy` for high-level behavior instead of exposing low-level
+execution tuning knobs.

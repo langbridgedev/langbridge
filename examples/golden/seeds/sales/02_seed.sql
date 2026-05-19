@@ -1,0 +1,95 @@
+BEGIN;
+
+INSERT INTO sales_customers (
+  id,
+  customer_key,
+  first_name,
+  last_name,
+  email,
+  country,
+  region,
+  loyalty_tier,
+  marketing_opt_in,
+  created_at
+) VALUES
+  (1, 'CUST-0001', 'Alex', 'Taylor', 'alex.taylor@example.com', 'GB', 'London', 'gold', true, '2025-09-05T10:00:00Z'),
+  (2, 'CUST-0002', 'Morgan', 'Reed', 'morgan.reed@example.com', 'CA', 'Toronto', 'platinum', true, '2025-09-12T11:00:00Z'),
+  (3, 'CUST-0003', 'Riley', 'Patel', 'riley.patel@example.com', 'GB', 'London', 'silver', false, '2025-10-01T09:15:00Z'),
+  (4, 'CUST-0004', 'Casey', 'Nguyen', 'casey.nguyen@example.com', 'US', 'Northeast', 'bronze', true, '2025-10-18T14:20:00Z'),
+  (5, 'CUST-0005', 'Jordan', 'White', 'jordan.white@example.com', 'CA', 'Toronto', 'gold', true, '2025-11-04T16:45:00Z'),
+  (6, 'CUST-0006', 'Avery', 'Smith', 'avery.smith@example.com', 'GB', 'Manchester', 'silver', true, '2025-11-18T08:30:00Z'),
+  (7, 'CUST-0007', 'Quinn', 'Brown', 'quinn.brown@example.com', 'US', 'West', 'gold', false, '2025-12-02T12:10:00Z'),
+  (8, 'CUST-0008', 'Jamie', 'Evans', 'jamie.evans@example.com', 'CA', 'Toronto', 'platinum', true, '2025-12-16T13:40:00Z'),
+  (9, 'CUST-0009', 'Parker', 'Jones', 'parker.jones@example.com', 'GB', 'London', 'bronze', false, '2026-01-05T15:00:00Z'),
+  (10, 'CUST-0010', 'Rowan', 'Martin', 'rowan.martin@example.com', 'US', 'Midwest', 'silver', true, '2026-01-19T09:00:00Z');
+
+INSERT INTO sales_orders (
+  id,
+  order_number,
+  customer_id,
+  order_ts,
+  channel,
+  status,
+  fulfillment_location_name,
+  fulfillment_location_country,
+  subtotal,
+  discount,
+  tax,
+  shipping,
+  total
+) VALUES
+  (1001, 'LB-1001', 1, '2026-02-03T10:12:00Z', 'online', 'completed', 'Shop location', 'GB', 699.95, 0.00, 140.00, 0.00, 839.95),
+  (1002, 'LB-1002', 2, '2026-02-04T12:30:00Z', 'store', 'completed', 'My Custom Location', 'CA', 1074.95, 75.00, 130.00, 0.00, 1129.95),
+  (1003, 'LB-1003', 3, '2026-02-06T14:45:00Z', 'online', 'shipped', 'Snow City Warehouse', 'GB', 2629.95, 200.00, 340.19, 15.00, 2785.14),
+  (1004, 'LB-1004', 4, '2026-02-10T09:10:00Z', 'marketplace', 'completed', 'Shop location', 'GB', 600.00, 0.00, 120.00, 0.00, 720.00),
+  (1005, 'LB-1005', 5, '2026-02-12T17:05:00Z', 'store', 'completed', 'My Custom Location', 'CA', 729.95, 50.00, 88.39, 0.00, 768.34),
+  (1006, 'LB-1006', 6, '2026-02-15T11:25:00Z', 'online', 'returned', 'Shop location', 'GB', 885.95, 100.00, 110.03, 10.00, 905.98),
+  (1007, 'LB-1007', 7, '2026-02-17T16:20:00Z', 'online', 'completed', 'Snow City Warehouse', 'GB', 2050.00, 150.00, 265.99, 0.00, 2165.99),
+  (1008, 'LB-1008', 8, '2026-02-19T13:15:00Z', 'store', 'completed', 'My Custom Location', 'CA', 1499.90, 100.00, 182.00, 0.00, 1581.90),
+  (1009, 'LB-1009', 9, '2026-02-22T08:50:00Z', 'online', 'completed', 'Shop location', 'GB', 100.00, 0.00, 20.00, 0.00, 120.00),
+  (1010, 'LB-1010', 10, '2026-02-24T19:35:00Z', 'partner', 'completed', 'Snow City Warehouse', 'GB', 1735.90, 100.00, 250.03, 0.00, 1885.93),
+  (1011, 'LB-1011', 1, '2026-03-02T10:00:00Z', 'online', 'completed', 'Shop location', 'GB', 699.95, 50.00, 90.99, 10.00, 750.94),
+  (1012, 'LB-1012', 2, '2026-03-05T12:10:00Z', 'store', 'completed', 'My Custom Location', 'CA', 1585.90, 120.00, 188.75, 0.00, 1654.65),
+  (1013, 'LB-1013', 3, '2026-03-08T15:45:00Z', 'online', 'completed', 'Shop location', 'GB', 949.95, 0.00, 190.00, 0.00, 1139.95),
+  (1014, 'LB-1014', 4, '2026-03-12T09:30:00Z', 'marketplace', 'completed', 'Snow City Warehouse', 'GB', 749.95, 75.00, 94.49, 0.00, 769.44),
+  (1015, 'LB-1015', 5, '2026-03-15T17:55:00Z', 'store', 'completed', 'My Custom Location', 'CA', 99.65, 10.00, 12.98, 0.00, 102.63),
+  (1016, 'LB-1016', 6, '2026-03-18T11:40:00Z', 'online', 'shipped', 'Shop location', 'GB', 2629.95, 250.00, 333.19, 0.00, 2713.14),
+  (1017, 'LB-1017', 7, '2026-03-21T18:20:00Z', 'partner', 'completed', 'Snow City Warehouse', 'GB', 785.95, 80.00, 98.83, 0.00, 804.78),
+  (1018, 'LB-1018', 8, '2026-03-25T13:05:00Z', 'online', 'completed', 'My Custom Location', 'CA', 2859.80, 200.00, 338.00, 0.00, 2997.80);
+
+INSERT INTO sales_order_items (
+  id,
+  order_id,
+  shopify_product_id,
+  shopify_variant_id,
+  sku,
+  quantity,
+  unit_price,
+  discount,
+  line_total
+) VALUES
+  (1, 1001, 15162442809609, 55511125655817, 'COMPLETE-ICE', 1, 699.95, 0.00, 699.95),
+  (2, 1002, 15162442907913, 55511125983497, 'OXYGEN', 1, 1025.00, 75.00, 950.00),
+  (3, 1002, 15162442776841, 55511125852425, 'WAX-SPECIAL', 1, 49.95, 0.00, 49.95),
+  (4, 1003, 15162443006217, 55511126081801, '3P-SNOWBOARD', 1, 2629.95, 200.00, 2429.95),
+  (5, 1004, 15162442744073, 55511125623049, 'HYDROGEN', 1, 600.00, 0.00, 600.00),
+  (6, 1005, 15162442940681, 55511126016265, 'MULTI-LOCATION', 1, 729.95, 50.00, 679.95),
+  (7, 1006, 15162442514697, 55511125393673, 'MINIMAL', 1, 885.95, 100.00, 785.95),
+  (8, 1007, 15162442907913, 55511125983497, 'OXYGEN', 2, 1025.00, 150.00, 1900.00),
+  (9, 1008, 15162443038985, 55511126114569, 'LIQUID', 2, 749.95, 100.00, 1399.90),
+  (10, 1009, 15162442481929, 55511125360905, 'GIFT-100', 1, 100.00, 0.00, 100.00),
+  (11, 1010, 15162442449161, 55511125229833, 'INVENTORY-NOT-TRACKED', 1, 949.95, 50.00, 899.95),
+  (12, 1010, 15162442678537, 55511125524745, 'COMPARE', 1, 785.95, 50.00, 735.95),
+  (13, 1011, 15162442809609, 55511125688585, 'COMPLETE-DAWN', 1, 699.95, 50.00, 649.95),
+  (14, 1012, 15162442514697, 55511125393673, 'MINIMAL', 1, 885.95, 60.00, 825.95),
+  (15, 1012, 15162442809609, 55511125721353, 'COMPLETE-POWDER', 1, 699.95, 60.00, 639.95),
+  (16, 1013, 15162442449161, 55511125229833, 'INVENTORY-NOT-TRACKED', 1, 949.95, 0.00, 949.95),
+  (17, 1014, 15162443038985, 55511126114569, 'LIQUID', 1, 749.95, 75.00, 674.95),
+  (18, 1015, 15162442776841, 55511125819657, 'WAX-BASE', 2, 24.95, 5.00, 44.90),
+  (19, 1015, 15162442776841, 55511125885193, 'WAX-SAMPLE', 5, 9.95, 5.00, 44.75),
+  (20, 1016, 15162442547465, 55511125426441, 'DRAFT', 1, 2629.95, 250.00, 2379.95),
+  (21, 1017, 15162442678537, 55511125524745, 'COMPARE', 1, 785.95, 80.00, 705.95),
+  (22, 1018, 15162442809609, 55511125754121, 'COMPLETE-ELECTRIC', 2, 699.95, 100.00, 1299.90),
+  (23, 1018, 15162442940681, 55511126016265, 'MULTI-LOCATION', 2, 729.95, 100.00, 1359.90);
+
+COMMIT;

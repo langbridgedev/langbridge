@@ -10,23 +10,38 @@ def build_execution_plan_prompt(
     specification_payloads: list[dict[str, object]],
     revision_count: int,
 ) -> str:
+    prior_observations: dict[str, object] = {}
+    for key in (
+        "verification_failure",
+        "last_error",
+        "failed_agent",
+        "weak_result_agent",
+        "final_review_action",
+        "final_review_rationale",
+        "final_review_issues",
+    ):
+        value = context.get(key)
+        if value:
+            prior_observations[key] = value
+
     return (
         "Build Langbridge execution plan.\n"
         "You are the runtime planner. Plan from agent specifications and observed context.\n"
         "Return STRICT JSON only:\n"
-        "{"
-        "\"route\":\"planned\","
-        "\"rationale\":\"short reason\","
-        "\"clarification_question\":\"question for user or null\","
-        "\"steps\":["
-        "{"
-        "\"agent_name\":\"exact agent name\","
-        "\"task_kind\":\"one supported task kind\","
-        "\"question\":\"step question\","
-        "\"input\":{},"
-        "\"depends_on\":[]"
-        "}"
-        "]"
+        "{\n"
+        '  "route": "planned",\n'
+        '  "rationale": "short reason",\n'
+        '  "clarification_question": "question for user or null",\n'
+        '  "steps": [\n'
+        "    {\n"
+        '      "step_id": "unique identifier e.g. step-1",\n'
+        '      "agent_name": "exact agent name",\n'
+        '      "task_kind": "one supported task kind",\n'
+        '      "question": "step question",\n'
+        '      "input": {},\n'
+        '      "depends_on": []\n'
+        "    }\n"
+        "  ]\n"
         "}\n"
         "Planning rules:\n"
         "- Use only available agent names and supported task kinds.\n"
@@ -38,9 +53,11 @@ def build_execution_plan_prompt(
         "- For analyst steps, input.agent_mode may only be auto, sql, context_analysis, or research.\n"
         "- Never use input.mode, answer, analysis, or deep_research as analyst mode values.\n"
         "- If requested_agent_mode is set, preserve it for analyst steps unless clarification is required.\n"
-        "- Use prior execution failures, weak evidence, and avoid_agents when replanning.\n"
+        "- Use prior execution failures, weak evidence, final_review_action, final_review_rationale, and avoid_agents when replanning; address the specific issue that caused the replan.\n"
         "- Do not include presentation or orchestration agents in steps.\n"
         "- If the user needs clarification before safe execution, return an empty steps list and set clarification_question.\n"
+        "- Each step_id must be unique within the plan.\n"
+        "- Use depends_on to declare a step that must complete before this step can run; leave it empty when steps are independent.\n"
         "- Keep rationale short and concrete.\n\n"
         f"Revision count: {revision_count}\n"
         f"Requested agent mode: {requested_agent_mode or ''}\n"
@@ -48,7 +65,7 @@ def build_execution_plan_prompt(
         f"Conversation context:\n{context.get('conversation_context') or ''}\n"
         f"Memory context:\n{context.get('memory_context') or ''}\n"
         f"Planner guidance: {context.get('plan_guidance') or ''}\n"
-        f"Prior observations: {json.dumps(context.get('verification_failure') or context.get('last_error') or {}, default=str)}\n"
+        f"Prior observations: {json.dumps(prior_observations, default=str)}\n"
         f"Avoid agents: {json.dumps(context.get('avoid_agents') or [])}\n"
         f"Available agent specifications:\n{json.dumps(specification_payloads, default=str, indent=2)}\n"
     )

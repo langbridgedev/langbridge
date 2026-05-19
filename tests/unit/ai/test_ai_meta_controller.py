@@ -28,6 +28,7 @@ from langbridge.ai.orchestration.planner import ExecutionPlan, PlannerAgent, Pla
 from langbridge.ai.orchestration.verification import VerificationOutcome
 from langbridge.ai.tools.charting import ChartingTool
 from langbridge.ai.tools.web_search import WebSearchResultItem, WebSearchTool
+from tests.unit.structured_llm_stub import StructuredTextLLMStub
 
 
 def _run(coro):
@@ -38,18 +39,20 @@ def _analyst_config(*, research_enabled: bool = False, web_search_enabled: bool 
     return AnalystAgentConfig.model_validate(
         {
             "name": "analyst",
-            "analyst_scope": {
+            "data_scope": {
                 "semantic_models": ["commerce"],
                 "datasets": ["orders"],
                 "query_policy": "semantic_preferred",
             },
-            "research_scope": {"enabled": research_enabled},
-            "web_search_scope": {"enabled": web_search_enabled},
+            "capabilities": {
+                "research": {"enabled": research_enabled},
+                "web_search": {"enabled": web_search_enabled},
+            },
         }
     )
 
 
-class _FakeLLMProvider:
+class _FakeLLMProvider(StructuredTextLLMStub):
     async def acomplete(self, prompt: str, **kwargs):
         if "Decide Langbridge agent route" in prompt:
             if "Dependency ordered request" in prompt:
@@ -230,6 +233,52 @@ class _AnswerAliasRouteLLMProvider(_FakeLLMProvider):
                 '"clarification_question":null,"plan_guidance":null}'
             )
         return await super().acomplete(prompt, **kwargs)
+
+
+class _IntentRouteLLMProvider(StructuredTextLLMStub):
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def acomplete(self, prompt: str, **kwargs):
+        self.prompts.append(prompt)
+        if "Decide Langbridge agent route" not in prompt:
+            raise AssertionError(f"Intent route should not invoke execution prompts: {prompt[:120]}")
+        if "Question: What can you do?" in prompt:
+            assert "commerce" in prompt
+            assert "orders" in prompt
+            return (
+                '{"action":"respond","rationale":"Explain configured runtime capabilities.",'
+                '"intent":"capability_question","agent_name":null,"task_kind":null,"input":{},'
+                '"clarification_question":null,"plan_guidance":null,'
+                '"answer_markdown":"**analyst** can answer governed commerce questions over semantic models `commerce` and datasets `orders` using query policy `semantic_preferred`. research mode is available.\\n\\nTry asking:\\n- Which order channels drove revenue last quarter?\\n- What changed in product performance?",'
+                '"confidence":0.94}'
+            )
+        if "Question: latest?" in prompt:
+            return (
+                '{"action":"clarify","rationale":"The request does not identify a subject.",'
+                '"intent":"vague_prompt","agent_name":null,"task_kind":null,"input":{},'
+                '"clarification_question":"What do you want the latest of?",'
+                '"plan_guidance":null,"answer_markdown":"What do you want the latest of?",'
+                '"confidence":0.9}'
+            )
+        if "Question: hello" in prompt:
+            return (
+                '{"action":"respond","rationale":"The user is greeting the runtime.",'
+                '"intent":"greeting","agent_name":null,"task_kind":null,"input":{},'
+                '"clarification_question":null,"plan_guidance":null,'
+                '"answer_markdown":"Hi. Ask me a governed data question, or ask what I can do for this runtime.",'
+                '"confidence":0.96}'
+            )
+        return (
+            '{"action":"clarify","rationale":"The user prompt is empty.",'
+            '"intent":"empty_prompt","agent_name":null,"task_kind":null,"input":{},'
+            '"clarification_question":"What would you like me to help you analyze?",'
+            '"plan_guidance":null,"answer_markdown":"What would you like me to help you analyze?",'
+            '"confidence":0.95}'
+        )
+
+    async def create_embeddings(self, texts, embedding_model=None):
+        return [[1.0] for _ in texts]
 
 
 class _ChartFollowUpShouldNotRouteLLMProvider(_FakeLLMProvider):
@@ -447,6 +496,72 @@ def test_meta_controller_routes_simple_analyst_question_directly() -> None:
     assert run.final_result["answer_markdown"] == "Final answer from verified outputs.\n\n{{artifact:primary_result}}"
     assert "summary" not in run.final_result
     assert "visualization" not in run.final_result
+
+
+def test_meta_controller_answers_greeting_from_route_llm() -> None:
+    llm = _IntentRouteLLMProvider()
+    controller = MetaControllerAgent(
+        registry=AgentRegistry([AnalystAgent(llm_provider=llm, config=_analyst_config(research_enabled=True))]),
+        llm_provider=llm,
+        presentation_agent=_presentation(llm),
+    )
+
+    run = _run(controller.handle(question="hello"))
+
+    assert run.execution_mode is None
+    assert run.status == "completed"
+    assert run.plan.route == "intent:greeting"
+    assert run.plan.steps == []
+    assert run.final_result["answer_markdown"].startswith("Hi. Ask me a governed data question")
+    assert run.final_result["diagnostics"]["intent"]["intent"] == "greeting"
+    assert run.diagnostics["intent"]["intent"] == "greeting"
+    assert len(llm.prompts) == 1
+    assert "Decide Langbridge agent route" in llm.prompts[0]
+
+
+def test_meta_controller_answers_capability_question_from_route_llm_live_specs() -> None:
+    llm = _IntentRouteLLMProvider()
+    controller = MetaControllerAgent(
+        registry=AgentRegistry([AnalystAgent(llm_provider=llm, config=_analyst_config(research_enabled=True))]),
+        llm_provider=llm,
+        presentation_agent=_presentation(llm),
+    )
+
+    run = _run(controller.handle(question="What can you do?"))
+
+    assert run.status == "completed"
+    assert run.plan.route == "intent:capability_question"
+    assert "**analyst**" in run.final_result["answer_markdown"]
+    assert "semantic models `commerce`" in run.final_result["answer_markdown"]
+    assert "datasets `orders`" in run.final_result["answer_markdown"]
+    assert "query policy `semantic_preferred`" in run.final_result["answer_markdown"]
+    assert "research" in run.final_result["answer_markdown"]
+    assert run.final_result["diagnostics"]["intent"]["intent"] == "capability_question"
+    assert len(llm.prompts) == 1
+    assert "Available agent specifications" in llm.prompts[0]
+
+
+def test_meta_controller_clarifies_empty_and_vague_prompts_from_route_llm() -> None:
+    llm = _IntentRouteLLMProvider()
+    controller = MetaControllerAgent(
+        registry=AgentRegistry([AnalystAgent(llm_provider=llm, config=_analyst_config(research_enabled=True))]),
+        llm_provider=llm,
+        presentation_agent=_presentation(llm),
+    )
+
+    empty_run = _run(controller.handle(question=""))
+    vague_run = _run(controller.handle(question="latest?"))
+
+    assert empty_run.status == "clarification_needed"
+    assert empty_run.plan.route == "intent:clarification"
+    assert empty_run.final_result["answer_markdown"] == "What would you like me to help you analyze?"
+    assert empty_run.final_result["diagnostics"]["clarifying_question"] == empty_run.final_result["answer_markdown"]
+    assert empty_run.final_result["diagnostics"]["intent"]["intent"] == "empty_prompt"
+    assert vague_run.status == "clarification_needed"
+    assert vague_run.plan.route == "intent:clarification"
+    assert vague_run.final_result["answer_markdown"].startswith("What do you want the latest of")
+    assert vague_run.final_result["diagnostics"]["intent"]["intent"] == "vague_prompt"
+    assert len(llm.prompts) == 2
 
 
 def test_meta_controller_normalizes_empty_optional_route_fields_before_validation() -> None:

@@ -152,7 +152,7 @@ def build_sql_runtime_resources(
     dataset_columns: dict[uuid.UUID, list[DatasetColumnMetadata]],
     dataset_policies: dict[uuid.UUID, DatasetPolicyMetadata],
     secret_provider_registry: SecretProviderRegistry,
-) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController]:
+) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, Any, _ConfiguredRuntimePersistenceController]:
     from langbridge.runtime.bootstrap.runtime_factory import build_local_runtime
     from langbridge.runtime.persistence import (
         RepositoryConversationMemoryStore,
@@ -256,6 +256,16 @@ def build_sql_runtime_resources(
             "upsert_task",
         },
     )
+    raw_lease_repository = _RuntimeSessionRepositoryProxy(
+        controller=controller,
+        repository_attr="lease_repository",
+        write_methods={
+            "acquire_lease",
+            "heartbeat_lease",
+            "release_lease",
+            "cleanup_expired",
+        },
+    )
     raw_agent_repository = _RuntimeSessionRepositoryProxy(
         controller=controller,
         repository_attr="agent_repository",
@@ -294,6 +304,7 @@ def build_sql_runtime_resources(
         dataset_revision_repository=raw_dataset_revision_repository,
         lineage_edge_repository=raw_lineage_edge_repository,
         job_repository=raw_job_repository,
+        lease_repository=raw_lease_repository,
         agent_definition_repository=raw_agent_repository,
         llm_repository=raw_llm_repository,
         thread_repository=raw_thread_repository,
@@ -311,6 +322,7 @@ def build_sql_runtime_resources(
         raw_lineage_edge_repository,
         RepositoryConnectorSyncStateStore(repository=raw_connector_sync_state_repository),
         raw_job_repository,
+        raw_llm_repository,
         RepositoryThreadStore(repository=raw_thread_repository),
         RepositoryThreadMessageStore(repository=raw_thread_message_repository),
         controller,
